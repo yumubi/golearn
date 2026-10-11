@@ -177,5 +177,4 @@ go test -race -count=1 ./...
 
 - P3 章末参考的 goroutine/tokio 切换成本实验保留 `[INFERENCE，待你实测]` 标记：这是留给读者的实测作业，不是待修内容
 - P6 复盘内文未重写（历史价值），仅导语+lint 修复
-- 基线备份：`/Users/akka/Data/tmp/golearn-handoff-baseline-20261012/`（试稿前 4 文件 + 推广前全部 17 notes）
-- 本目录仍非 git 仓库；后续改动前建议先 `git init` 建立可回滚基线
+- 基线已入 git：仓库根 2026-10-12 `git init` + 首次提交 0786ae9（135 文件，排除 node_modules/dist/cache）；`/Users/akka/Data/tmp/golearn-handoff-baseline-20261012/` 备份保留为双保险
