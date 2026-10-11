@@ -2,6 +2,8 @@
 title: P4 · 项目精读 A：ejdb，读别人的 Go 存储引擎从哪下手？
 ---
 
+# P4 · 项目精读 A：ejdb，读别人的 Go 存储引擎从哪下手？
+
 
 > 载体：`/Users/akka/oss/github.com/clarkqaq/ejdb`，~3200 行。
 > 它是 C 版 EJDB2 的 Go 移植：C 参考源码登记在项目的 `c-code/` 目录

@@ -2,6 +2,8 @@
 title: 第 16 章 · 自定义 slog handler：把注入做成基础设施
 ---
 
+# 第 16 章 · 自定义 slog handler：把注入做成基础设施
+
 
 > P15 改造题（ctxHandler）的正解成章。P15 的痛点：req_id 要每处显式带。
 > P16 把它下沉到 handler 层，调用点零感知。顺带解决"一份数据多目的地"。

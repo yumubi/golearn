@@ -2,6 +2,8 @@
 title: 第 17 章 · 毕业项目指标落地：dnsproxi 的 RED
 ---
 
+# 第 17 章 · 毕业项目指标落地：dnsproxi 的 RED
+
 
 > P13 的方法论 + P16 的纪律搬进毕业项目。DNS 代理不是 HTTP，照搬
 > Instrument 不行，要重新回答四个问题：量/错误/时延怎么定义、label 怎么

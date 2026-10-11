@@ -2,6 +2,8 @@
 title: 第 12 章 · sqlc + pgx/v5：PG 原生类型，一条配置换血
 ---
 
+# 第 12 章 · sqlc + pgx/v5：PG 原生类型，一条配置换血
+
 
 > 教程章。P11 用 `database/sql` 承接生成代码（换库自由）；这章锁定 PostgreSQL，
 > `sql_package: "pgx/v5"` 一行换血：生成代码直接说 pgx 方言，PG 特有类型

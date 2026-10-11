@@ -2,6 +2,8 @@
 title: 第 13 章 · metrics/observability：给服务装仪表盘
 ---
 
+# 第 13 章 · metrics/observability：给服务装仪表盘
+
 
 > 服务能跑（P8）之后是服务能看。这章回答四个问题：服务健康吗（RED 记分牌）、
 > 中间件怎么拿到路由模板（r.Pattern 踩坑实录，本章最独有的内容）、label 基数

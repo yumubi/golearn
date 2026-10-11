@@ -2,6 +2,8 @@
 title: 第 18 章 · 毕业项目日志落地：dnsproxi 的结构化 + req_id
 ---
 
+# 第 18 章 · 毕业项目日志落地：dnsproxi 的结构化 + req_id
+
 
 > P15/P16 的手艺在毕业项目里内化：不 import 练习包，独立 module 里
 > 重写 ctxHandler。这是"毕业检验"：离开脚手架还能不能写出同样纪律的代码。

@@ -2,6 +2,8 @@
 title: P3 · 并发：goroutine vs tokio task
 ---
 
+# P3 · 并发：goroutine vs tokio task
+
 
 > 你的 Rust 学习线（_rust_learning L1/L3/L4）在这里全额兑现：Go 的并发
 > 模型和 tokio 同构，但**内建在语言里**，没有 runtime crate 可选。

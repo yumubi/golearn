@@ -21,6 +21,7 @@ export default defineConfig({
     sidebar: [
       {
         text: '开始',
+        collapsed: true,
         items: [
           { text: '怎么学（按阶段走）', link: '/' },
           { text: '课程表', link: '/table' },
@@ -28,7 +29,7 @@ export default defineConfig({
       },
       {
         text: '① 语法核心（半天）',
-        collapsed: false,
+        collapsed: true,
         items: [
           { text: 'P2 语言核心', link: '/p2-lang-core' },
           { text: 'P3 并发', link: '/p3-concurrency' },
@@ -37,7 +38,7 @@ export default defineConfig({
       },
       {
         text: '② 服务搭建（1 天）',
-        collapsed: false,
+        collapsed: true,
         items: [
           { text: 'P8 标准库/HTTP', link: '/p8-fast-track' },
           { text: 'P9 数据库', link: '/p9-database' },
@@ -47,7 +48,7 @@ export default defineConfig({
       },
       {
         text: '③ 可观测性（1 天）',
-        collapsed: false,
+        collapsed: true,
         items: [
           { text: 'P13 metrics', link: '/p13-metrics' },
           { text: 'P15 slog', link: '/p15-slog' },

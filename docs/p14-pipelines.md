@@ -2,6 +2,8 @@
 title: 第 14 章 · errgroup + pipeline：并发的工程化组装
 ---
 
+# 第 14 章 · errgroup + pipeline：并发的工程化组装
+
 
 > P3 学了 goroutine/channel 的原语，这章学怎么把它们组装成生产形状：
 > 生成器 → 扇出 → 汇合三板斧（Go blog 的经典模式），errgroup 管生命周期

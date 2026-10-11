@@ -1,0 +1,55 @@
+/* golearn 站点覆盖：紧凑侧边栏 + 内容列宽 */
+
+:root {
+  /* 272px → 224px：分组长标题能放下，内容列多 ~48px */
+  --vp-sidebar-width: 224px;
+}
+
+/* 侧边栏分组行更紧凑 */
+.VPSidebarItem.level-0 > .item {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.VPSidebarItem.level-0 .text {
+  font-size: 13px;
+}
+
+/* 二级条目行高收紧 */
+.VPSidebarItem.level-1 .item {
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+
+.VPSidebarItem.level-1 .text {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* 移动端：本地导航栏收窄 + 标题不换行溢出 */
+@media (max-width: 767px) {
+  .VPLocalNav {
+    height: 40px;
+  }
+
+  .vp-doc {
+    /* 长代码块/表格允许横向滚动而不是撑破布局 */
+    overflow-wrap: break-word;
+  }
+
+  .vp-doc div[class*='language-'] {
+    margin-inline: -12px;
+    border-radius: 0;
+  }
+}
+
+/* ≥1440px 视口：布局不再向 max-width 看齐两侧留白，侧边栏不再被拉宽 */
+:root {
+  --vp-layout-max-width: 100%;
+}
+
+/* 正文列固定可读宽度，居中，不随 224px 侧边一起铺满 */
+.VPContent.has-sidebar .container > .content-container {
+  max-width: 832px;
+  margin-inline: auto;
+}

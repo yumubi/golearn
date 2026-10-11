@@ -2,6 +2,8 @@
 title: P9 · 数据库：database/sql 心智模型 + pgx + 生态速查
 ---
 
+# P9 · 数据库：database/sql 心智模型 + pgx + 生态速查
+
 
 > 后端第二支柱。Rust 对照：diesel/sqlx/tokeneer，sqlx 最像
 > （编译期校验 SQL 的是 sqlx-cli，Go 里对应 sqlc 代码生成，P11/P12 展开）。

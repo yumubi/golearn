@@ -2,6 +2,8 @@
 title: 第 10 章 · gRPC：协议先行，四种流，拦截器
 ---
 
+# 第 10 章 · gRPC：协议先行，四种流，拦截器
+
 
 > 教程章（liaoxuefeng 式：先跑通，再讲为什么）。读者：从 tonic 过来的人，
 > 或第一次写 gRPC 的 Go 学习者。前置：P3（goroutine 泄漏、ctx 取消）。

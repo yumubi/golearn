@@ -2,6 +2,8 @@
 title: P6 · Capstone：go 版 dnsproxi（对照你的 Rust 载体 D1-D7）
 ---
 
+# P6 · Capstone：go 版 dnsproxi（对照你的 Rust 载体 D1-D7）
+
 
 > 你在 `_rust_learning` 线⑤用 Rust 把 dnsproxi 从 D1 写到 D7（负缓存、
 > TinyLFU 准入、主动老化，24 个单测、全部实测）。现在用 Go 复刻，

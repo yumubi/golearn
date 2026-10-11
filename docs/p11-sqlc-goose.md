@@ -2,6 +2,8 @@
 title: 第 11 章 · sqlc + goose：SQL 先行的类型安全数据层
 ---
 
+# 第 11 章 · sqlc + goose：SQL 先行的类型安全数据层
+
 
 > 教程章。读者：已学 P9 `database/sql` 手写 Scan 的人，现在升级到
 > 2026 年 Go 社区标配：SQL 写在 .sql 文件里，sqlc 生成类型安全 Go 代码，

@@ -8,9 +8,8 @@ export default antfu({
     'dnsproxi-go/**',
     '**/exercises/**',
     '**/labs/**',
+    '**/*.css',
   ],
-}, {
-  files: ['docs/.vitepress/config.ts'],
   rules: {
     'style/quotes': ['error', 'single'],
   },

@@ -2,6 +2,8 @@
 title: P5 · 项目精读 B：deepsearch，一个 Go 服务的骨架是怎么长出来的？
 ---
 
+# P5 · 项目精读 B：deepsearch，一个 Go 服务的骨架是怎么长出来的？
+
 
 > 载体：`/Users/akka/oss/github.com/clarkqaq/deepsearch`，~3500 行。
 > 这课练**工程组织**：cobra CLI + echo HTTP + 自写泛型 DI + MCP transport，
