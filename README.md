@@ -59,7 +59,7 @@ cd /Users/akka/Dev/learning/go
 | P4 | 项目精读 A：ejdb（存储引擎） | [notes/p4-ejdb.md](notes/p4-ejdb.md) | `exercises/p4ejdb/` | ✅ 全绿 |
 | P5 | 项目精读 B：deepsearch（工程组织/DI） | [notes/p5-deepsearch.md](notes/p5-deepsearch.md) | `exercises/p5deep/` | ✅ 全绿 -race |
 | P6 | capstone：go 版 dnsproxi | [notes/p6-capstone-dnsproxi.md](notes/p6-capstone-dnsproxi.md) | `dnsproxi-go/` | ✅ G1-G6 收官+压测 |
-| P7 | labs 工程实验（GC/计数器/worker pool） | — | `labs/experiments/` | ✅ 六组实验 |
+| P7 | labs 工程实验（GC/计数器/worker pool） | 无 | `labs/experiments/` | ✅ 六组实验 |
 | P8 | 泛型/标准库/测试/HTTP | [notes/p8-fast-track.md](notes/p8-fast-track.md) | `exercises/p8fast/`（含 httpkv） | ✅ 8 tests + 冒烟 |
 | P9 | 数据库 database/sql + pgx | [notes/p9-database.md](notes/p9-database.md) | `exercises/p9db/` | ✅ 5 tests + PG 冒烟 |
 | P10 | gRPC 四种流 + 拦截器 | [notes/p10-grpc.md](notes/p10-grpc.md) | `exercises/p10grpc/` | ✅ 5 tests + 真机冒烟 |

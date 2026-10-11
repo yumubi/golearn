@@ -15,7 +15,7 @@ title: 课程表：19 章速查
 | P4 | 精读 ejdb | [notes](/p4-ejdb) | `exercises/p4ejdb/` | ✅ 全绿 |
 | P5 | 精读 deepsearch | [notes](/p5-deepsearch) | `exercises/p5deep/` | ✅ 全绿 -race 干净（DI 死锁教训） |
 | P6 | capstone dnsproxi-go | [notes](/p6-capstone-dnsproxi) | `dnsproxi-go/` | ✅ G1–G6 收官（压测数据见 LESSON.md） |
-| P7 | labs 工程实验 | — | `labs/experiments/` | ✅ 三组实验 + 三份 results |
+| P7 | labs 工程实验 | 无 | `labs/experiments/` | ✅ 三组实验 + 三份 results |
 | P8 | 泛型/标准库/测试/HTTP | [notes](/p8-fast-track) | `exercises/p8fast/` | ✅ 8 tests -race |
 | P9 | 数据库 database/sql+pgx | [notes](/p9-database) | `exercises/p9db/` | ✅ 5 tests -race |
 | P10 | gRPC 四种流+拦截器 | [notes](/p10-grpc) | `exercises/p10grpc/` | ✅ 5 tests -race + 真机冒烟 |

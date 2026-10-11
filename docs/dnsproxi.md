@@ -40,10 +40,10 @@ curl -s localhost:9153/metrics | grep dnsproxi
 | 指标 | label | 说明 |
 |---|---|---|
 | `queries_total` | qtype×outcome | 量与错误率、命中率；qname 高基数不进 label |
-| `upstream_duration_seconds` | — | 只量成功转发的上游往返 |
+| `upstream_duration_seconds` | 无 | 只量成功转发的上游往返 |
 | `upstream_errors_total` | reason（timeout/network/refused） | 死上游→refused（ICMP 立回），黑洞→timeout（挂满 deadline） |
-| `in_flight_queries` | — | worker pool 模式下顶到 N 即背压点 |
-| `cache_entries` | — | PutFull 涨、expirer 落，双更新点 |
+| `in_flight_queries` | 无 | worker pool 模式下顶到 N 即背压点 |
+| `cache_entries` | 无 | PutFull 涨、expirer 落，双更新点 |
 
 日志：JSON 结构化，每查询一个 `req_id` 由 ctxHandler 自动注入（P16 手艺在独立 module 的重写），`DNS_LOG_LEVEL` 可调级别。
 

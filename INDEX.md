@@ -12,7 +12,7 @@
 | ① 语法核心 | P2 → P3 → P14 | 半天 | 能向别人复述每章 Take-away |
 | ② 服务搭建 | P8 → P12（或 P9）→ P6 LESSON.md | 1 天 | 能画出 dnsproxi 的请求路径 |
 | ③ 可观测性 | P13 → P15 → P16 → P17 → P18 | 1 天 | 能解释"为什么 req_id 不进 metrics label" |
-| ④ 按需查 | P1 cheat sheet、P4/P5 精读法、P10/P11 | 用到才翻 | — |
+| ④ 按需查 | P1 cheat sheet、P4/P5 精读法、P10/P11 | 用到才翻 | 无 |
 
 每章打开方式（详见 README）：先读章头“这章学完你能干什么”和正文的主要
 问题（正文是讲义），卡壳才翻章末参考。练习：预测题先写答案再跑对答案，
@@ -31,7 +31,7 @@
 | P4 精读 ejdb | [notes/p4-ejdb.md](notes/p4-ejdb.md) | `exercises/p4ejdb/` | ✅ 全绿（参考实现 2026-10-10） |
 | P5 精读 deepsearch | [notes/p5-deepsearch.md](notes/p5-deepsearch.md) | `exercises/p5deep/` | ✅ 全绿 -race 干净（参考实现 2026-10-10；DI 死锁教训见 deep.go 注释） |
 | P6 capstone dnsproxi-go | [notes/p6-capstone-dnsproxi.md](notes/p6-capstone-dnsproxi.md) | `dnsproxi-go/` | **G1–G6 全部收官**（wire+proxy+cache+逐出+TinyLFU+主动老化+同机压测），数据见 [dnsproxi-go/LESSON.md](dnsproxi-go/LESSON.md) |
-| P7 labs 工程实验 | — | `labs/experiments/` | ✅ P7 三组（GC 压力账 / 计数器四方案 / benchmark 卫生）+ P8 两组（命中路径 A/B / GOMAXPROCS+trace）+ P9（worker pool 消融，`DNS_WORKER_POOL=8` 落地为生产建议）；数据见 labs/experiments/ 三份 results；方法论仿 rust-for-frontend/labs |
+| P7 labs 工程实验 | 无 | `labs/experiments/` | ✅ P7 三组（GC 压力账 / 计数器四方案 / benchmark 卫生）+ P8 两组（命中路径 A/B / GOMAXPROCS+trace）+ P9（worker pool 消融，`DNS_WORKER_POOL=8` 落地为生产建议）；数据见 labs/experiments/ 三份 results；方法论仿 rust-for-frontend/labs |
 | P8 快速扩展 泛型/标准库/测试/HTTP | [notes/p8-fast-track.md](notes/p8-fast-track.md) | `exercises/p8fast/` | ✅ 8 tests -race 干净（约束/trait 三差异、slices/cmp/OnceValue、table-driven、httpkv 服务 1.22 路由+优雅关停，冒烟过） |
 | P9 数据库 database/sql+pgx | [notes/p9-database.md](notes/p9-database.md) | `exercises/p9db/` | ✅ 5 tests -race 干净（CRUD/NULL 三策略/事务回滚/ctx 取消/池并发，modernc.org/sqlite 纯 Go）+ pgx 原生 batch 冒烟过真 PG17 |
 | P10 gRPC 四种流+拦截器 | [notes/p10-grpc.md](notes/p10-grpc.md) | `exercises/p10grpc/` | ✅ 5 tests -race 干净（一元/Watch/BulkSet/Chat/并发，bufconn）+ 真机 server/client 冒烟过（输出见 notes 动手节）；proto 先行，对照 tonic |

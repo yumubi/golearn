@@ -236,17 +236,17 @@ go test -race -v ./exercises/p11sqlm/          # 三条测试逐个看
 ### sqlc.yaml（全项目一份）
 
 ```yaml
-version: "2"
+version: '2'
 sql:
-  - engine: "sqlite"           # sqlite/postgres/mysql
-    schema: "exercises/p11sqlm/migrations"   # sqlc 从迁移里推表结构
-    queries: "exercises/p11sqlm/queries"
+  - engine: sqlite # sqlite/postgres/mysql
+    schema: exercises/p11sqlm/migrations # sqlc 从迁移里推表结构
+    queries: exercises/p11sqlm/queries
     gen:
       go:
-        package: "db"
-        out: "exercises/p11sqlm/db"
-        sql_package: "database/sql"   # 想上 pgx 原生就换 "pgx/v5"
-        emit_json_tags: true          # struct 带 json tag
+        package: db
+        out: exercises/p11sqlm/db
+        sql_package: database/sql # 想上 pgx 原生就换 "pgx/v5"
+        emit_json_tags: true # struct 带 json tag
 ```
 
 生成代码是普通 database/sql 代码（P9 的知识 100% 复用）：

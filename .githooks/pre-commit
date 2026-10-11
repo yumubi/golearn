@@ -1,0 +1,2 @@
+#!/bin/sh
+exec pnpm run lint && pnpm run docs:build

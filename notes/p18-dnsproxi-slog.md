@@ -11,7 +11,7 @@
 `req_id`（每查询生成，ctx 自动注入），并回答"离开 httpkv 的 HTTP
 中间件脚手架，同一套纪律怎么在 UDP 上落地"。真机实拍：
 
-```json
+```sh
 {"level":"INFO","msg":"cache miss, forwarding","qname":"smoke.example.com","qtype":"A","req_id":"q-1791627126719748000"}
 {"level":"INFO","msg":"cache hit","qname":"smoke.example.com","qtype":"A","ttl_left":60,"req_id":"q-1791627126720275000"}
 ```

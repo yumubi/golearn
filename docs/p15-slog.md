@@ -15,7 +15,7 @@ title: 第 15 章 · slog 结构化日志：用户报了一个 404，怎样找�
 并顺手保证敏感字段（token）不落盘。httpkv 实拍（练习包现状）：
 
 ```json
-{"time":"2026-10-10T17:20:01.593787+08:00","level":"WARN","msg":"kv miss","req_id":"req-1791624001593759000","key":"ghost","status":404}
+{ "time": "2026-10-10T17:20:01.593787+08:00", "level": "WARN", "msg": "kv miss", "req_id": "req-1791624001593759000", "key": "ghost", "status": 404 }
 ```
 
 `req_id` 与响应头一致，报障的 id 直接对上日志的 id。三个问题

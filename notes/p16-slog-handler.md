@@ -24,7 +24,7 @@ logger.WarnContext(ctx, "kv miss", "key", k, "status", 404)
 真机实拍：
 
 ```json
-{"level":"WARN","msg":"kv miss","key":"ghost","status":404,"req_id":"req-1791624607059659000"}
+{ "level": "WARN", "msg": "kv miss", "key": "ghost", "status": 404, "req_id": "req-1791624607059659000" }
 ```
 
 能干的三件事，对应三个问题：

@@ -48,11 +48,11 @@ flowchart LR
 然后看包布局，五个包各管一层：
 
 ```
-ejdb/          package ejdb      — DB/Collection/Index/Query
-storage/       package storage   — KVStore 接口 + badger/pebble 双实现
-jsondoc/       package jsondoc   — path 解析 + 索引键序列化
-types/         package types     — 共享枚举（IndexMode/Op）
-examples/                        — 三个 main 包（Go 的 examples 惯例）
+ejdb/          package ejdb      : DB/Collection/Index/Query
+storage/       package storage   : KVStore 接口 + badger/pebble 双实现
+jsondoc/       package jsondoc   : path 解析 + 索引键序列化
+types/         package types     : 共享枚举（IndexMode/Op）
+examples/                        : 三个 main 包（Go 的 examples 惯例）
 ```
 
 对照 deepsearch（P5 读）：`internal/` 强制私有 + `pkg/` 对外。

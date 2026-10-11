@@ -1,2 +1,14 @@
+minimumReleaseAgeExcludePrune: true
+
+trustPolicy: no-downgrade
+# vite 5.4.21 是 vitejs/vite 官方 tag（verified 签名，sapphi-red 发布），
+# 仅因早期版本曾用 trusted publisher、该版改 provenance 被 no-downgrade 拦截；
+# vitepress 1.x 锁定 vite 5，等 vitepress 2 正式版后移除本条。
+trustPolicyExclude:
+  - vite@5.4.21
+
+shellEmulator: true
+
 allowBuilds:
   esbuild: true
+  simple-git-hooks: true

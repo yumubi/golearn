@@ -33,14 +33,14 @@ P12_PG_DSN="postgres://..." go test -race ./exercises/p12pgx/
 P11 的 sqlc.yaml 加一段（`sqlc.yaml` 里两套并存，各自 out 目录）：
 
 ```yaml
-- engine: "postgresql"              # 引擎换 postgresql
-  schema: "exercises/p12pgx/migrations"
-  queries: "exercises/p12pgx/queries"
+- engine: postgresql # 引擎换 postgresql
+  schema: exercises/p12pgx/migrations
+  queries: exercises/p12pgx/queries
   gen:
     go:
-      package: "db"
-      out: "exercises/p12pgx/db"
-      sql_package: "pgx/v5"          # ← 这一行换血
+      package: db
+      out: exercises/p12pgx/db
+      sql_package: pgx/v5 # ← 这一行换血
 ```
 
 生成代码的三处变化（`exercises/p12pgx/db/db.go` 对照 P11 版）：

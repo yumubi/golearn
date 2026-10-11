@@ -228,7 +228,7 @@ FROM alpine:3.24   # 甚至可以 scratch，用 alpine 是为了 ca-certificates
 | 维度 | deepsearch di.go | p5deep MiniDI |
 |---|---|---|
 | 容器载体 | ctx value（containerImpl） | struct 字段 |
-| key | reflect.TypeFor[T]() | 同款 |
+| key | `reflect.TypeFor[T]()` | 同款 |
 | 注册隔离 | serviceEntry 按 T 存 | providerOf[T] 包一层（翻车一修法） |
 | 单例锁 | entry.mu 每次拿 | once 表 + 缓存表两笔账 |
 | 生命周期 | lifetime（Singleton/Transient）+ Clean 递归 | 仅 Singleton |
