@@ -1,0 +1,48 @@
+// Step 1：协议即文档。先想清楚"服务提供什么方法、每个方法进出什么"，
+// 再写一行 Go。对照 Rust：这就是 tonic 的 .proto，一模一样。
+syntax = "proto3";
+
+package kvpb.v1;
+
+option go_package = "golearn/exercises/p10grpc/kvpb;kvpb";
+
+// 一个 KV 服务，故意把四种通信模式凑齐（对照 tonic 的四个 trait 方法形态）：
+//   unary         —— Put / Get          （一问一答，≈ HTTP）
+//   server stream —— Watch             （订阅，≈ SSE / tokio broadcast）
+//   client stream —— BulkSet           （攒一批上报，≈ multipart）
+//   bidi stream   —— Chat              （双工，≈ WebSocket）
+service KV {
+  rpc Put(PutRequest) returns (PutReply);
+  rpc Get(GetRequest) returns (GetReply);
+
+  rpc Watch(WatchRequest) returns (stream WatchEvent);
+
+  rpc BulkSet(stream PutRequest) returns (BulkSetReply);
+
+  rpc Chat(stream ChatMsg) returns (stream ChatMsg);
+}
+
+message PutRequest {
+  string key = 1;
+  string value = 2;
+}
+message PutReply {
+  int64 version = 1; // 每次 Put 递增，Watch 靠它做顺序
+}
+
+message GetRequest { string key = 1; }
+message GetReply {
+  string value = 1;
+  bool found = 2;    // Go 没有 Option：存在性放进协议，比让客户端猜错误码友好
+}
+
+message WatchRequest { string key = 1; }
+message WatchEvent {
+  string key = 1;
+  string value = 2;
+  int64 version = 3;
+}
+
+message BulkSetReply { int32 count = 1; }
+
+message ChatMsg { string text = 1; }
