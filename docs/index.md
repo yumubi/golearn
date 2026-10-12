@@ -20,7 +20,7 @@ flowchart LR
         P8[P8 标准库/HTTP] --> P9["P9/P12 数据库"] --> P6[P6 毕业项目读数]
     end
     subgraph S3["③ 可观测性 · 1 天"]
-        P13[P13 metrics] --> P15[P15 slog] --> P16[P16 handler] --> P17[P17/P19 落地指标] --> P18[P18 落地日志]
+        P13[P13 metrics] --> P15[P15 slog] --> P16[P16 handler] --> P17[P17 落地指标] --> P18[P18 落地日志]
     end
     S1 --> S2 --> S3
 ```

@@ -43,7 +43,7 @@
 | P14 errgroup+pipeline 并发组装 | [notes/p14-pipelines.md](notes/p14-pipelines.md) | `exercises/p14pipe/` | ✅ 8 tests -race（三板斧/SetLimit 消融实测≤2/首错传播/NumGoroutine 泄漏检测）；P3 思想的工程化组装，对照 futures::stream |
 | P15 slog 结构化日志：404 报障怎么查 | [notes/p15-slog.md](notes/p15-slog.md) | `exercises/p15slog/` + httpkv | ✅ 6 tests -race（JSON 字段/级别/LogValuer 脱敏/ctx 关联/Enabled 守卫）+ httpkv req_id 中间件冒烟实拍；P13 §13.8 路线图第一步 |
 | P16 自定义 slog handler | [notes/p16-slog-handler.md](notes/p16-slog-handler.md) | `exercises/p16slogh/` + httpkv | ✅ 7 tests -race（自动注入/With 链不丢/显式赢注入/双 sink 扇出）+ httpkv 调用点瘦身冒烟实拍；ctx key 单一来源翻车记档（§16.4） |
-| P17 dnsproxi 指标落地 | [notes/p17-dnsproxi-metrics.md](notes/p17-dnsproxi-metrics.md) | `dnsproxi-go/`（:9153/metrics） | ✅ RED 重建（qtype×outcome 低基数）+ cache_entries 双更新点 + 7=2+4+1 冒烟对账；P19 补 upstream_errors_total{reason} 双场景实测（refused/timeout） |
+| P17 dnsproxi 指标落地 | [notes/p17-dnsproxi-metrics.md](notes/p17-dnsproxi-metrics.md) | `dnsproxi-go/`（:9153/metrics） | ✅ RED 重建（qtype×outcome 低基数）+ cache_entries 双更新点 + 7=2+4+1 冒烟对账；upstream_errors_total{reason} 双场景实测（refused/timeout） |
 | P18 dnsproxi 日志落地 | [notes/p18-dnsproxi-slog.md](notes/p18-dnsproxi-slog.md) | `dnsproxi-go/logger.go` | ✅ 独立 module 重写 ctxHandler（UDP 版每查询 ctx）+ [hit]/[miss] 结构化冒烟实拍；级别分层表 |
 | P19 生态与常用库选型地图 | [notes/p19-ecosystem.md](notes/p19-ecosystem.md) | `exercises/p19eco/` | ✅ 4 tests 全绿（functional options/slog Handler 门控/stringer generate） |
 | P20 写 CLI 工具（管道/flag/cobra/退出码/发布） | [notes/p20-cli-tool.md](notes/p20-cli-tool.md) | `exercises/p20cli/`（含 cmd/ 可跑） | ✅ 6 tests 全绿 + wcgo 真机退出码 0/1/2 实证 |

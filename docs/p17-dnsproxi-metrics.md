@@ -155,7 +155,7 @@ curl -s localhost:9153/metrics | grep dnsproxi
 | upstream_duration P99（histogram_quantile） | 与 dnsq 的 P99 同量级 |
 | in_flight 峰值 | worker pool 模式 ≤ N |
 
-**改造题（P19 已完成）**：`dnsproxi_upstream_errors_total{reason}`
+**改造题（已完成，见下表）**：`dnsproxi_upstream_errors_total{reason}`
 已落地，reason 分类 `upstreamErrReason`：`errors.As(net.Error)` 判超时、
 `errors.Is(syscall.ECONNREFUSED)` 判拒收、兜底 network。真机双场景实测：
 
