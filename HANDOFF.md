@@ -221,3 +221,21 @@ test，含 wcgo 真机退出码 0/1/2 实证）；新页浏览器实测 h1/侧�
 验证：每任务 `gate --fast` PASS + `pnpm run ci` 全绿后提交；T6 跑
 完整闸门（含 99 变异 + P12 PG 容器）。slop-lint 全部改动的 md 0
 violations（含 results/LESSON 历史 em-dash 全文件清理）。
+
+### 补充（同日）：P22 工具链深潜与文档工程
+
+用户反馈"工具链讲太少、文档也太少"。缺口调查：P1 只有 196 行速通 +
+章末命令表；godoc 注释规范全仓只有 P2.5 一段；Example 测试/pkg.go.dev/
+版本发布/go.work/GODEBUG 体系全零覆盖。落新章 P22 + 练习 p22tool。
+
+- notes/p22-toolchain-docs.md：5 问题。pprof 完整取证流程（httpkv 实采
+  heap 2681kB/allocs 5329kB/goroutine）、lint 与 generate 纪律、
+  GODEBUG（默认值跟 go.mod 版本走）与 GOEXPERIMENT 双开关体系、
+  go.work 不提交/replace 污染、文档工程三层（doc comment 规范/
+  Example 测试/go/doc 可编程访问）+ semver 发布（v2 进 module path）
+- exercises/p22tool：docstats 库（go/parser+go/doc 统计导出符号文档
+  覆盖率；单 spec 块注释回退 GenDecl.Doc 的 godoc 语义，实测踩过）+
+  cmd/docstats CLI（-d/-version，退出码 0/1/2，ldflags -X 注入版本
+  实证）+ 4 tests -race
+- 五处入口 + P1 章末指引 + docs 镜像。gate --fast PASS + pnpm ci 全绿。
+- 提交：e948159
