@@ -225,12 +225,14 @@ go test ./exercises/p20cli/ -v
    测试注入 bytes.Buffer，验证问题 1 的可测试性红利）。
 2. `TestParseFlags`：flag 解析成 config struct（对照 Rust
    `Args::parse`），非法参数返回 error（不是直接 exit）。
-3. `TestExitCode`：`ClassifyError` 把"文件不存在/权限/用法"映射到
-   退出码（1/1/2）。
+3. `TestExitCode`：`ExitCode` 把"文件不存在/权限/用法"映射到
+   退出码（1/1/2），`errors.Is` 穿透 `%w` 链识别用法错。
 4. `TestWalkCollect`：WalkDir 遍历 + 收集错误 + `.git` 剪枝，断言
    部分失败时结果仍完整、错误清单非空。
 5. `TestScanLongLine`：故意造 1MB 长行，验证不调 `scanner.Buffer`
    会静默截断，调了才对（问题 3 的坑直接踩一遍）。
+6. `TestRunPipeline`：stdin/文件两模式 + `-q` 静默 + 坏文件收集
+   继续（问题 1 的"输出只进注入的 writer"验收）。
 
 **观察题**（终端里跑，测试没法替你感受）：
 
