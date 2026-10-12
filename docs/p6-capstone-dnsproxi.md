@@ -41,14 +41,19 @@ _rust_learning 线⑤的 D1-D7 代码。复盘内容未改写，历史价值在�
 **验收标准**（沿用你的规矩）：每阶段 `go test` 全绿 + `run.sh` 场景可复跑 +
 数字能对上你 Rust 版的量级（否则查为什么，这就是 Lesson）。
 
-## 骨架已就位
+## 实装收官（G1-G6 全部完成，读数见 dnsproxi-go/LESSON.md）
 
-`dnsproxi-go/`（module `golearn/dnsproxi-go`）：
-- `main.go`：启动参数（env 风格与你 Rust 版一致：`DNS_UPSTREAM`、`DNS_LISTEN`）
-- `wire/`：DNS 报文解析（header/question/rr），**练习从这开始**
-- `proxy.go`：D1 转发器骨架 + TODO
-- `proxy_test.go`：先红后绿的验收测试：起真实 upstream（本地 UDP socket），
-  转发、sinkhole、回包断言
+`dnsproxi-go/`（module `golearn/dnsproxi-go`，最终形态）：
+- `main.go`：env 配置 + `Proxy`（UDP 转发/sinkhole/缓存接入）+ 优雅关停
+- `wire/`：DNS 报文解析（header/question/rr，压缩指针防御）
+- `cache/`：G2-G4 全套（Cache+RWMutex、sample-K 逐出、TinyLFU CMS+老化）
+- `logger.go`/`metrics.go`：P15/P17 落地（ctx 日志、RED 指标）
+- `dnsq/`：UDP 压测发包器（G6 数据的来源）
+- `run.sh`：场景复跑入口
+
+毕业时的目录和"骨架+TODO"的初始形态不同：转发器长在 `main.go`
+的 `Proxy` 里（单文件比拆 proxy.go 更贴 D1 规模），测试在
+`main_test.go`/`trace_test.go`/`wire/`/`cache/`。
 
 ## D1 验收场景（对应你 Rust 版 run.sh query/wire/block）
 

@@ -35,7 +35,7 @@ func TestHeaderRoundTrip(t *testing.T) {
 		t.Fatalf("want 12 bytes, got %d", len(b))
 	}
 
-	// TODO(你): 实现 ParseHeader 后，这里两种解析应该一致。
+	// ParseHeader 已实装（参考实现）：手工位移 refHeader 与它互证。
 	got, err := ParseHeader(b)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
