@@ -67,7 +67,7 @@ for f in changed('.md'):
 rec('slop-lint 0 violations（改动的 md）', not bad, '; '.join(bad))
 
 # 4 em-dash（U+2014）：改动的文本文件里不得出现
-bad = [f for f in changed('.md', '.go', '.ts', '.json', '.py', '.sh') if '—' in open(f, encoding='utf-8').read()]
+bad = [f for f in changed('.md', '.go', '.ts', '.json', '.py', '.sh') if chr(0x2014) in open(f, encoding='utf-8').read()]
 rec('零 em-dash', not bad, ', '.join(bad))
 
 # 5 Go 1.22 整数 range：改动的 .go 里 `for i := 0; i < n; i++` 必须写 range，例外行加 `// range-ok: 理由`
@@ -114,6 +114,41 @@ for n in sorted(glob.glob('notes/p2[1-9]-*.md')):
     entries = ['INDEX.md', 'README.md', 'docs/index.md', 'docs/table.md', 'docs/.vitepress/config.ts']
     miss = [e for e in entries if slug not in open(e).read()]
     rec(f'{slug} 五处入口同步', not miss, ', '.join(miss))
+
+# 10 测试数量不得减少；新增 t.Skip 必须带 `skip-ok: 理由`
+def count_tests(ref):
+    cmd = f"git grep -h '^func Test' {ref} -- '*_test.go' | wc -l" if ref else "git grep --untracked -h '^func Test' -- '*_test.go' | wc -l"
+    return int(sh(cmd).stdout.strip())
+
+b, n = count_tests(BASE), count_tests(None)
+rec(f'测试函数总数不减少（BASE {b} -> 现 {n}）', n >= b)
+bad = []
+for f in changed('.go'):
+    for i, line in enumerate(open(f).read().splitlines(), 1):
+        if 't.Skip' in line and 'skip-ok:' not in line:
+            old = sh(f'git show {BASE}:{f}').stdout if sh(f'git cat-file -e {BASE}:{f}').returncode == 0 else ''
+            if line.strip() not in old:
+                bad.append(f'{f}:{i}')
+rec('无未说明的新增 t.Skip', not bad, ', '.join(bad))
+
+# 11 审读台账：范围见 scripts/audit-scope.txt（slug:最少条数），每条必须有可复核的命令/出处
+scope = [l.split('#')[0].strip() for l in open('scripts/audit-scope.txt') if l.split('#')[0].strip()]
+for item in scope:
+    slug, _, mn = item.partition(':')
+    mn = int(mn or 20)
+    f = f'audit/{slug}.md'
+    if not os.path.exists(f):
+        rec(f'台账 {f}', False, '文件不存在')
+        continue
+    rows = [[c.strip() for c in l.strip().strip('|').split('|')] for l in open(f).read().splitlines() if re.match(r'^\|\s*\d+\s*\|', l)]
+    good = [r for r in rows if len(r) >= 6 and r[5] in ('OK', 'FIXED') and len(r[3]) >= 8 and len(r[4]) >= 3]
+    fixed = sum(r[5] == 'FIXED' for r in rows if len(r) >= 6)
+    probs = []
+    if len(good) < mn:
+        probs.append(f'合格条目 {len(good)} < {mn}（需 状态 OK/FIXED，命令/出处≥8字，结果非空）')
+    if fixed == 0 and len(re.findall(r'^\s*[-*] ', open(f).read().split('## 零发现自检')[-1], re.M)) < 10 if '## 零发现自检' in open(f).read() else fixed == 0:
+        probs.append('FIXED=0 时必须有 "## 零发现自检" 小节，且列出≥10 条额外核查')
+    rec(f'台账 {f}（合格 {len(good)}，FIXED {fixed}）', not probs, '; '.join(probs))
 
 ok = all(o for _, o in results)
 print(f"\nGATE: {'PASS' if ok else 'FAIL'}（{sum(not o for _, o in results)} 项失败）")
