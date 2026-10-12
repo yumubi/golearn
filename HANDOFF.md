@@ -173,6 +173,30 @@ go test -race -count=1 ./...
 - `pnpm docs:build`：通过，新标题进 dist
 - httpkv 冒烟：X-Request-ID 响应头与日志 req_id 逐字一致（2026-10-12 新实拍）
 
+## 基础内容扩充（2026-10-12 第二轮）
+
+用户反馈"基础的内容讲的有点少"，且"大家用 go 很多是写工具的"。先广泛
+调查（rust-for-frontend / learn-go-with-tests / Go by Example / Tour of
+Go / 极客兔兔 / 字节青训营 / 100 Go Mistakes / AI 时代范式），确认四块
+缺口后落地：
+
+| 新章 | 定位 | 练习 |
+|---|---|---|
+| P1.5 语法基础速通 | 12 节 Rust 对照（iota/切片底层/map 三坑/rune/defer 三语义等，全部是 grep 零命中缺口） | p1_5basics 8 tests |
+| P2.5 范式与惯用法 | 三条设计哲学推出惯例、接口黄金法则、错误链、包组织命名 | p2_5idiom 6 tests + legacy.go 反面样板 |
+| P19 生态选型地图 | 标准库优先铁律、默认选型表、本仓依赖点名、新库评估法 | p19eco 4 tests + stringer |
+| P20 写 CLI 工具 | Go 的基本盘是工具：stdout 神圣/flag→cobra/WalkDir/退出码 0-1-2/日志四纪律/交叉编译发布 | p20cli 6 tests + wcgo cmd/ |
+
+配套：P1 章末工具链进阶（ldflags/交叉编译/pprof/golangci-lint/go:generate）；
+①弧改为 P1.5 → P2 → P2.5 → P3 → P14；课程表 23 章；侧边栏①④组更新；
+P6 骨架引用对齐收官实况（proxy.go+TODO → 实装目录）+ wire_test 陈年
+TODO 清理。
+
+验证：全部 slop-lint 0（em-dash 连表格占位符都被 eslint no-em-dash 拦，
+已全改写）；`pnpm run ci` 全绿（eslint/knip/docs:build/双 module go
+test，含 wcgo 真机退出码 0/1/2 实证）；新页浏览器实测 h1/侧边栏/课程表。
+提交：4236290（补基础）→ 5a0c2a1（P20）→ d6be429（P6 对齐）。
+
 ### 遗留（有意保留）
 
 - P3 章末参考的 goroutine/tokio 切换成本实验保留 `[INFERENCE，待你实测]` 标记：这是留给读者的实测作业，不是待修内容
