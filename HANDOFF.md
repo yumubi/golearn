@@ -202,3 +202,22 @@ test，含 wcgo 真机退出码 0/1/2 实证）；新页浏览器实测 h1/侧�
 - P3 章末参考的 goroutine/tokio 切换成本实验保留 `[INFERENCE，待你实测]` 标记：这是留给读者的实测作业，不是待修内容
 - P6 复盘内文未重写（历史价值），仅导语+lint 修复
 - 基线已入 git：仓库根 2026-10-12 `git init` + 首次提交 0786ae9（135 文件，排除 node_modules/dist/cache）；`/Users/akka/Data/tmp/golearn-handoff-baseline-20261012/` 备份保留为双保险
+
+## T1-T6 流水线执行（2026-10-12 第三轮，PLAN-OMP.md）
+
+按 `PLAN-OMP.md` 六任务流水线执行，验收者=另一 Claude（重跑闸门、
+抽查台账、重跑变异）。完成裁定：`python3 -I scripts/gate.py` 末行
+`GATE: PASS`。
+
+| 任务 | 内容 | 提交 |
+|---|---|---|
+| T1 | 三批审读九章 + FIXED 51 条（批A baad78d P3/P13-18、批B 4d4e4ba P8-12、批C c4e9fa5 九章台账） | baad78d / 4d4e4ba / c4e9fa5 |
+| T2 | P21 新章 testing/synctest + fuzz（4 问题、Sleep 版压测 3 次 flake 实锤 vs synctest 确定性、Rust 对照 6 项）+ exercises/p21test（Retry/Debounce/cmd/retryrun 退出码 0/1/2/130）+ FuzzParseArgs（60s 28,529,755 execs 0 crash + 植 bug 演示）+ 变异 3 条 KILLED（累计 99）+ 五处入口 + P3/P14 章末链接 | 1da476a |
+| T3 | 1.21-1.26 七特性逐个 go doc 核实 + 可编译例子（p1_5basics/p2lang/p3conc/p8fast/p20cli 各一，-race 全绿）+ audit/t3-features.md | 17114c7 |
+| T4 | GOMAXPROCS 1.25 cgroups 边界（源码核实 + P8/P9/LESSON 落点）、Green Tea GC 双跑（results-gc-2026-10-12.md，区间交叠噪声内）、jsonv2 实证（默认关 + Unmarshal 2 倍速/分配 6→1，P19 专段 + P8 句）+ audit/t4-experiments.md | e91e4db |
+| T5 | 浏览器实测 audit/t5-site.md：桌面 1280 + 移动 390，P21/P14 + 5 旧章 + 课程表 + 首页，12 项断言全 OK（含 mermaid SVG 实渲染、汉堡菜单、表格 contained） | （无代码改动） |
+| T6 | 本节 + 完整闸门（无 --fast，99 变异）+ 全量回归 | （见提交） |
+
+验证：每任务 `gate --fast` PASS + `pnpm run ci` 全绿后提交；T6 跑
+完整闸门（含 99 变异 + P12 PG 容器）。slop-lint 全部改动的 md 0
+violations（含 results/LESSON 历史 em-dash 全文件清理）。
