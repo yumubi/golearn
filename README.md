@@ -75,7 +75,7 @@ cd /Users/akka/Dev/learning/go
 | P17 | 毕业项目指标落地（dnsproxi RED） | [notes/p17-dnsproxi-metrics.md](notes/p17-dnsproxi-metrics.md) | `dnsproxi-go/` :9153 | ✅ 7=2+4+1 冒烟对账 + errors{reason} 双场景实测 |
 | P18 | 毕业项目日志落地（dnsproxi slog） | [notes/p18-dnsproxi-slog.md](notes/p18-dnsproxi-slog.md) | `dnsproxi-go/logger.go` | ✅ 每查询 req_id 注入冒烟实拍 |
 | P19 | 生态与常用库选型地图 | [notes/p19-ecosystem.md](notes/p19-ecosystem.md) | `exercises/p19eco/` | ✅ 4 tests |
-| P20 | 写 CLI 工具（管道/flag/cobra/退出码/发布） | [notes/p20-cli-tool.md](notes/p20-cli-tool.md) | `exercises/p20cli/`（含 cmd/） | ✅ 6 tests + wcgo 退出码实证 |
+| P20 | 写 CLI 工具（管道/flag/cobra/退出码/发布） | [notes/p20-cli-tool.md](notes/p20-cli-tool.md) | `exercises/p20cli/`（含 cmd/） | ✅ 7 tests + wcgo 退出码实证 |
 
 ## 网站版（VitePress，rust-for-frontend 同款体验）
 

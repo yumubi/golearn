@@ -46,7 +46,7 @@
 | P17 dnsproxi 指标落地 | [notes/p17-dnsproxi-metrics.md](notes/p17-dnsproxi-metrics.md) | `dnsproxi-go/`（:9153/metrics） | ✅ RED 重建（qtype×outcome 低基数）+ cache_entries 双更新点 + 7=2+4+1 冒烟对账；upstream_errors_total{reason} 双场景实测（refused/timeout） |
 | P18 dnsproxi 日志落地 | [notes/p18-dnsproxi-slog.md](notes/p18-dnsproxi-slog.md) | `dnsproxi-go/logger.go` | ✅ 独立 module 重写 ctxHandler（UDP 版每查询 ctx）+ [hit]/[miss] 结构化冒烟实拍；级别分层表 |
 | P19 生态与常用库选型地图 | [notes/p19-ecosystem.md](notes/p19-ecosystem.md) | `exercises/p19eco/` | ✅ 4 tests 全绿（functional options/slog Handler 门控/stringer generate） |
-| P20 写 CLI 工具（管道/flag/cobra/退出码/发布） | [notes/p20-cli-tool.md](notes/p20-cli-tool.md) | `exercises/p20cli/`（含 cmd/ 可跑） | ✅ 6 tests 全绿 + wcgo 真机退出码 0/1/2 实证 |
+| P20 写 CLI 工具（管道/flag/cobra/退出码/发布） | [notes/p20-cli-tool.md](notes/p20-cli-tool.md) | `exercises/p20cli/`（含 cmd/ 可跑） | ✅ 7 tests 全绿 + wcgo 真机退出码 0/1/2 实证 |
 
 ## 用法
 

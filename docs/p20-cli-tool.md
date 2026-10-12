@@ -219,7 +219,7 @@ slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr,
 go test ./exercises/p20cli/ -v
 ```
 
-练习包是一个微型管道工具 `wcgo`（统计文本行数/词数），覆盖五节：
+练习包是一个微型管道工具 `wcgo`（统计文本行数/词数），覆盖正文五个问题：
 
 1. `TestCountReader`：从 `io.Reader` 统计（**不摸 os.Stdin**，
    测试注入 bytes.Buffer，验证问题 1 的可测试性红利）。
@@ -233,6 +233,9 @@ go test ./exercises/p20cli/ -v
    会静默截断，调了才对（问题 3 的坑直接踩一遍）。
 6. `TestRunPipeline`：stdin/文件两模式 + `-q` 静默 + 坏文件收集
    继续（问题 1 的"输出只进注入的 writer"验收）。
+7. `TestErrsCombineExtra`：钉住教学包里简化版 `errsCombine` 的行为
+   （空列表返回 nil，多个错误计数并带首个），完整的 `errors.Join`
+   版本在问题 4。
 
 **观察题**（终端里跑，测试没法替你感受）：
 
