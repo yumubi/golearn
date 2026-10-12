@@ -56,7 +56,7 @@ Go 社区与 Rust 生态最大的气质差异：**Rust 惯于 `tokio`+`serde`+
 |---|---|---|---|
 | 标准库 + env | 小服务默认 | 无对标 | 环境变量 + flag 包就够 |
 | **spf13/viper** | 大配置（多格式/热更新） | config | 重；能不用就不用 |
-| kelseyhightower/envconfig | env 结构体绑定 | envy | 轻量惯用 |
+| caarlos0/env、kelseyhightower/envconfig | env 结构体绑定 | envy | 轻量惯用；envconfig 较老（2025-06 后无推送），新项目看 caarlos0/env |
 
 本课程 dnsproxi-go 用 flag + env（不到 30 行），是"先标准库"的示范。
 
@@ -66,7 +66,7 @@ Go 社区与 Rust 生态最大的气质差异：**Rust 惯于 `tokio`+`serde`+
 |---|---|---|
 | **log/slog** | 官方答案（P15/P16 深潜） | tracing |
 | open-telemetry/opentelemetry-go | OTel 官方 SDK | tracing-opentelemetry |
-| zap/logrus | 历史：logrus 已 EOL 维护，zap 快但先于 slog | 无现役对标 |
+| zap/logrus | 历史：logrus README 声明维护模式（只修 bug 不加特性），zap 快但先于 slog | 无现役对标 |
 
 选型纪律：**新项目 slog，老项目别为了换日志而重构**。
 
@@ -118,7 +118,7 @@ go.dev 官方教程现在直接教 `net/http` 写 RESTful：框架热的降温�
 
 | 需求 | 默认 | 备注 |
 |---|---|---|
-| UUID | google/uuid | 2 万星，无争议 |
+| UUID | google/uuid | 事实标准，无争议 |
 | Excel/CSV | encoding/csv（标准库） | Excel 才引 excelize |
 | 定时任务 | time.Ticker（标准库） | cron 语义才引 robfig/cron |
 | 重试 | 手写 select+timer 或 cenkalti/backoff | 别引全家桶 |
