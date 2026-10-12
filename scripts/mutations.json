@@ -1,0 +1,29 @@
+[
+  {
+    "id": "p20-scanner-buffer",
+    "note": "P20 问题 3：删掉 sc.Buffer 后长行测试必须失败",
+    "file": "exercises/p20cli/cli.go",
+    "find": "\tsc.Buffer(make",
+    "replace": "\t//sc.Buffer(make",
+    "run": ["go", "test", "-count=1", "-run", "TestScanLongLine", "./exercises/p20cli/"],
+    "expect": "token too long"
+  },
+  {
+    "id": "p2-interface-nil",
+    "note": "P2 观察题：删掉显式 return nil，TestInterfaceNil 必须失败",
+    "file": "exercises/p2lang/lang_test.go",
+    "find": "\tif e == nil {\n\t\treturn nil // ✅ 修复：显式返回接口零值 (nil type, nil value)\n\t}\n",
+    "replace": "",
+    "run": ["go", "test", "-count=1", "-run", "TestInterfaceNil", "./exercises/p2lang/"],
+    "expect": "want nil, got <nil>"
+  },
+  {
+    "id": "p1-visibility",
+    "note": "P1 预测题：越权访问私有字段必须是编译失败",
+    "file": "exercises/p1tool/external_test.go",
+    "find": "got := c.N()",
+    "replace": "got := c.n",
+    "run": ["go", "test", "-count=1", "./exercises/p1tool/"],
+    "expect": "build failed"
+  }
+]
