@@ -9,10 +9,10 @@
 
 | 阶段 | 顺序 | 时间 | 判过标准 |
 |---|---|---|---|
-| ① 语法核心 | P2 → P3 → P14 | 半天 | 能向别人复述每章 Take-away |
+| ① 语法核心 | P1.5 → P2 → P2.5 → P3 → P14 | 半天到一天 | 能向别人复述每章 Take-away |
 | ② 服务搭建 | P8 → P12（或 P9）→ P6 LESSON.md | 1 天 | 能画出 dnsproxi 的请求路径 |
 | ③ 可观测性 | P13 → P15 → P16 → P17 → P18 | 1 天 | 能解释"为什么 req_id 不进 metrics label" |
-| ④ 按需查 | P1 cheat sheet、P4/P5 精读法、P10/P11 | 用到才翻 | 无 |
+| ④ 按需查 | P1 进阶命令、P19 生态地图、P4/P5 精读法、P10/P11 | 用到才翻 | 无 |
 
 每章打开方式（详见 README）：先读章头“这章学完你能干什么”和正文的主要
 问题（正文是讲义），卡壳才翻章末参考。练习：预测题先写答案再跑对答案，
@@ -25,8 +25,10 @@
 
 | 课 | LESSON | 练习 | 状态 |
 |---|---|---|---|
-| P1 工具链 cargo→go | [notes/p1-toolchain.md](notes/p1-toolchain.md) | `exercises/p1tool/` | ✅ 全绿（参考实现 2026-10-10） |
+| P1 工具链 cargo→go | [notes/p1-toolchain.md](notes/p1-toolchain.md) | `exercises/p1tool/` | ✅ 全绿（参考实现 2026-10-10；章末工具链进阶 2026-10-12） |
+| P1.5 语法基础速通（12 节 Rust 对照） | [notes/p1_5-basics.md](notes/p1_5-basics.md) | `exercises/p1_5basics/` | ✅ 8 tests 全绿（切片共享/map 三坑/defer LIFO/rune 预测题） |
 | P2 语言核心：用 Rust 经验写 Go 的四个换直觉问题 | [notes/p2-lang-core.md](notes/p2-lang-core.md) | `exercises/p2lang/` | ✅ 全绿（参考实现 2026-10-10） |
+| P2.5 范式与惯用法 | [notes/p2_5-idiom.md](notes/p2_5-idiom.md) | `exercises/p2_5idiom/` | ✅ 6 tests 全绿（胖接口拆小/错误链/guard clause/手写 fake） |
 | P3 并发 goroutine/channel/select/context | [notes/p3-concurrency.md](notes/p3-concurrency.md) | `exercises/p3conc/` | ✅ 全绿 -race 干净（参考实现 2026-10-10，含死锁测试修复） |
 | P4 精读 ejdb | [notes/p4-ejdb.md](notes/p4-ejdb.md) | `exercises/p4ejdb/` | ✅ 全绿（参考实现 2026-10-10） |
 | P5 精读 deepsearch | [notes/p5-deepsearch.md](notes/p5-deepsearch.md) | `exercises/p5deep/` | ✅ 全绿 -race 干净（参考实现 2026-10-10；DI 死锁教训见 deep.go 注释） |
@@ -43,6 +45,7 @@
 | P16 自定义 slog handler | [notes/p16-slog-handler.md](notes/p16-slog-handler.md) | `exercises/p16slogh/` + httpkv | ✅ 7 tests -race（自动注入/With 链不丢/显式赢注入/双 sink 扇出）+ httpkv 调用点瘦身冒烟实拍；ctx key 单一来源翻车记档（§16.4） |
 | P17 dnsproxi 指标落地 | [notes/p17-dnsproxi-metrics.md](notes/p17-dnsproxi-metrics.md) | `dnsproxi-go/`（:9153/metrics） | ✅ RED 重建（qtype×outcome 低基数）+ cache_entries 双更新点 + 7=2+4+1 冒烟对账；P19 补 upstream_errors_total{reason} 双场景实测（refused/timeout） |
 | P18 dnsproxi 日志落地 | [notes/p18-dnsproxi-slog.md](notes/p18-dnsproxi-slog.md) | `dnsproxi-go/logger.go` | ✅ 独立 module 重写 ctxHandler（UDP 版每查询 ctx）+ [hit]/[miss] 结构化冒烟实拍；级别分层表 |
+| P19 生态与常用库选型地图 | [notes/p19-ecosystem.md](notes/p19-ecosystem.md) | `exercises/p19eco/` | ✅ 4 tests 全绿（functional options/slog Handler 门控/stringer generate） |
 
 ## 用法
 

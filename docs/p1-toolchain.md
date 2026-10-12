@@ -105,3 +105,85 @@ go test -run TestNotFound -v ./exercises/p1tool/   # 单跑某题
 - `go mod tidy` 是依赖的唯一真相：import 驱动，不是清单驱动。
 - internal/ 硬私有、大写导出，可见性模型比 Rust 粗但零配置。
 - 静态链接单二进制是 Go 部署的默认答案，Dockerfile 见 deepsearch。
+
+## 章末参考
+
+### 工具链进阶：这半年会真用到的命令
+
+**构建与缓存**：
+
+```sh
+go build -trimpath -ldflags="-s -w" -o bin/app ./cmd/app
+#   -trimpath   去掉本机路径（可复现构建）
+#   -s -w       去符号表/调试信息（≈ strip，产物小 20-30%）
+#   -o          输出路径
+go clean -cache        # 清编译缓存（构建诡异报错时的第一反应）
+go env GOMODCACHE      # 模块缓存在哪（只读；要改代码得 replace 本地路径）
+```
+
+交叉编译是**零配置**的（cargo 要装 target，Go 全内置）：
+
+```sh
+GOOS=linux GOARCH=arm64 go build -o app ./cmd/app
+GOOS=windows GOARCH=amd64 go build -o app.exe ./cmd/app
+CGO_ENABLED=0 go build ...   # 纯 Go 静态编译（scratch 镜像的标配）
+```
+
+**依赖管理进阶**：
+
+```sh
+go get pkg@v1.2.3      # 定版本；@latest / @upgrade / @none
+go get pkg@master      # 跟分支（临时试 patch）
+go mod edit -replace=old=./local/new   # 本地路径替换（调试依赖必会）
+go mod why pkg         # 这个依赖为什么在依赖树里
+go mod graph | head    # 依赖图
+go list -m -u all      # 哪些依赖有新版
+```
+
+对照 cargo：`-replace` ≈ `[patch]`，`go mod why` ≈ `cargo tree -i`。
+主版本 2+ 的导入路径带 `/v2`（P2.5 模块纪律节）。
+
+**测试工具族**（P8 问题 3 展开 table-driven，这里是命令面）：
+
+```sh
+go test -run TestXxx/子测试名 ./pkg/    # 精确到子测试
+go test -count=1 ./...                  # 禁用测试缓存（CI 必加）
+go test -timeout 30s ./...              # 默认 10m，防死锁卡 CI
+go test -bench=. -benchmem ./pkg/       # 基准测试（P7 方法论）
+go test -coverprofile=c.out ./pkg/ && go tool cover -html=c.out
+go test -race ./...                     # 数据竞争检测，CI 必开（P3）
+```
+
+**诊断三剑客**（Rust 没有的 gift，直接在二进制里）：
+
+```sh
+go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30
+#   CPU 火焰图：net/http/pprof 一行 import 即得端点
+go tool trace trace.out  # 调度延迟/GC/系统调用时间线
+go vet ./...             # 静态检查（printf 格式串、lock 拷贝等）
+```
+
+P7/P13 的实验全用这套：pprof 看热点，trace 看调度，pprof heap 看
+分配。**生产环境 pprof 端点是 Go 服务的标配**（默认不开，net/http/pprof
+ 路由挂上即可）。
+
+**golangci-lint**（go vet 太弱的补位）：
+
+```sh
+golangci-lint run        # 聚合 20+ linter：errcheck（漏查 error）、
+                         # govet、staticcheck、revive……
+```
+
+对照 clippy 的 `-W clippy::all`：golangci-lint 是聚合器，配置文件
+`.golangci.yml` 挑启用集。社区 CI 常开：errcheck、govet、staticcheck、
+ineffassign、unused 五件套起步。
+
+**go generate**（代码生成的口子，不是宏）：
+
+```sh
+//go:generate stringer -type=Level     # 写在 .go 文件注释里
+go generate ./...                       # 显式触发，产物进 git
+```
+
+对照 Rust 的宏/derive：Go 没有编译期元编程，**约定是生成代码提交
+进仓库**（stringer、mockgen、sqlc 都是这条路，P11 全靠 sqlc）。

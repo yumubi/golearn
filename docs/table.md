@@ -1,5 +1,5 @@
 ---
-title: 课程表：19 章速查
+title: 课程表：22 章速查
 ---
 
 # 课程表
@@ -9,8 +9,10 @@ title: 课程表：19 章速查
 
 | 章 | 主题 | 教程 | 练习 | 状态 |
 |---|---|---|---|---|
-| P1 | 工具链：cargo → go | [notes](/p1-toolchain) | `exercises/p1tool/` | ✅ 全绿（cheat sheet 用法） |
+| P1 | 工具链：cargo → go | [notes](/p1-toolchain) | `exercises/p1tool/` | ✅ 全绿（cheat sheet + 章末进阶命令） |
+| P1.5 | 语法基础速通（12 节 Rust 对照） | [notes](/p1_5-basics) | `exercises/p1_5basics/` | ✅ 8 tests（切片/map/defer/rune 预测题） |
 | P2 | 语言核心：interface/组合/error | [notes](/p2-lang-core) | `exercises/p2lang/` | ✅ 全绿 |
+| P2.5 | 范式与惯用法 | [notes](/p2_5-idiom) | `exercises/p2_5idiom/` | ✅ 6 tests（胖接口拆小/错误链/fake） |
 | P3 | 并发：goroutine/channel/select/context | [notes](/p3-concurrency) | `exercises/p3conc/` | ✅ 全绿 -race 干净 |
 | P4 | 精读 ejdb | [notes](/p4-ejdb) | `exercises/p4ejdb/` | ✅ 全绿 |
 | P5 | 精读 deepsearch | [notes](/p5-deepsearch) | `exercises/p5deep/` | ✅ 全绿 -race 干净（DI 死锁教训） |
@@ -27,6 +29,7 @@ title: 课程表：19 章速查
 | P16 | 自定义 slog handler | [notes](/p16-slog-handler) | `exercises/p16slogh/` + httpkv | ✅ 7 tests -race + 零显式注入 |
 | P17 | dnsproxi 指标落地 | [notes](/p17-dnsproxi-metrics) | `dnsproxi-go/` :9153 | ✅ 7=2+4+1 对账 + errors{reason} |
 | P18 | dnsproxi 日志落地 | [notes](/p18-dnsproxi-slog) | `dnsproxi-go/logger.go` | ✅ 每查询 req_id 注入 |
+| P19 | 生态与常用库选型地图 | [notes](/p19-ecosystem) | `exercises/p19eco/` | ✅ 4 tests（options/slog Handler/stringer） |
 
 ## 贯穿主线
 

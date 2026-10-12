@@ -28,10 +28,12 @@ export default defineConfig({
         ],
       },
       {
-        text: '① 语法核心（半天）',
+        text: '① 语法核心（半天到一天）',
         collapsed: true,
         items: [
+          { text: 'P1.5 语法基础速通', link: '/p1_5-basics' },
           { text: 'P2 语言核心', link: '/p2-lang-core' },
+          { text: 'P2.5 范式与惯用法', link: '/p2_5-idiom' },
           { text: 'P3 并发', link: '/p3-concurrency' },
           { text: 'P14 errgroup + pipeline', link: '/p14-pipelines' },
         ],
@@ -62,6 +64,7 @@ export default defineConfig({
         collapsed: true,
         items: [
           { text: 'P1 工具链 cheat sheet', link: '/p1-toolchain' },
+          { text: 'P19 生态与常用库', link: '/p19-ecosystem' },
           { text: 'P4 精读 ejdb', link: '/p4-ejdb' },
           { text: 'P5 精读 deepsearch', link: '/p5-deepsearch' },
           { text: 'P10 gRPC', link: '/p10-grpc' },

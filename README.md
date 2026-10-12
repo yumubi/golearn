@@ -8,8 +8,8 @@
 
 ```mermaid
 flowchart LR
-    subgraph S1["① 语法核心 · 半天"]
-        P2[P2 语言核心] --> P3[P3 并发] --> P14[P14 errgroup]
+    subgraph S1["① 语法核心 · 半天到一天"]
+        P15[P1.5 语法速通] --> P2[P2 语言核心] --> P25[P2.5 惯用法] --> P3[P3 并发] --> P14[P14 errgroup]
     end
     subgraph S2["② 服务搭建 · 1 天"]
         P8[P8 标准库/HTTP] --> P9["P9/P12 数据库"] --> P6[P6 毕业项目读数]
@@ -22,10 +22,10 @@ flowchart LR
 
 | 阶段 | 章 | 回答一个问题 | 怎么读 |
 |---|---|---|---|
-| ① 语法核心 | P2 → P3 → P14（P1 查表用） | Go 这门语言怎么写 | 必读，测试要真跑 |
+| ① 语法核心 | P1.5 → P2 → P2.5 → P3 → P14 | Go 这门语言怎么写、怎么写得地道 | 必读，测试要真跑 |
 | ② 服务搭建 | P8 → P9 或 P12 → P6 LESSON | 一个真实后端怎么搭 | 必读；有 PG17 直读 P12 |
 | ③ 可观测性 | P13 → P15 → P16 → P17 → P18 | 上线后怎么看得见 | 整条弧连读，别拆散 |
-| ④ 按需参考 | P4/P5（精读法）、P10（gRPC）、P11（goose） | 用到才翻 | 不排进日程 |
+| ④ 按需参考 | P1 进阶命令、P19 生态地图、P4/P5（精读法）、P10（gRPC）、P11（goose） | 用到才翻 | 不排进日程 |
 
 - **快速路径（有 Rust/Java 底子）**：①②③ 一共 2-3 天。跳过 P1/P4/P5，
   P12 替代 P9（若装着 PG17）。
@@ -53,8 +53,10 @@ cd /Users/akka/Dev/learning/go
 
 | 章 | 主题 | 教程 | 练习 | 状态 |
 |---|---|---|---|---|
-| P1 | 工具链：cargo → go | [notes/p1-toolchain.md](notes/p1-toolchain.md) | `exercises/p1tool/` | ✅ 全绿 |
+| P1 | 工具链：cargo → go | [notes/p1-toolchain.md](notes/p1-toolchain.md) | `exercises/p1tool/` | ✅ 全绿 + 章末进阶 |
+| P1.5 | 语法基础速通（12 节 Rust 对照） | [notes/p1_5-basics.md](notes/p1_5-basics.md) | `exercises/p1_5basics/` | ✅ 8 tests |
 | P2 | 语言核心：用 Rust 经验写 Go 的四个换直觉问题 | [notes/p2-lang-core.md](notes/p2-lang-core.md) | `exercises/p2lang/` | ✅ 全绿 |
+| P2.5 | 范式与惯用法 | [notes/p2_5-idiom.md](notes/p2_5-idiom.md) | `exercises/p2_5idiom/` | ✅ 6 tests |
 | P3 | 并发：goroutine/channel/select/context | [notes/p3-concurrency.md](notes/p3-concurrency.md) | `exercises/p3conc/` | ✅ 全绿 -race |
 | P4 | 项目精读 A：ejdb（存储引擎） | [notes/p4-ejdb.md](notes/p4-ejdb.md) | `exercises/p4ejdb/` | ✅ 全绿 |
 | P5 | 项目精读 B：deepsearch（工程组织/DI） | [notes/p5-deepsearch.md](notes/p5-deepsearch.md) | `exercises/p5deep/` | ✅ 全绿 -race |
@@ -71,6 +73,7 @@ cd /Users/akka/Dev/learning/go
 | P16 | 自定义 slog handler（注入基础设施） | [notes/p16-slog-handler.md](notes/p16-slog-handler.md) | `exercises/p16slogh/` + httpkv | ✅ 7 tests -race + 调用点零 req_id 冒烟 |
 | P17 | 毕业项目指标落地（dnsproxi RED） | [notes/p17-dnsproxi-metrics.md](notes/p17-dnsproxi-metrics.md) | `dnsproxi-go/` :9153 | ✅ 7=2+4+1 冒烟对账 + errors{reason} 双场景实测 |
 | P18 | 毕业项目日志落地（dnsproxi slog） | [notes/p18-dnsproxi-slog.md](notes/p18-dnsproxi-slog.md) | `dnsproxi-go/logger.go` | ✅ 每查询 req_id 注入冒烟实拍 |
+| P19 | 生态与常用库选型地图 | [notes/p19-ecosystem.md](notes/p19-ecosystem.md) | `exercises/p19eco/` | ✅ 4 tests |
 
 ## 网站版（VitePress，rust-for-frontend 同款体验）
 
