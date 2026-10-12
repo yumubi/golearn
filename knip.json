@@ -2,6 +2,6 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "entry": ["docs/.vitepress/config.ts", "docs/.vitepress/theme/index.ts"],
   "project": ["docs/.vitepress/**/*.ts"],
-  "ignoreDependencies": ["vue", "nano-staged"],
+  "ignoreDependencies": ["vue", "nano-staged", "mermaid", "markdown-it"],
   "ignoreBinaries": ["go"]
 }
