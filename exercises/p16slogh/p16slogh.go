@@ -42,8 +42,8 @@ func (h *CtxHandler) Enabled(ctx context.Context, l slog.Level) bool {
 }
 
 // Handle 注入发生在记录进入内层之前，JSONHandler 照常序列化。
-// 同名字段让位给调用点：slog 的 attrs 按"首次出现"定型，注入若排前面
-// 会盖掉显式字段，所以先查重再注入。
+// 同名字段让位给调用点：标准 JSONHandler 对同名 attr 不去重（两条并存），
+// 注入若先排会出现重复 key，读侧取值不可控，所以先查重再注入。
 func (h *CtxHandler) Handle(ctx context.Context, r slog.Record) error {
 	if attrs := h.extract(ctx); len(attrs) > 0 {
 		for _, a := range attrs {

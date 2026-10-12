@@ -37,8 +37,10 @@ title: P3 · 并发：goroutine vs tokio task
 
 goroutine 直接跑，长得像同步代码，`.await` 没有对应物，runtime 偷偷
 切走。好处是代码好读；代价是让出点没有标记，你在源码里找不到
-"这里可能切换"。调度器是 GMP（G=goroutine, M=OS 线程, P=processor，
-本地队列是 tokio work-stealing 里没有的概念）。
+"这里可能切换"。调度器是 GMP（G=goroutine, M=OS 线程, P=processor）。
+P 是 Go 特有的概念：tokio 每个 worker 也有本地 run queue + LIFO slot
+（2019 调度器重构后就有），但 P 还管理着本地缓存的 mcache 和
+netpoller 集成，粒度比 tokio 的 worker 更重。
 
 panic 这条最痛。你的 netty 经验：EventLoop 里抛异常是同样的事故。
 必须在每个 goroutine 入口自己 recover。练习包里 `TestPanicKillsProcess`
@@ -84,9 +86,12 @@ case <-time.After(time.Second):   // ≈ tokio::time::timeout
 1. Go select **随机**挑就绪分支（防饿死），tokio::select! 默认随机、
    可 `biased;`。
 2. case 只能是 channel 操作，没有模式匹配。
-3. `time.After` 在循环里会泄漏（timer 到期前不释放），长跑循环用
-   `time.NewTimer` + `Reset`。练习 `TestFirstOrTimeout` 的超时分支
-   就踩在这个点上。
+3. `time.After` 在 Go 1.23 前会在循环里泄漏（timer 到期前不被 GC
+   回收）；1.23 起 GC 能回收无引用未停止的 timer，官方明确
+   "no reason to prefer NewTimer when After will do"（time/sleep.go
+   的 After 注释）。老代码里的 `NewTimer`+`Reset` 循环仍是对的，
+   新代码可以直接 `time.After`。练习 `TestFirstOrTimeout` 的超时分支
+   就踩在这个知识点上。
 
 ## 问题 3：取消为什么用 context，而不是 drop？
 
@@ -217,8 +222,8 @@ go run -race -run TestPanicKillsProcess                   # 体会进程死亡�
 | Rust/tokio（你学过的） | Go | 关键差异 |
 |---|---|---|
 | `tokio::spawn(async { ... })` | `go func() { ... }()` | 语法内建；**没有 Future/async 语法**，函数本身就是可暂停的 |
-| task（~64B–272B 初始栈，可增长） | goroutine（**初始 2KB 栈，可增长**） | 都是绿色线程，不是 OS 线程 |
-| runtime：多线程 work-stealing | runtime：GMP 调度器（G=goroutine, M=OS线程, P=processor） | tokio 默认 work-stealing；GMP 里 P 是 tokio 没有的概念（本地队列） |
+| task（单次堆分配，元数据 64B + future 状态机本体，无栈） | goroutine（**初始 2KB 栈，可增长**，runtime/proc.go:5322 `malg(stackMin)`） | 都是绿色线程，不是 OS 线程；tokio task 不是"小栈"而是无栈+元数据 |
+| runtime：多线程 work-stealing（每 worker 本地 run queue + LIFO slot） | runtime：GMP 调度器（G=goroutine, M=OS线程, P=processor） | 两边都有 work-stealing 和本地队列；P 是 Go 特有（还管 mcache/netpoller） |
 | `Future` 是状态机，惰性，poll 驱动 | goroutine 直接跑，**编译器+runtime 在函数调用点插入让出点** | Rust 惰性、组合子丰富；Go 急切、只能靠 channel/锁组合 |
 | `.await` | 没有对应物，阻塞式写法，runtime 偷偷切走 | **Go 代码长得像同步代码**；代价是看不到让出点 |
 | `tokio::select!` | `select { case v := <-ch: ... }` | Go select 是语言关键字；没有偏置（随机选择就绪分支） |

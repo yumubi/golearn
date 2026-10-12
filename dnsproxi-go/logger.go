@@ -33,8 +33,8 @@ func newQueryID() string {
 }
 
 // ctxHandler 包装 JSONHandler：Handle 前从 ctx 提取 req_id 注入。
-// 两个坑（P16 实测）：WithAttrs/WithGroup 必须转发重包；同名 attr
-// 按首次出现定型，注入前查重让调用点的显式字段赢。
+// 两个坑（P16 实测）：WithAttrs/WithGroup 必须转发重包；标准 JSONHandler
+// 对同名 attr 不去重（两条并存），注入前查重让调用点的显式字段唯一。
 type ctxHandler struct {
 	inner slog.Handler
 }

@@ -110,8 +110,9 @@ func TestMultiHandlerLevel(t *testing.T) {
 	}
 }
 
-// TestExplicitBeatsInjected：调用点显式字段优先，注入的同名字段被调用点覆盖。
-// JSONHandler 后加的 attr 覆盖先加的，所以注入放前面（调用点说了算）。
+// TestExplicitBeatsInjected：调用点显式字段优先，注入的同名字段不重复出现。
+// 标准 JSONHandler 对同名 attr 不去重（两条并存），所以注入前用 recordHas
+// 查重：记录里已有才跳过，保证显式值唯一。
 func TestExplicitBeatsInjected(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(NewCtxHandler(slog.NewJSONHandler(&buf, nil),

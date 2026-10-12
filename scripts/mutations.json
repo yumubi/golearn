@@ -5,7 +5,14 @@
     "file": "exercises/p20cli/cli.go",
     "find": "\tsc.Buffer(make",
     "replace": "\t//sc.Buffer(make",
-    "run": ["go", "test", "-count=1", "-run", "TestScanLongLine", "./exercises/p20cli/"],
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestScanLongLine",
+      "./exercises/p20cli/"
+    ],
     "expect": "token too long"
   },
   {
@@ -14,7 +21,14 @@
     "file": "exercises/p2lang/lang_test.go",
     "find": "\tif e == nil {\n\t\treturn nil // ✅ 修复：显式返回接口零值 (nil type, nil value)\n\t}\n",
     "replace": "",
-    "run": ["go", "test", "-count=1", "-run", "TestInterfaceNil", "./exercises/p2lang/"],
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestInterfaceNil",
+      "./exercises/p2lang/"
+    ],
     "expect": "want nil, got <nil>"
   },
   {
@@ -23,7 +37,342 @@
     "file": "exercises/p1tool/external_test.go",
     "find": "got := c.N()",
     "replace": "got := c.n",
-    "run": ["go", "test", "-count=1", "./exercises/p1tool/"],
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "./exercises/p1tool/"
+    ],
     "expect": "build failed"
+  },
+  {
+    "id": "p3-merge-close",
+    "note": "P3 Take-away 2：删掉 Merge 的 closer（wg.Wait+close），TestMerge 必须 range 挂死（panic: send on closed 或超时失败）",
+    "file": "exercises/p3conc/conc.go",
+    "find": "\tgo func() {\n\t\twg.Wait()\n\t\tclose(out)\n\t}()",
+    "replace": "\t_ = wg",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-timeout",
+      "20s",
+      "-run",
+      "TestMerge",
+      "./exercises/p3conc/"
+    ],
+    "expect": "test timed out"
+  },
+  {
+    "id": "p3-firstortimeout-done",
+    "note": "P3 Take-away 2：删掉 done 分支，TestFirstOrTimeout 的 cancelled 断言必须失败",
+    "file": "exercises/p3conc/conc.go",
+    "find": "\tcase <-done:\n\t\treturn \"cancelled\"",
+    "replace": "",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-timeout",
+      "20s",
+      "-run",
+      "TestFirstOrTimeout",
+      "./exercises/p3conc/"
+    ],
+    "expect": "want cancelled"
+  },
+  {
+    "id": "p3-atomic-add",
+    "note": "P3 Take-away 1：把 atomic Add 改成 Load，TestCounters 的原子计数器必须丢更新",
+    "file": "exercises/p3conc/conc.go",
+    "find": "\treturn c.n.Add(1) // Add 返回新值 ≈ fetch_add(1, AcqRel)",
+    "replace": "\treturn c.n.Load()",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-race",
+      "-run",
+      "TestCounters",
+      "./exercises/p3conc/"
+    ],
+    "expect": "lost updates"
+  },
+  {
+    "id": "p14-gen-ctx-done",
+    "note": "P14 Take-away 3：删掉 gen 的 ctx.Done 分支，TestGenCancel 泄漏检测必须失败",
+    "file": "exercises/p14pipe/p14pipe.go",
+    "find": "\t\t\tselect {\n\t\t\tcase out <- n:\n\t\t\tcase <-ctx.Done(): // 下游不收 + 上层取消：不发泄漏 goroutine\n\t\t\t\treturn\n\t\t\t}",
+    "replace": "\t\t\tout <- n",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-timeout",
+      "20s",
+      "-run",
+      "TestGenCancel",
+      "./exercises/p14pipe/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p14-fanin-close",
+    "note": "P14 Take-away 2：删掉 Fanin 的 close 总闸，TestFanin 的 range 必须挂死",
+    "file": "exercises/p14pipe/p14pipe.go",
+    "find": "\tgo func() {\n\t\twg.Wait()\n\t\tclose(out)\n\t}()",
+    "replace": "\t_ = wg",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-timeout",
+      "20s",
+      "-run",
+      "TestFanin",
+      "./exercises/p14pipe/"
+    ],
+    "expect": "test timed out"
+  },
+  {
+    "id": "p14-fanout-order",
+    "note": "P14 Take-away 2：下标写回改成追加式乱序，TestFanoutResultOrder 必须失败",
+    "file": "exercises/p14pipe/p14pipe.go",
+    "find": "\t\t\t\tresults[i] = r",
+    "replace": "\t\t\t\t_ = i\n\t\t\t\tresults = append(results, r)",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-race",
+      "-run",
+      "TestFanoutResultOrder",
+      "./exercises/p14pipe/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p13-statuswriter",
+    "note": "P13 Take-away 3：statusWriter 不再截 WriteHeader，状态码恒 200，metrics 维度错",
+    "file": "exercises/p8fast/httpkv/metrics.go",
+    "find": "func (w *statusWriter) WriteHeader(code int) {",
+    "replace": "func (w *statusWriter) WriteHeader(code int) { code = http.StatusOK",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestMetricsGuarded",
+      "./exercises/p8fast/httpkv/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p13-inflight-dec",
+    "note": "P13 Gauge 配对：删 InFlight.Dec，in_flight 只增不减",
+    "file": "exercises/p8fast/httpkv/metrics.go",
+    "find": "\t\tdefer InFlight.Dec()",
+    "replace": "\t\t// leaked",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestMetricsGuarded",
+      "./exercises/p8fast/httpkv/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p15-ctx-reqid",
+    "note": "P15 Take-away 2：WithRequestID 不再写 ctx，RequestID 恒空，TestCtxRequestID 必须失败",
+    "file": "exercises/p15slog/p15slog.go",
+    "find": "func WithRequestID(ctx context.Context, id string) context.Context {",
+    "replace": "func WithRequestID(ctx context.Context, id string) context.Context { return ctx",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestCtxRequestID",
+      "./exercises/p15slog/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p15-logvaluer-leak",
+    "note": "P15 Take-away 3：LogValue 放行 Token，TestLogValuerRedact 必须失败",
+    "file": "exercises/p15slog/p15slog.go",
+    "find": "slog.String(\"email\", redactEmail(u.Email)),",
+    "replace": "slog.String(\"email\", u.Email), slog.String(\"token\", u.Token),",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestLogValuerRedact",
+      "./exercises/p15slog/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p15-enabled-guard",
+    "note": "P15 Take-away 3：删 Enabled 闸门，expensive 白算，TestEnabledGuard 必须失败",
+    "file": "exercises/p15slog/p15slog.go",
+    "find": "\tif logger.Enabled(context.Background(), slog.LevelDebug) {",
+    "replace": "if true {",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestEnabledGuard",
+      "./exercises/p15slog/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p16-withattrs-forward",
+    "note": "P16 坑 1：WithAttrs 转发时丢 extract（不重包），With 链注入静默丢失，TestWithAttrsKeepsInjection 必须失败",
+    "file": "exercises/p16slogh/p16slogh.go",
+    "find": "\treturn &CtxHandler{inner: h.inner.WithAttrs(attrs), extract: h.extract}",
+    "replace": "\treturn h.inner.WithAttrs(attrs)",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestWithAttrsKeepsInjection",
+      "./exercises/p16slogh/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p16-dedup-invert",
+    "note": "P16 坑 2：注入前查重反转（记录里有也注入），TestExplicitBeatsInjected 输出重复 key、显式值被读侧覆盖，必须失败",
+    "file": "exercises/p16slogh/p16slogh.go",
+    "find": "\t\t\tif !recordHas(r, a.Key) {",
+    "replace": "\t\t\tif recordHas(r, a.Key) {",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestExplicitBeatsInjected",
+      "./exercises/p16slogh/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p16-multi-enabled",
+    "note": "P16 Take-away 5：MultiHandler Enabled 从任一改成全部（与语义），TestMultiHandlerLevel 的混合级别场景必须失败",
+    "file": "exercises/p16slogh/p16slogh.go",
+    "find": "\tfor _, h := range m {\n\t\tif h.Enabled(ctx, l) {\n\t\t\treturn true\n\t\t}\n\t}\n\treturn false",
+    "replace": "\tfor _, h := range m {\n\t\tif !h.Enabled(ctx, l) {\n\t\t\treturn false\n\t\t}\n\t}\n\treturn true",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestMultiHandlerLevel",
+      "./exercises/p16slogh/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p17-err-histogram",
+    "note": "P17 Take-away 1：错误样本也记进时延直方图，TestMetricsDeadUpstream 的 histogram=0 断言必须失败",
+    "file": "dnsproxi-go/main.go",
+    "find": "\t\tqtypeLabelN(query, \"\", \"upstream_error\")\n\t\tUpstreamErrorsTotal.WithLabelValues(upstreamErrReason(err)).Inc()\n\t\treturn\n\t}\n\tdefer up.Close()",
+    "replace": "\t\tqtypeLabelN(query, \"\", \"upstream_error\")\n\t\tUpstreamErrorsTotal.WithLabelValues(upstreamErrReason(err)).Inc()\n\t\tUpstreamLatency.Observe(2)\n\t\treturn\n\t}\n\tdefer up.Close()",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestMetricsDeadUpstream",
+      "./dnsproxi-go/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p17-qtype-other",
+    "note": "P17 Take-away 2：qtypeLabel 恒 OTHER（基数塌缩），TestMetricsSinkhole 的 qtype=A 断言必须失败",
+    "file": "dnsproxi-go/metrics.go",
+    "find": "func qtypeLabel(t uint16) string {",
+    "replace": "func qtypeLabel(t uint16) string { return \"OTHER\"",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestMetricsSinkhole",
+      "./dnsproxi-go/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p17-forwarded-metric",
+    "note": "P17 对账根基：qtype 解析路径计数直接丢（不 Inc），TestMetricsForwardCounts 的 forwarded=2 断言必须失败",
+    "file": "dnsproxi-go/main.go",
+    "find": "\t\tQueriesTotal.WithLabelValues(qtypeLabel(t), outcome).Inc()\n\t\treturn",
+    "replace": "\t\t_ = t",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestMetricsForwardCounts",
+      "./dnsproxi-go/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p18-reqid-dedup",
+    "note": "P18 Take-away 2：查重反转（显式时也注入），TestLoggerExplicitBeatsInjected 的唯一性断言必须失败",
+    "file": "dnsproxi-go/logger.go",
+    "find": "\t\tif !recordHas(r, \"req_id\") {",
+    "replace": "\t\tif recordHas(r, \"req_id\") {",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestLoggerExplicitBeatsInjected",
+      "./dnsproxi-go/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p18-withattrs-leak",
+    "note": "P18 Take-away 2：WithAttrs 转发丢包装（坑 1），TestLoggerWithAttrsKeepsInjection 必须失败",
+    "file": "dnsproxi-go/logger.go",
+    "find": "\treturn &ctxHandler{inner: h.inner.WithAttrs(attrs)}",
+    "replace": "\treturn h.inner.WithAttrs(attrs)",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestLoggerWithAttrsKeepsInjection",
+      "./dnsproxi-go/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p18-levelfallback",
+    "note": "P18 级别开关：非法 DNS_LOG_LEVEL 回 error 而非 info（兜底破坏），TestLogLevelFallback 必须失败",
+    "file": "dnsproxi-go/logger.go",
+    "find": "\tdefault:\n\t\treturn slog.LevelInfo\n\t}",
+    "replace": "\tdefault:\n\t\treturn slog.LevelError\n\t}",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestLogLevelFallback",
+      "./dnsproxi-go/"
+    ],
+    "expect": "FAIL"
   }
 ]

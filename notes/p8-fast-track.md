@@ -12,7 +12,8 @@
 （slices、cmp、sync.OnceValue）；能用 table-driven + `-race` + `go vet`
 搭起最小正确性门禁；能用纯标准库写出带 1.22 路由、超时和优雅关停的
 HTTP 服务。终点证据：`exercises/p8fast/` 8 个测试全绿（含 httpkv 的
-`TestHTTPKV`/`TestPathValue`），`go run ./exercises/p8fast/httpkv/`
+`TestHTTPKV`/`TestPathValue`，P13 后加的 `TestMetricsGuarded` 守护
+/metrics 三行为），`go run ./exercises/p8fast/httpkv/`
 起服务后 PUT/GET/DELETE 的 curl 冒烟全对（P13/P15/P16 就挂在这个服务上）。
 四个问题依次是：
 
@@ -356,7 +357,7 @@ sync.Map          // 并发读多写少的 map，分读写两视图（≈ dashma
                   // ⚠️ 类型不安全(map[any]any)，1.24+ 有 sync.HashTrieMap 方向；
                   //   日常优先 mutex+map[K]V，除非 profile 证明锁是瓶颈
 sync.OnceFunc(f)  // 返回闭包，第一次调用执行 f（≈ OnceLock + 初始化的糖）
-sync.OnceValue(f) // 同上但带返回值缓存（手写 DI 那题的官方解，P5 对照）
+sync.OnceValue(f) // 返回闭包并缓存返回值（≈ OnceFunc + memoize；手写 DI 那题的官方解，P5 对照）
 sync.WaitGroup.Go(f) // 1.25+：wg.Go(func(){}) 替代 Add/Done 三行
 sync.Mutex.TryLock() // 非阻塞尝试（≈ try_lock()）
 ```

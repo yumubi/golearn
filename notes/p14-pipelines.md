@@ -56,7 +56,8 @@ err := g.Wait()                        // 等全部结束，返回首个错误
 
 ## 问题 2：三板斧（gen/fanout/fanin）怎么组装成流水线？
 
-Go blog "Go Concurrency Patterns: pipelines"（2012）的模式，至今是
+Go blog "Go Concurrency Patterns: Pipelines and cancellation"（Sameer
+Ajmani，2014-03-13，go.dev/blog/pipelines）的模式，至今是
 Go 数据流处理的骨架：
 
 ```mermaid

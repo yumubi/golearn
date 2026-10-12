@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/prometheus/client_golang/prometheus"
 	"io"
 	"log/slog"
 	"net/http"
@@ -110,4 +111,56 @@ func TestPathValue(t *testing.T) {
 		t.Fatalf("got %+v", it)
 	}
 	fmt.Println("status:", rec.Code)
+}
+
+// TestMetricsGuarded 守护 Instrument 的两个行为：in_flight 配对回收、
+// requests_total 按路由模板记数。对应 P13 台账变异 p13-inflight-dec
+// （删 InFlight.Dec 后此测试必须失败）。
+func TestMetricsGuarded(t *testing.T) {
+	st := newStore()
+	mux := http.NewServeMux()
+	registerRoutes(mux, st, testLogger())
+
+	// 打 3 个请求（2 PUT + 1 GET miss）
+	body, _ := json.Marshal(Item{Value: "v", TTL: 30})
+	for range 2 {
+		req, _ := http.NewRequest(http.MethodPut, "/kv/k", bytes.NewReader(body))
+		mux.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/kv/ghost", nil))
+
+	// promhttp 输出到默认 registry；这里直接读 gatherer
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		switch mf.GetName() {
+		case "httpkv_in_flight_requests":
+			if v := mf.GetMetric()[0].GetGauge().GetValue(); v != 0 {
+				t.Fatalf("in_flight = %v, want 0 (Dec leaked)", v)
+			}
+		case "httpkv_requests_total":
+			// ghost GET 必须记 status="404"：statusWriter 截获 WriteHeader 的证据。
+			// 变异 p13-statuswriter（WriteHeader 强制 200）应在此失败。
+			found404 := false
+			for _, m := range mf.GetMetric() {
+				status := ""
+				for _, lp := range m.GetLabel() {
+					if lp.GetName() == "status" {
+						status = lp.GetValue()
+					}
+					if lp.GetName() == "path" && !strings.Contains(lp.GetValue(), "/kv/{key}") {
+						t.Fatalf("path label = %q, want route template", lp.GetValue())
+					}
+				}
+				if status == "404" {
+					found404 = true
+				}
+			}
+			if !found404 {
+				t.Fatal("no status=404 series: WriteHeader not captured")
+			}
+		}
+	}
 }

@@ -71,9 +71,12 @@ func (h *CtxHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 
 `TestWithAttrsKeepsInjection` 专测这个。
 
-**坑 2：同名 attr 覆盖方向搞反**。slog 的 attrs 按**首次出现定型**，
-不是后者覆盖前者。注入若先加，调用点的显式字段会被盖掉。
-解法：注入前查重，显式说了算：
+**坑 2：同名 attr 重复输出**。标准 handler 对同名 attr 不去重：实测
+`l.Info("t", "req_id", "explicit", "req_id", "second")` 输出里两个
+`req_id` 并存（首值在前），JSON 读侧（jq/Unmarshal 到 map）取值由
+读取端实现定。注入若先加，输出里注入值和显式值混在一条 JSON 里，
+哪个被读到全凭运气。
+解法：注入前查重，保证记录里同名字段唯一、显式说了算：
 
 ```go
 if attrs := h.extract(ctx); len(attrs) > 0 {
@@ -85,8 +88,9 @@ if attrs := h.extract(ctx); len(attrs) > 0 {
 }
 ```
 
-`TestExplicitBeatsInjected` 断言显式赢。这个语义是**实测出来**的：
-P15 阶段假设"后加覆盖先加"，测试当场打脸，见 §16.4 翻车记。
+`TestExplicitBeatsInjected` 断言显式赢。这个行为是**实测出来**的：
+P15 阶段假设"注入先加也没事"，冒烟发现输出里 req_id 重复、读侧取值
+不可控，当场打脸，见 §16.4 翻车记。
 
 ## 16.3 问题 2：明天换 trace_id，要改多少？
 
@@ -173,8 +177,8 @@ go test -race ./exercises/p16slogh/ ./exercises/p8fast/httpkv/
 
 1. 横切字段下沉到 handler：调用点只写业务字段，注入/脱敏/格式化是
    基础设施的事。
-2. 包装 handler 两个坑：WithAttrs/WithGroup 必须转发重包；同名 attr
-   按首次出现定型，注入前查重让显式赢。
+2. 包装 handler 两个坑：WithAttrs/WithGroup 必须转发重包；标准 handler
+   对同名 attr 不去重（两条并存），注入前查重让显式字段唯一。
 3. ctx key 全仓库单一来源，两套 key 的注入静默失效（实测踩过）。
 4. extract 依赖注入给 traces 留了口：换 OTel 只换提取函数。
 5. MultiHandler 扇出时 Enabled 是"任一感兴趣"，级别过滤交给各 sink。
