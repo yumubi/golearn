@@ -106,7 +106,7 @@ case "${1:-query}" in
     sleep 1
     start_upstream
     DNS_LISTEN=:$PROXY_PORT DNS_UPSTREAM=127.0.0.1:$UPSTREAM_PORT \
-      DNS_CACHE=1 DNS_CACHE_MAX=2 DNS_CACHE_SAMPLE_K=3 DNS_CACHE_EVICT_LOG=1 go run . &
+      DNS_CACHE=1 DNS_CACHE_MAX=2 DNS_CACHE_SAMPLE_K=3 go run . &
     echo $! > $PID_FILE
     sleep 3
     echo "-- 查 ev1（miss，表 1/2）--"

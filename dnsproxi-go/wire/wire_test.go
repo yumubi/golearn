@@ -104,6 +104,28 @@ func TestNamePointerLoop(t *testing.T) {
 	}
 }
 
+// TestDeepPointerChainWithinCap 合法深链（10 跳，不成环）必须解析成功。
+// 守护 p6-name-jump-cap：跳数上限若被调小（128 到 8），合法链解析会死。
+func TestDeepPointerChainWithinCap(t *testing.T) {
+	msg := make([]byte, 12)
+	msg = append(msg, 1, 'a', 0) // offset 12：完整名 "a"
+	for i := range 10 {
+		target := 12 // ptr0 直接指回 label
+		if i > 0 {
+			target = 13 + 2*i // ptr_i 指向 ptr_{i-1}（offset 15+2(i-1)）
+		}
+		msg = append(msg, 0xC0, byte(target))
+	}
+	start := len(msg) - 2 // 从最外层指针起跳：11 次循环迭代，不成环
+	name, _, err := ParseName(msg, start)
+	if err != nil {
+		t.Fatalf("11-iteration chain must parse under cap: %v", err)
+	}
+	if name != "a" {
+		t.Fatalf("name = %q, want a", name)
+	}
+}
+
 func TestEncodeName(t *testing.T) {
 	got := EncodeName("www.example.com")
 	want := []byte{3, 'w', 'w', 'w', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0}

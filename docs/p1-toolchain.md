@@ -81,8 +81,9 @@ Go：**编译 = 按包 DAG 并行编译，依赖只有一层 import 扫描**（�
 `go build` 完扔到另一台机器直接跑，不需要 runtime 安装。
 
 这是 Go 工具链设计的因果：没有宏 → 增量编译便宜；静态链接 → 部署 =
-scp 一个文件。你后面精读 ejdb/deepsearch 时会发现它们的 Dockerfile
-都只有 `FROM scratch` + 一个二进制。
+scp 一个文件。精读 deepsearch 会看到它的 Dockerfile 就是
+`CGO_ENABLED=0 go build` + `FROM alpine` 塞一个二进制（P5 §213；ejdb
+没有 Dockerfile），scratch 是这套打法的极简形态（见 L133）。
 
 ## 动手：练习 p1tool（15-30 分钟）
 
@@ -172,9 +173,11 @@ go tool trace trace.out  # 调度延迟/GC/系统调用时间线
 go vet ./...             # 静态检查（printf 格式串、lock 拷贝等）
 ```
 
-P7/P13 的实验全用这套：pprof 看热点，trace 看调度，pprof heap 看
-分配。**生产环境 pprof 端点是 Go 服务的标配**（默认不开，net/http/pprof
- 路由挂上即可）。
+本教程的实验里 trace 看调度（dnsproxi 采过 23.7MB 时间线）、
+`GODEBUG=gctrace=1` + TotalAlloc 看分配账（labs/results-2026-10-10）
+已实跑；pprof 端点本教程只演示到"一行 import 即得"。
+**生产环境 pprof 端点是 Go 服务的标配**（默认不开，net/http/pprof
+路由挂上即可）。
 
 **golangci-lint**（go vet 太弱的补位）：
 

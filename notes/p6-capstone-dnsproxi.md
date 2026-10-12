@@ -40,13 +40,13 @@ _rust_learning 线⑤的 D1-D7 代码。复盘内容未改写，历史价值在�
 
 `dnsproxi-go/`（module `golearn/dnsproxi-go`，最终形态）：
 - `main.go`：env 配置 + `Proxy`（UDP 转发/sinkhole/缓存接入）+ 优雅关停
-- `wire/`：DNS 报文解析（header/question/rr，压缩指针防御）
+- `wire/wire.go`：DNS 报文解析（header/question/rr，压缩指针防御）
 - `cache/`：G2-G4 全套（Cache+RWMutex、sample-K 逐出、TinyLFU CMS+老化）
 - `logger.go`/`metrics.go`：P15/P17 落地（ctx 日志、RED 指标）
 - `dnsq/`：UDP 压测发包器（G6 数据的来源）
 - `run.sh`：场景复跑入口
 
-毕业时的目录和"骨架+TODO"的初始形态不同：转发器长在 `main.go`
+毕业时的目录和课程开始时"骨架加待填占位"的初始形态不同：转发器长在 `main.go`
 的 `Proxy` 里（单文件比拆 proxy.go 更贴 D1 规模），测试在
 `main_test.go`/`trace_test.go`/`wire/`/`cache/`。
 
@@ -60,11 +60,10 @@ dig @127.0.0.1 -p 5353 example.com # 走通四跳
 
 ## 对照阅读表（写 Go 时开着你的 Rust 源码）
 
-| Go 文件 | Rust 对照 | 关注点 |
+| Go 代码 | Rust 对照 | 关注点 |
 |---|---|---|
-| `wire/header.go` | `parse_header` | `binary.BigEndian.Uint16` vs `u16::from_be_bytes` |
-| `wire/name.go` | 压缩指针解析 | `[]byte` 无借用检查：offset 越界=panic，要显式防御 |
-| `proxy.go` | `main.rs` 转发循环 | goroutine 泄漏检测（`-race` + `goleak`） |
+| `wire/wire.go`（Header/ParseName） | `main.rs` 头部解析 + `parse_qname` | `binary.BigEndian.Uint16` vs `u16::from_be_bytes`；压缩指针 `[]byte` 无借用检查：offset 越界=panic，要显式防御 |
+| `main.go`（Run/handleQuery） | `main.rs` 转发循环 | goroutine 泄漏检测（`-race` + 上游 deadline；go.leak 只在 go.sum 里，未 import） |
 | `cache/cache.go` | `CacheStore` | `sync.RWMutex` vs `RwLock<HashMap>`，锁粒度选择 |
 | `cache/sketch.go` | `FreqSketch` | 位运算一样，但 Go 没有.checked_add，要手动防溢出 |
 
@@ -78,9 +77,9 @@ PlanResponse + Reply）+ main.go 接入（DNS_CACHE=1 开关、命中不转发�
 
 | 场景 | 结果 |
 |---|---|
-| `go test -race -count=1 ./cache/` | 10 测全绿（含并发读写 race 检查） |
+| `go test -race -count=1 ./cache/` | 9 测全绿（含并发读写 race 检查） |
 | dig#1（miss） | 上游 `[upstream] cache.test type=1 hit=1`，应答 TTL 60 |
-| dig#2（1s 后） | **代理日志 `[hit] ttl_left=59s`，dig 显示 TTL 59，上游零包** |
+| dig#2（1s 后） | **代理日志 `msg:"cache hit" ttl_left=59`（slog JSON），dig 显示 TTL 59，上游零包** |
 | dig#3（62s 后） | 已过期 → 上游 hit=2，TTL 回到 60 |
 | 裸 UDP 客户端（python） | 第 2 查即命中，上游只见 1 包 |
 
@@ -107,8 +106,10 @@ PlanResponse + Reply）+ main.go 接入（DNS_CACHE=1 开关、命中不转发�
    （`0120` vs `0100`）→ 对表 AD 位。
 5. **fake upstream 升级为带计数**。`collections.Counter` per-(qname,qtype)
    计数，每次查询打 `[upstream] qname type=T hit=N`。这行输出就是缓存
-   端到端的**判据**（上游只见 2 次 = miss + 过期重取），对应你 Rust 版
-   run.sh 里 dnsq.py 的计数逻辑。测试基础设施一开始就为可观测性服务。
+   端到端的**判据**（上游只见 2 次 = miss + 过期重取）；对照你 Rust 版
+   run.sh 里靠 dnsq.py 输出 answers 字段逐发人工对账（D1 线的
+   dns-upstream 本身不带计数，这个 Counter 是 Go 版新加的）。
+   测试基础设施一开始就为可观测性服务。
 
 ### G3 起手
 
@@ -119,7 +120,8 @@ PlanResponse + Reply）+ main.go 接入（DNS_CACHE=1 开关、命中不转发�
 
 ## 收官
 
-G6 做完，把 Go 版和 Rust 版同机压测（wrk 定制 DNS qps 或 dnsq.py 复用），
+G6 做完，把 Go 版和 Rust 版同机压测（Go 版自带 `dnsq/` 压测器，
+Rust 侧可复用 dnsq.py），
 结论写进 `dnsproxi-go/LESSON.md`，那就是你这门课的毕业论文。
 
 ## G4 复盘（2026-10-09 实测完成）
@@ -127,15 +129,15 @@ G6 做完，把 Go 版和 Rust 版同机压测（wrk 定制 DNS qps 或 dnsq.py 
 实装范围：`cache/sketch.go`（FreqSketch：CMS 4 行 × 4bit、16 格打包
 uint64、spread 雪崩哈希、doorkeeper bloom、老化减半 + size 修正、
 Admit 判决）+ PutFull 两值返回（Eviction/Rejected）+ main.go 接线
-（DNS_CACHE_ADMIT/DOORKEEPER env、[reject] 日志、命中也计数）。
+（DNS_CACHE_ADMIT/DOORKEEPER env、cache reject 日志、命中也计数）。
 
 ### 实测结果
 
 | 场景 | 结果 |
 |---|---|
-| `go test -race -count=1 ./cache/` | 全绿（9 个 G4 测试：计数/饱和/取min/挡板/减半/判决/死人不守门/门控/并发） |
+| `go test -race -count=1 ./cache/` | 全绿（10 个 G4 测试：计数/取min 合一/挡板/减半/老化解锁/判决/死人不守门/门控冷拒/门控热进/并发/回归关准入） |
 | admit 冒烟：hot1/hot2 各 5 查养热 | 频率到 5，hit 全中 |
-| 冷名 cold.test 撞满仓 | `[reject] cold.test (freq 1 <= victim 5，没进缓存)`，**两次都被拒** |
+| 冷名 cold.test 撞满仓 | `msg:"cache reject" qname:"cold.test" cand_freq=1 victim_freq=5`（没进缓存），**两次都被拒** |
 | 缓存完整性 | 被拒插入后 hot1/hot2 原封不动（缓存一字未动的语义落地） |
 | 上游计数 | hot1×1、hot2×1、cold×2，准入生效的判据 |
 
@@ -160,8 +162,8 @@ Admit 判决）+ PutFull 两值返回（Eviction/Rejected）+ main.go 接线
    **RNG 是状态机，调两次就漂移**。② NewSketch 的 doorMask 三目表达式
    手滑写进 doorMark 函数体，gofmt 过了但 vet 报语法错，说明**格式化
    工具不背语法正确性的锅**。
-5. **准入的语义红利在日志里看得见**：`[reject] cold.test (freq 1 <=
-   victim 5，没进缓存)` 这行日志同时给出了判决依据（双方频率）和结果。
+5. **准入的语义红利在日志里看得见**：`msg:"cache reject" qname:cold.test
+   cand_freq=1 victim_freq=5` 这行日志同时给出了判决依据（双方频率）和结果。
    可观测性不是事后加的，是判决函数顺手返回的（Admit 只返回 bool，
    频率在 PutFull 里已知，日志信息零成本）。
 
@@ -178,17 +180,18 @@ Admit 判决）+ PutFull 两值返回（Eviction/Rejected）+ main.go 接线
 实装范围：`cache/expire.go`（ExpireRound/ExpireCycle/RunExpirer/Ghosts +
 ExpireCfg 默认值考据）+ Cache 账本扩展（ExpiredActive/ExpireChecked/
 ExpireCycles/ExpireRounds/ExpireUs）+ main.go 接线（DNS_CACHE_ACTIVE_TTL
-等 6 个 env、envIntClamp 越界回退、[expire] 日志、defer 关停链）+
+等 5 个 env、envIntClamp 越界回退、expire round 日志（DNS_CACHE_EXPIRE_LOG
+开到 debug 档）、defer 关停链）+
 run.sh expire 场景。
 
 ### 实测结果
 
 | 场景 | 结果 |
 |---|---|
-| `go test -race -count=1 ./cache/` | 全绿（7 个 G5 测试：只收尸体/换位陷阱 800 条压测/空表/sample=0/雪崩多轮/低过期率一轮停/关停/并发不 race） |
+| `go test -race -count=1 ./cache/` | 全绿（7 个 G5 测试：只收尸体/换位陷阱 800 条压测/空表+sample=0/雪崩多轮/低过期率一轮停/关停/并发不 race） |
 | 雪崩测试 | 300 条全死 → 多轮清空，`rounds>=2`（10% 判据触发续轮） |
 | 低过期率 | 100 活 + 1 死 → `rounds==1`（自适应生效：低 stale 不空转） |
-| expire 冒烟 | ghost.test 首查 miss→上游 hit=1；62s 后 `[expire] rounds=2 checked=1 removed=1`；再查 miss→上游 hit=2（尸体确认被收走） |
+| expire 冒烟 | ghost.test 首查 miss→上游 hit=1；62s 后 `msg:"expire round" rounds=2 checked=1 removed=1`；再查 miss→上游 hit=2（尸体确认被收走） |
 | 全仓回归 | go vet + `go test -race ./...` 三包全绿，gofmt 零 diff |
 
 ### Go vs Rust 实感（对照你 Rust 版 D6）
@@ -218,7 +221,7 @@ run.sh expire 场景。
 
 ### G6 起手（收官）
 
-Go 版 vs Rust 版同机压测（wrk 定制 DNS qps），结论进
+Go 版 vs Rust 版同机压测（自写 `dnsq/` 打包器），结论进
 `dnsproxi-go/LESSON.md`。对照你 Rust 版的性能预算：每查询一次
 `Sketch.Increment`（4 次 Or + 4 次哈希）+ PutFull 锁内判决。压测维度：
 无缓存/有缓存/准入 on/off/老化 on/off 五档 qps 与 P99，Rust/Go 各跑。
@@ -246,7 +249,7 @@ P50/P90/P99 分位、PCG 种子）+ 五档同机压测 + `dnsproxi-go/LESSON.md`
    （`append([]byte(nil),...)`），是现成的优化练习。
 3. 准入/老化的开销在噪声内：TinyLFU 4 hash + 4 Or、每秒 10 老化
    周期，万级 qps 下都不是瓶颈（D5/D6 "预算内做正确性"的实测注脚）。
-4. P50 Rust 稳定快 0.3-0.6ms；Go 偶发 GC 停顿进 max（30-170ms 离群）。
+4. P50 Rust 稳定快（表内五档差 0.14-0.63ms）；Go 偶发 GC 停顿进 max（30-170ms 离群）。
 
 **翻车×2（都在压测器，不在被测系统）**：① dnsq 的
 `SetReadDeadline` 只设一次，第 2 包起 deadline 已过期 → 96% 假丢包，
@@ -270,14 +273,14 @@ P50/P90/P99 分位、PCG 种子）+ 五档同机压测 + `dnsproxi-go/LESSON.md`
 实装范围：`cache/evict.go`（keys+slot 反查表、xorshift64*、Floyd 抽样、
 pickVictim/PutFull/removeSlot）+ `Cache` 结构扩展（max/SampleK/Seed +
 evictions/examined/admits/rejects 账本）+ main.go 接线（DNS_CACHE_MAX/
-SAMPLE_K/SEED 三个 env、[evict] 日志）+ run.sh evict 场景。
+SAMPLE_K/SEED 三个 env、cache evict 日志（INFO 级））+ run.sh evict 场景。
 
 ### 实测结果
 
 | 场景 | 结果 |
 |---|---|
-| `go test -race -count=1 ./cache/` | 全绿（含 7 个 G3 测试：封顶/最冷者死/在位者刷新/无界/slot 一致性/并发） |
-| evict 冒烟：max=2，查 ev1/ev2/ev3 | `[evict] ev1 → ev3 (policy=full-lru checked=2)`，逐出链 ev1→ev2→ev3 |
+| `go test -race -count=1 ./cache/` | 全绿（G3 测试 6 个：封顶/最冷者死/在位者刷新/无界/slot 一致性/并发） |
+| evict 冒烟：max=2，查 ev1/ev2/ev3 | `msg:"cache evict" victim:"ev1.test" new:"ev3.test" policy:"full-lru" checked=2`，逐出链 ev1→ev2→ev3 |
 | 上游计数 | ev1×2、ev2×2、ev3×1，被逐出的名字重新走上游，正是逐出生效的判据 |
 | 在位者刷新 | 50 连刷零逐出零拒绝（对照你 Rust 版 :1150 的语义） |
 
@@ -309,16 +312,18 @@ SAMPLE_K/SEED 三个 env、[evict] 日志）+ run.sh evict 场景。
 count-min sketch（4 行 × 4bit 计数器，16 格打包进一个 uint64，位运算
 Go/Rust 完全同构）+ doorkeeper bloom + 老化减半。入口：`DNS_CACHE_ADMIT`
 env。关键判据：候选人频率 vs 在位者频率，打不过就拒（rejects++）。
+
 ## G1 复盘（2026-10-09 实测完成）
 
-实装范围：wire（header/name 压缩指针）、proxy（Run 循环、handleQuery、
-sinkhole、上游 2s deadline）、fake upstream + dig 冒烟（run.sh）。
+实装范围：wire/wire.go（header + ParseName 压缩指针）、main.go 的 Proxy
+（Run 循环、handleQuery、sinkhole、上游 2s deadline）、fake upstream +
+dig 冒烟（run.sh）。
 
 ### 实测结果
 
 | 场景 | 结果 |
 |---|---|
-| `go test -race ./...`（wire 5 测 + proxy 3 测） | 全绿，race 0 |
+| `go test -race ./...`（wire 6 测 + proxy 3 测） | 全绿，race 0（wire 6 测 = TestHeaderRoundTrip/TooShort/NameBasic/NamePointer/NamePointerLoop/EncodeName） |
 | dig 走 proxy 查 open.test → fake 上游 | NOERROR + `A 10.0.0.1`（四跳通） |
 | `DNS_SINKHOLE=blocked.` 查 blocked.test | **NXDOMAIN，上游零包** |
 | 对照组 open.test 同实例 | NOERROR（前缀匹配不误伤） |

@@ -5,7 +5,7 @@
 > （AGENTS.md 和 .gitignore 里都登记了，本机 clone 没带下来），Go 代码
 > 注释里到处是 `Ported from jbi_*.c`，正好练"从 Rust 视角读 Go 存储
 > 引擎代码"。读者：读过 P2（接口与错误）、P3（锁与原子操作），写过
-> 自己的 Rust KV（D4/D5 用 KV 模拟有序结构）。读法沿用你的
+> 自己的 Rust KV（D4/D5 的 LRU 淘汰序是手工模拟的，没有现成有序容器）。读法沿用你的
 > _rust_learning 五步法：理论→定位真实代码→推导→动手→验证。
 > 后续：P5 用同一套方法读服务型项目。
 
@@ -115,20 +115,22 @@ func docIDToKey(id int64) []byte {
 大端序 = 整数序 = 字节序，cursor 顺序遍历直接得到 docID 升序。
 **注意坑**：这里没有翻转符号位，负数 ID 会排在所有正数后面
 （补码最高位为 1）：ejdb 的 ID 从 1 自增所以没事，但这个假设
-**没有写在类型里**，读代码要自己发现。[INFERENCE：c-code 原版 EJDB2
-对 i64 做了符号位翻转，见下面的索引序列化，文档库自己反而没做]
+**没有写在类型里**，读代码要自己发现。[INFERENCE：C 原版 EJDB2 的文档
+主键走 iowow 的 VNUM64 变长数字键（ejdb2.c:165 IWDB_VNUM64_KEYS，天然
+有序），Go 移植改成定长 8 字节大端直排，负数坑由此引入；Go 版的 I64
+索引用符号位翻转补回（见下）]
 
 索引键序列化（jsondoc/value.go 的 SerializeKey）把有序性做成手工工程：
 
 | 类型 | 编码 | 为什么 |
 |---|---|---|
 | I64 | big-endian + **符号位翻转** | 让 -1 排在 0 前面：`uint64(v) ^ (1 << 63)`（value.go:93） |
-| F64 | `strconv.FormatFloat(f,'g',-1,64)` 字符串 | 字典序≈数值序（'g' 格式位数对齐），省 8 字节 |
+| F64 | `strconv.FormatFloat(f,'g',-1,64)` 字符串 | 同位数时字典序≈数值序，省 8 字节；**跨量级会漏**（实测 Gt(90) 走索引只回 99.5 和 9.9e5，漏掉 100、123.4、1e6："1e+06" 按字典序排在 "99.5" 前面）。作者注释自称 lexicographic ordering，这是移植引入的真实缺陷 |
 | Str | 原始字节 | 天然有序 |
 
-**对照你的 Rust 学习线**：这就是你 dnsproxi D4/D5 里"用 KV 模拟有序
-结构"的同一个问题域：ejdb 的答案是"把类型烧进编码"，Rust 里你会
-用 BTreeMap，Go 没有，所以到处是手工 byte 算术。
+**对照你的 Rust 学习线**：和 dnsproxi D3/D4 用 HashMap+稠密 slots 手工
+近似 LRU 淘汰序是同一问题域：语言没有现成有序结构（Rust 有 BTreeMap
+但你的 KV 载体没有），就到处手工算。ejdb 的答案是"把类型烧进编码"。
 
 ## 问题 4：一条查询怎么流过三段流水线？
 

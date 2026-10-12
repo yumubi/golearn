@@ -84,7 +84,7 @@ func TestSampleKEvictsOldestInSample(t *testing.T) {
 	// 全部等概率：跑多次，每次受害者 ∈ 表中且 sample-lru policy。
 	fc.ms = 9999
 	seen := map[string]bool{}
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		victim := fmt.Sprintf("v%02d", i)
 		ev, _ := c.PutFull(key(victim), mkEntry(60))
 		if ev == nil {
@@ -113,7 +113,7 @@ func TestInPlaceRefreshSurvives(t *testing.T) {
 	c.PutFull(key("a.test"), mkEntry(60))
 	c.PutFull(key("b.test"), mkEntry(60))
 	// a 已是满仓最冷；刷新 a（TTL 过期后重取的路径）→ 绝不能逐出自己。
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		if ev, rej := c.PutFull(key("a.test"), mkEntry(60)); ev != nil || rej != nil {
 			t.Fatalf("refresh of in-place key must never evict: %+v", ev)
 		}
@@ -130,7 +130,7 @@ func TestInPlaceRefreshSurvives(t *testing.T) {
 // TestUnboundedPutFull max=0 无界（D2 语义由 PutFull 承接主路径）。
 func TestUnboundedPutFull(t *testing.T) {
 	c := NewCap(0, 0, 1)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		if ev, rej := c.PutFull(key(fmt.Sprintf("u%03d", i)), mkEntry(60)); ev != nil || rej != nil {
 			t.Fatalf("unbounded cache must never evict: %+v", ev)
 		}
@@ -148,7 +148,7 @@ func TestSlotConsistency(t *testing.T) {
 
 	c := NewCap(5, 0, 7)
 	live := map[string]bool{}
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		name := fmt.Sprintf("s%02d", i)
 		c.PutFull(key(name), mkEntry(60))
 		if i >= 5 {
@@ -194,4 +194,35 @@ func TestConcurrentEviction(t *testing.T) {
 		}(g)
 	}
 	wg.Wait()
+}
+
+// TestGetRefreshesHeat 命中即重热（近似 LRU）：Get 过的 a 不再是最冷者。
+// 守护 p6-get-touch-lru（删 Get 里的 access 更新必须失败）。
+func TestGetRefreshesHeat(t *testing.T) {
+	fc := &fakeClock{ms: 1000}
+	restore := fc.install()
+	defer restore()
+
+	c := NewCap(3, 0, 42)
+	c.PutFull(key("a.test"), mkEntry(60)) // access=1000
+	fc.ms = 2000
+	c.PutFull(key("b.test"), mkEntry(60)) // access=2000
+	fc.ms = 3000
+	c.PutFull(key("c.test"), mkEntry(60)) // access=3000
+
+	// Get(a) 让 a 重热到 4000。
+	fc.ms = 4000
+	if _, ok := c.Get(key("a.test")); !ok {
+		t.Fatal("a.test must be present")
+	}
+
+	// 第 4 个键：b（access=2000）现在最冷 → 逐出 b。
+	fc.ms = 5000
+	ev, _ := c.PutFull(key("d.test"), mkEntry(60))
+	if ev == nil {
+		t.Fatal("want eviction at capacity")
+	}
+	if ev.Key != key("b.test") {
+		t.Fatalf("want victim b.test (a was touched), got %s", ev.Key.Name)
+	}
 }

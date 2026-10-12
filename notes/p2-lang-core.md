@@ -146,7 +146,7 @@ Go 每个类型天生有零值（规范保证：`false`/`0`/`""`/`nil`，递归
 ```go
 var mu sync.Mutex      // 直接 Lock()，零值=未锁
 var b bytes.Buffer     // 直接 WriteString，零值=空缓冲区 ready to use
-var sb strings.Builder // 同上
+var sb strings.Builder // 直接 WriteString/String()，零值=空 builder
 ```
 
 Effective Go 的设计建议就是往这个方向凑：数据结构设计成"零值
@@ -158,12 +158,13 @@ Go 标准库大量 API 没有 Init、没有构造器。
 - 引用形态的类型（slice/map/channel）：零值 nil，能判等、能传参，
   但不能写入。`var m map[string]int` 然后 `m["k"]=1` 会 panic，
   要 `make`。不是"未初始化"，是"指向底层存储的指针还没分配"。
-- 依赖不变量的结构体：比如 `time.Timer`、`http.Client` 的部分字段、
-  带非零默认值语义的对象。文档明确说"零值不可用"或"必须 New"时
-  听文档的。
+- 依赖不变量的结构体：比如 `time.Timer`（文档原话 "A Timer must be
+  created with NewTimer or AfterFunc"）、`os.File`（包着打开的 fd）。
+  文档明确说"必须 New"或"zero value 不可用"时听文档的；反过来，
+  `http.Client` 文档说零值可用（DefaultClient），别想当然。
 - 练习里 `Join` 用零值 `strings.Builder` 直接拼，这是零值可用的
-  正例；P15 的 `slog.NewJSONHandler` 必须传 writer 和 level，
-  这是必须构造的反例（`NewLogger` 封装）。
+  正例；P15 的 `slog.NewJSONHandler` 必须传 writer（opts 传 nil 则
+  落回默认级别），配合 `NewLogger` 封装把 level 收进去。
 
 判断口诀：**标准库文档说 "zero value ... ready to use" 就是零值可用；
 要 make 的、要 New 的、文档要求 "initialize" 的就别省**。
@@ -283,6 +284,10 @@ Rust enum sum type 做不到的"运行时扩展点"（外部类型塞进统一�
 
 - `errors.Join(errs...)`（1.20+）：包一个错误列表，格式是换行拼接；
   `Is`/`As` 会穿透。
+- Go 1.26 起有泛型的 `errors.AsType[E]`：取类型直接返回 (E, bool)，
+  不再要先声明变量再传指针；`go doc errors.As` 的建议是
+  "For most uses, prefer AsType"，`As` 保留给 target 不实现 error
+  的少数场景。
 - 判断 `context.DeadlineExceeded` 这类 sentinel 也走 `errors.Is`。
 - panic 只用于程序员 bug（≈ Rust panic!），不可恢复错误不进 panic。
 - 自定义错误类型建议实现 `Unwrap() error` 而不是埋字段，否则
@@ -290,8 +295,9 @@ Rust enum sum type 做不到的"运行时扩展点"（外部类型塞进统一�
 
 ### 零值与构造器惯例
 
-- `var _ = assertable` 惯例、`NewXxx()` 返回 `*T` 是"零值不够用"
-  的信号；文档样例都用 `NewXxx` 时别用 `var x T`。
+- `var _ 接口 = (*T)(nil)` 编译期满足断言（见前文 "Interface checks"）、
+  `NewXxx()` 返回 `*T` 是"零值不够用"的信号；文档样例都用
+  `NewXxx` 时别用 `var x T`。
 - 零值可用是传递的：`SyncedBuffer{lock, buffer}` 两个字段零值
   都可用，整体就可用（Effective Go 原例）。
 - `new(T)` vs `&T{}`：等价，字面量能带字段值，`new` 在 1.26 起

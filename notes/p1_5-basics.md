@@ -191,9 +191,10 @@ delete(m, "a")                // 删除（键不存在也不报错）
 （得零值）、写直接 panic。零值可用的边界案例（对照 nil 切片可
 append）。
 
-**坑 3：迭代无序 + 并发写 panic。** `for k := range m` 每次顺序可能
+**坑 3：迭代无序 + 并发读写直接炸进程。** `for k := range m` 每次顺序可能
 不同（runtime 故意随机化，防止依赖顺序）；goroutine 同时读写 map
-直接 panic（不是数据竞争是显式炸），加 `sync.RWMutex` 或分片锁
+大概率直接 fatal error（recover 接不住，进程必死；开 `-race` 才会
+降级成 DATA RACE 报告），加 `sync.RWMutex` 或分片锁
 （P3 决策树）。
 
 键类型必须是可比较的（`comparable`）：slice/map/函数不能当键，
@@ -335,9 +336,10 @@ defer func() {
 ```
 
 边界：**库代码禁止 recover 吞 panic**（把 bug 藏起来）；服务边界
-（HTTP handler）框架会 recover 兜底转 500。goroutine 的 panic 没有
-天然边界，必须每个 goroutine 入口自己 recover：P3 的
-TestPanicKillsProcess 让你亲眼看进程死。
+（HTTP handler）net/http 会 recover 兜底：进程不死，但该连接被关闭
+（客户端看到 EOF，HTTP/2 发 RST_STREAM），不是稳稳转 500。
+goroutine 的 panic 没有天然边界，必须每个 goroutine 入口自己
+recover：P3 的 TestPanicKillsProcess 让你亲眼看进程死。
 
 ## §10 方法：值接收者 vs 指针接收者
 
@@ -389,8 +391,9 @@ func counter() func() int {
 方法值与方法表达式（易混淆的一对）：
 
 ```go
-f := c.Add        // 方法值：绑定接收者 c，签名 func(int)
-g := Counter.Add  // 方法表达式：不绑定，签名 func(Counter, int)：接收者变首参
+f := c.Add          // 方法值：绑定接收者 c（值类型变量自动取址），签名 func(int)
+g := (*Counter).Add // 方法表达式：不绑定，签名 func(*Counter, int)：接收者变首参
+// 写 Counter.Add 编译错：invalid method expression（Add 是指针方法）
 ```
 
 Go 1.22+ 循环变量每轮新建，闭包捕获循环变量安全了（1.22 前
@@ -438,8 +441,10 @@ go test -run TestSliceShare -v ./exercises/p1_5basics/   # 单跑
 4. `TestRuneIndex`：`"Go语言"[2]` 的类型和值？`len()` 和
    `utf8.RuneCountInString()` 各返回几？（§6）
 
-**观察题**：跑 `go test -v` 看 iota 块和 range-map 的输出；多跑几次
-range map，验证顺序真的会变（§5 坑 3 的实证）。
+**观察题**：写个 10 行小程序：建 5 键 map，连跑几次 `for k := range m`
+拼出键序并打印，多跑几次验证顺序真的会变（§5 坑 3 的实证；练习测试
+里的 map 断言只看值，不打印顺序）。iota 的"输出"用 `go test -run
+TestIota -v` 看断言：错一个值就 FAIL 并打印实际值。
 
 **对照题**（断言即答案，读完对应小节再看）：`TestIota`（§2 枚举无类型
 安全）、`TestGrade`（§7 无表达式 switch）、`TestValueSemantics`（§12
@@ -454,7 +459,7 @@ struct 拷贝 vs slice 共享）。
 2. 切片 = (ptr, len, cap) 头，子切片共享底层数组；要隔离用三索引
    切片或 Clone。nil 切片合法可用。
 3. map 取缺键得零值（bug 隐身），nil map 写入 panic，迭代无序，
-   并发读写 panic：三个坑都背下来。
+   并发读写炸进程（fatal error）：三个坑都背下来。
 4. len/索引按字节，字符处理转 `[]rune`；字符串不可变，strings 包
    是日常工具箱。
 5. defer 三语义：LIFO、参数立即求值、能改命名返回值。资源获取后

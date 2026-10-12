@@ -78,8 +78,9 @@ Go 社区与 Rust 生态最大的气质差异：**Rust 惯于 `tokio`+`serde`+
 | gin-gonic/gin | 老牌（中间件生态大），新项目已可不必 | actix-web |
 | go-chi/chi | 轻路由，要中间件树时用 | 无直接对标 |
 
-go.dev 官方教程现在直接教 `net/http` 写 RESTful：框架热的降温是
-这五年最明显的生态转向。
+go.dev 官方教程列表里 RESTful 服务的示范篇仍是 Gin（web-service-gin），
+但 1.22 路由出来后社区风向（含官方把 `r.PathValue` 纳入 ServeMux）明确
+偏向标准库先试：框架热的降温是这五年最明显的生态转向。
 
 ### 数据库（P9/P11/P12 深潜）
 
@@ -150,7 +151,7 @@ README 就有收获。
 README 之外四个信号（重要性递减）：
 
 1. **谁维护**：官方（golang.org/x、google、prometheus）> 公司背书
-   （jackc 有 ZomboDB 绑定、spf13 是 Docker 作者）> 个人。个人库
+   （jackc 长期全职维护 pgx 全家桶、spf13 是 Docker 前高管）> 个人。个人库
    看 commit 活跃度和 issue 响应。
 2. **标准库/生态契合**：接不接 `context.Context` 第一参数（不接的
    大概率是老库或坏设计）；error 用不用 `%w`；日志接不接 slog

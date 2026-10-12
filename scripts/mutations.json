@@ -283,17 +283,14 @@
     "id": "p17-err-histogram",
     "note": "P17 Take-away 1：错误样本也记进时延直方图，TestMetricsDeadUpstream 的 histogram=0 断言必须失败",
     "file": "dnsproxi-go/main.go",
-    "find": "\t\tqtypeLabelN(query, \"\", \"upstream_error\")\n\t\tUpstreamErrorsTotal.WithLabelValues(upstreamErrReason(err)).Inc()\n\t\treturn\n\t}\n\tdefer up.Close()",
-    "replace": "\t\tqtypeLabelN(query, \"\", \"upstream_error\")\n\t\tUpstreamErrorsTotal.WithLabelValues(upstreamErrReason(err)).Inc()\n\t\tUpstreamLatency.Observe(2)\n\t\treturn\n\t}\n\tdefer up.Close()",
+    "find": "\t\tlogger.WarnContext(ctx, \"upstream read failed\", \"err\", err.Error())\n\t\tqtypeLabelN(query, \"\", \"upstream_error\")",
+    "replace": "\t\tlogger.WarnContext(ctx, \"upstream read failed\", \"err\", err.Error())\n\t\tUpstreamLatency.Observe(2)\n\t\tqtypeLabelN(query, \"\", \"upstream_error\")",
     "run": [
-      "go",
-      "test",
-      "-count=1",
-      "-run",
-      "TestMetricsDeadUpstream",
-      "./dnsproxi-go/"
+      "sh",
+      "-c",
+      "cd dnsproxi-go && go test -count=1 -run TestMetricsDeadUpstream ./..."
     ],
-    "expect": "FAIL"
+    "expect": "want unchanged"
   },
   {
     "id": "p17-qtype-other",
@@ -302,12 +299,9 @@
     "find": "func qtypeLabel(t uint16) string {",
     "replace": "func qtypeLabel(t uint16) string { return \"OTHER\"",
     "run": [
-      "go",
-      "test",
-      "-count=1",
-      "-run",
-      "TestMetricsSinkhole",
-      "./dnsproxi-go/"
+      "sh",
+      "-c",
+      "cd dnsproxi-go && go test -count=1 -run TestMetricsSinkhole ./..."
     ],
     "expect": "FAIL"
   },
@@ -318,12 +312,9 @@
     "find": "\t\tQueriesTotal.WithLabelValues(qtypeLabel(t), outcome).Inc()\n\t\treturn",
     "replace": "\t\t_ = t",
     "run": [
-      "go",
-      "test",
-      "-count=1",
-      "-run",
-      "TestMetricsForwardCounts",
-      "./dnsproxi-go/"
+      "sh",
+      "-c",
+      "cd dnsproxi-go && go test -count=1 -run TestMetricsForwardCounts ./..."
     ],
     "expect": "FAIL"
   },
@@ -334,12 +325,9 @@
     "find": "\t\tif !recordHas(r, \"req_id\") {",
     "replace": "\t\tif recordHas(r, \"req_id\") {",
     "run": [
-      "go",
-      "test",
-      "-count=1",
-      "-run",
-      "TestLoggerExplicitBeatsInjected",
-      "./dnsproxi-go/"
+      "sh",
+      "-c",
+      "cd dnsproxi-go && go test -count=1 -run TestLoggerExplicitBeatsInjected ./..."
     ],
     "expect": "FAIL"
   },
@@ -350,12 +338,9 @@
     "find": "\treturn &ctxHandler{inner: h.inner.WithAttrs(attrs)}",
     "replace": "\treturn h.inner.WithAttrs(attrs)",
     "run": [
-      "go",
-      "test",
-      "-count=1",
-      "-run",
-      "TestLoggerWithAttrsKeepsInjection",
-      "./dnsproxi-go/"
+      "sh",
+      "-c",
+      "cd dnsproxi-go && go test -count=1 -run TestLoggerWithAttrsKeepsInjection ./..."
     ],
     "expect": "FAIL"
   },
@@ -366,12 +351,9 @@
     "find": "\tdefault:\n\t\treturn slog.LevelInfo\n\t}",
     "replace": "\tdefault:\n\t\treturn slog.LevelError\n\t}",
     "run": [
-      "go",
-      "test",
-      "-count=1",
-      "-run",
-      "TestLogLevelFallback",
-      "./dnsproxi-go/"
+      "sh",
+      "-c",
+      "cd dnsproxi-go && go test -count=1 -run TestLogLevelFallback ./..."
     ],
     "expect": "FAIL"
   },
@@ -608,6 +590,909 @@
       "sh",
       "-c",
       "P12_PG_DSN=\"postgres://postgres:p9@127.0.0.1:15433/p12?sslmode=disable\" go test -count=1 -run TestExecRowsAndTop ./exercises/p12pgx/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p1-wrap-verb",
+    "note": "p1-wrap-verb",
+    "file": "exercises/p1tool/error_test.go",
+    "find": "return 0, fmt.Errorf(\"divide %d by %d: %w\", a, b, ErrDivZero)",
+    "replace": "return 0, fmt.Errorf(\"divide %d by %d: %v\", a, b, ErrDivZero)",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestErrorWrapping",
+      "./exercises/p1tool/"
+    ],
+    "expect": "want ErrDivZero wrapped"
+  },
+  {
+    "id": "p1-as-key",
+    "note": "p1-as-key",
+    "file": "exercises/p1tool/error_test.go",
+    "find": "return 0, &NotFoundError{Key: key}",
+    "replace": "return 0, &NotFoundError{Key: key + \"x\"}",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestErrorAs",
+      "./exercises/p1tool/"
+    ],
+    "expect": "want key b, got bx"
+  },
+  {
+    "id": "p1_5-share-drop",
+    "note": "p1_5-share-drop",
+    "file": "exercises/p1_5basics/basics.go",
+    "find": "\tsub := s[1:3]\n\tsub[0] = 99",
+    "replace": "\tsub := s[1:3]\n\t_ = sub\n\t//sub[0] = 99",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestSliceShare",
+      "./exercises/p1_5basics/"
+    ],
+    "expect": "a[1] 应为 99"
+  },
+  {
+    "id": "p1_5-share-index",
+    "note": "p1_5-share-index",
+    "file": "exercises/p1_5basics/basics.go",
+    "find": "\tsub := s[1:3]\n\tsub[0] = 99",
+    "replace": "\tsub := s[1:3]\n\tsub[1] = 99",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestSliceShare",
+      "./exercises/p1_5basics/"
+    ],
+    "expect": "a[1] 应为 99"
+  },
+  {
+    "id": "p1_5-append-value",
+    "note": "p1_5-append-value",
+    "file": "exercises/p1_5basics/basics.go",
+    "find": "\tsub = append(sub, 5)",
+    "replace": "\tsub = append(sub, 55)",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestSliceShare",
+      "./exercises/p1_5basics/"
+    ],
+    "expect": "b[3] 应为 5"
+  },
+  {
+    "id": "p1_5-commaok-const",
+    "note": "p1_5-commaok-const",
+    "file": "exercises/p1_5basics/basics.go",
+    "find": "\tv, ok := m[key]\n\treturn v, ok",
+    "replace": "\treturn m[key], true",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestMapZero",
+      "./exercises/p1_5basics/"
+    ],
+    "expect": "ok 应为 false"
+  },
+  {
+    "id": "p1_5-commaok-invert",
+    "note": "p1_5-commaok-invert",
+    "file": "exercises/p1_5basics/basics.go",
+    "find": "\tv, ok := m[key]\n\treturn v, ok",
+    "replace": "\tv, ok := m[key]\n\treturn v, !ok",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestMapZero",
+      "./exercises/p1_5basics/"
+    ],
+    "expect": "ok 应为"
+  },
+  {
+    "id": "p1_5-charat-shift",
+    "note": "p1_5-charat-shift",
+    "file": "exercises/p1_5basics/basics.go",
+    "find": "\trs := []rune(s)\n\treturn rs[i]",
+    "replace": "\trs := []rune(s)\n\treturn rs[i+1]",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestRuneIndex",
+      "./exercises/p1_5basics/"
+    ],
+    "expect": "应为 '语'"
+  },
+  {
+    "id": "p1_5-runecount-off",
+    "note": "p1_5-runecount-off",
+    "file": "exercises/p1_5basics/basics.go",
+    "find": "func RuneCount(s string) int { return utf8.RuneCountInString(s) }",
+    "replace": "func RuneCount(s string) int { return utf8.RuneCountInString(s) + 1 }",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestRuneIndex",
+      "./exercises/p1_5basics/"
+    ],
+    "expect": "rune 数应为 4"
+  },
+  {
+    "id": "p1_5-grade-90",
+    "note": "p1_5-grade-90",
+    "file": "exercises/p1_5basics/basics.go",
+    "find": "\tcase score >= 90:",
+    "replace": "\tcase score > 90:",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestGrade",
+      "./exercises/p1_5basics/"
+    ],
+    "expect": "want A"
+  },
+  {
+    "id": "p1_5-grade-60",
+    "note": "p1_5-grade-60",
+    "file": "exercises/p1_5basics/basics.go",
+    "find": "\tcase score >= 60:",
+    "replace": "\tcase score > 60:",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestGrade",
+      "./exercises/p1_5basics/"
+    ],
+    "expect": "want B"
+  },
+  {
+    "id": "p1_5-iota-start",
+    "note": "p1_5-iota-start",
+    "file": "exercises/p1_5basics/basics.go",
+    "find": "\tSunday Weekday = iota // 0",
+    "replace": "\tSunday Weekday = iota + 1 // 0",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestIota",
+      "./exercises/p1_5basics/"
+    ],
+    "expect": "iota 行号错误"
+  },
+  {
+    "id": "p1_5-iota-skip",
+    "note": "p1_5-iota-skip",
+    "file": "exercises/p1_5basics/basics.go",
+    "find": "\t_  = iota // 跳过 0\n\tKB = 1 << (10 * iota)",
+    "replace": "\t_  = iota // 跳过 0\n\tKB = 1 << (10 * (iota - 1))",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestIota",
+      "./exercises/p1_5basics/"
+    ],
+    "expect": "iota 表达式错误"
+  },
+  {
+    "id": "p1_5-deferlog-order",
+    "note": "p1_5-deferlog-order",
+    "file": "exercises/p1_5basics/basics.go",
+    "find": "\tdefer func() { *out = append(*out, \"first-defer\") }()\n\tdefer func() { *out = append(*out, \"second-defer\") }()",
+    "replace": "\tdefer func() { *out = append(*out, \"second-defer\") }()\n\tdefer func() { *out = append(*out, \"first-defer\") }()",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestDeferOrder",
+      "./exercises/p1_5basics/"
+    ],
+    "expect": "LIFO 顺序错误"
+  },
+  {
+    "id": "p1_5-deferlog-body",
+    "note": "p1_5-deferlog-body",
+    "file": "exercises/p1_5basics/basics.go",
+    "find": "\t*out = append(*out, \"body\")",
+    "replace": "\t// body-append removed",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestDeferOrder",
+      "./exercises/p1_5basics/"
+    ],
+    "expect": "LIFO 顺序错误"
+  },
+  {
+    "id": "p1_5-add-noop",
+    "note": "p1_5-add-noop",
+    "file": "exercises/p1_5basics/basics.go",
+    "find": "func (c *Counter) Add(d int) { c.n += d }",
+    "replace": "func (c *Counter) Add(d int) { }",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestPointerReceiver",
+      "./exercises/p1_5basics/"
+    ],
+    "expect": "counter 应为 7，got 0"
+  },
+  {
+    "id": "p1_5-add-value-recv",
+    "note": "p1_5-add-value-recv",
+    "file": "exercises/p1_5basics/basics.go",
+    "find": "func (c *Counter) Add(d int) { c.n += d }",
+    "replace": "func (c Counter) Add(d int) { c.n += d }",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestPointerReceiver",
+      "./exercises/p1_5basics/"
+    ],
+    "expect": "counter 应为 7，got 0"
+  },
+  {
+    "id": "p1_5-struct-copy-ptr",
+    "note": "p1_5-struct-copy-ptr",
+    "file": "exercises/p1_5basics/basics.go",
+    "find": "func MutateStruct(c Counter) { c.n = 100 }",
+    "replace": "func MutateStruct(c *Counter) { c.n = 100 }",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestValueSemantics",
+      "./exercises/p1_5basics/"
+    ],
+    "expect": "cannot use c (variable of struct type Counter)"
+  },
+  {
+    "id": "p1_5-slice-mut-zero",
+    "note": "p1_5-slice-mut-zero",
+    "file": "exercises/p1_5basics/basics.go",
+    "find": "func MutateSlice(xs []int) { xs[0] = 100 }",
+    "replace": "func MutateSlice(xs []int) { xs[0] = 0 }",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestValueSemantics",
+      "./exercises/p1_5basics/"
+    ],
+    "expect": "xs[0] 应为 100"
+  },
+  {
+    "id": "p2-interface-output",
+    "note": "p2-interface-output",
+    "file": "exercises/p2lang/lang_test.go",
+    "find": "want := \"rex: woof, robot-7: beep\"",
+    "replace": "want := \"rex: woof, robot-7:beep\"",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestInterface",
+      "./exercises/p2lang/"
+    ],
+    "expect": "rex: woof, robot-7:beep"
+  },
+  {
+    "id": "p2-embedding-hello",
+    "note": "p2-embedding-hello",
+    "file": "exercises/p2lang/lang.go",
+    "find": "return b.Greeting",
+    "replace": "return b.Greeting + \"!\"",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestEmbedding",
+      "./exercises/p2lang/"
+    ],
+    "expect": "want hi got"
+  },
+  {
+    "id": "p2-typeswitch-robot",
+    "note": "p2-typeswitch-robot",
+    "file": "exercises/p2lang/lang_test.go",
+    "find": "\"robot:3\"",
+    "replace": "\"robot:4\"",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestTypeSwitch",
+      "./exercises/p2lang/"
+    ],
+    "expect": "robot:4"
+  },
+  {
+    "id": "p2-typeswitch-default",
+    "note": "p2-typeswitch-default",
+    "file": "exercises/p2lang/lang_test.go",
+    "find": "return \"unknown\"",
+    "replace": "return \"known\"",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestTypeSwitch",
+      "./exercises/p2lang/"
+    ],
+    "expect": "unknown"
+  },
+  {
+    "id": "p2-join-sep",
+    "note": "p2-join-sep",
+    "file": "exercises/p2lang/lang_test.go",
+    "find": "Join([]string{\"a\", \"b\", \"c\"}, \"-\"); got != \"a-b-c\"",
+    "replace": "Join([]string{\"a\", \"b\", \"c\"}, \"-\"); got != \"a-b\"",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestZeroValue",
+      "./exercises/p2lang/"
+    ],
+    "expect": "want a-b-c got \"a-b-c\""
+  },
+  {
+    "id": "p2-mapany-preallocation",
+    "note": "p2-mapany-preallocation",
+    "file": "exercises/p2lang/lang.go",
+    "find": "out := make([]R, 0, len(xs))",
+    "replace": "out := make([]R, len(xs))",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestGenerics",
+      "./exercises/p2lang/"
+    ],
+    "expect": "want [10 20 30] got"
+  },
+  {
+    "id": "p2-filter-predicate",
+    "note": "p2-filter-predicate",
+    "file": "exercises/p2lang/lang.go",
+    "find": "if keep(x) {",
+    "replace": "if !keep(x) {",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestGenerics",
+      "./exercises/p2lang/"
+    ],
+    "expect": "want [2 4] got [1 3]"
+  },
+  {
+    "id": "p25-get-wrap",
+    "note": "p25-get-wrap",
+    "file": "exercises/p2_5idiom/idiom.go",
+    "find": "fmt.Errorf(\"get %q: %w\", key, ErrNotFound)",
+    "replace": "fmt.Errorf(\"get %q: %v\", key, ErrNotFound)",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestErrorChain",
+      "./exercises/p2_5idiom/"
+    ],
+    "expect": "应穿透识别 ErrNotFound"
+  },
+  {
+    "id": "p25-loadkey-wrap",
+    "note": "p25-loadkey-wrap",
+    "file": "exercises/p2_5idiom/idiom.go",
+    "find": "fmt.Errorf(\"load key: %w\", err)",
+    "replace": "fmt.Errorf(\"load key: %v\", err)",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestErrorChain",
+      "./exercises/p2_5idiom/"
+    ],
+    "expect": "应穿透识别 ErrNotFound"
+  },
+  {
+    "id": "p25-normalize-join",
+    "note": "p25-normalize-join",
+    "file": "exercises/p2_5idiom/idiom.go",
+    "find": "strings.ToLower(strings.Join(strings.Fields(s), \" \"))",
+    "replace": "strings.ToLower(strings.Join(strings.Fields(s), \"\"))",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestTableDriven",
+      "./exercises/p2_5idiom/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p25-process-upper",
+    "note": "p25-process-upper",
+    "file": "exercises/p2_5idiom/idiom.go",
+    "find": "return strings.ToUpper(input), nil",
+    "replace": "return strings.ToLower(input), nil",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestGuardClause",
+      "./exercises/p2_5idiom/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p25-count-zero",
+    "note": "p25-count-zero",
+    "file": "exercises/p2_5idiom/idiom.go",
+    "find": "func (s Stats) Count() int { return s.hits }",
+    "replace": "func (s Stats) Count() int { return 0 }",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestGetter",
+      "./exercises/p2_5idiom/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p25-fake-invert",
+    "note": "p25-fake-invert",
+    "file": "exercises/p2_5idiom/idiom_test.go",
+    "find": "if v, ok := f.data[key]; ok {",
+    "replace": "if v, ok := f.data[key]; !ok {",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestFake",
+      "./exercises/p2_5idiom/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p25-pyramid-upper",
+    "note": "p25-pyramid-upper",
+    "file": "exercises/p2_5idiom/legacy.go",
+    "find": "return strings.ToUpper(input)",
+    "replace": "return strings.ToLower(input)",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestGuardClause",
+      "./exercises/p2_5idiom/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p19-ping-ctx-done",
+    "note": "p19-ping-ctx-done",
+    "file": "exercises/p19eco/eco.go",
+    "find": "\tcase <-ctx.Done():\n\t\treturn ctx.Err()",
+    "replace": "\tcase <-ctx.Done():\n\t\treturn nil",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestPingCtx",
+      "./exercises/p19eco/"
+    ],
+    "expect": "已取消的 ctx 应让 Ping 返回错误"
+  },
+  {
+    "id": "p19-default-timeout",
+    "note": "p19-default-timeout",
+    "file": "exercises/p19eco/eco.go",
+    "find": "\ttimeout: 5 * time.Second,",
+    "replace": "\ttimeout: 10 * time.Second,",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestFunctionalOptions",
+      "./exercises/p19eco/"
+    ],
+    "expect": "默认值错误: :8080 10s"
+  },
+  {
+    "id": "p19-enabled-threshold",
+    "note": "p19-enabled-threshold",
+    "file": "exercises/p19eco/eco_test.go",
+    "find": "\treturn l >= slog.LevelWarn",
+    "replace": "\treturn l >= slog.LevelInfo",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestSlogHandler",
+      "./exercises/p19eco/"
+    ],
+    "expect": "Info 应被 Enabled 门控掉"
+  },
+  {
+    "id": "p19-stringer-expect",
+    "note": "p19-stringer-expect",
+    "file": "exercises/p19eco/eco_test.go",
+    "find": "if got := Warn.String(); got != \"warn\"",
+    "replace": "if got := Warn.String(); got != \"Warn\"",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestStringer",
+      "./exercises/p19eco/"
+    ],
+    "expect": "Warn.String()=\"warn\", want warn"
+  },
+  {
+    "id": "p19-options-loop",
+    "note": "p19-options-loop",
+    "file": "exercises/p19eco/eco.go",
+    "find": "\tfor _, o := range opts {\n\t\to(s)\n\t}\n",
+    "replace": "",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestFunctionalOptions",
+      "./exercises/p19eco/"
+    ],
+    "expect": "WithTimeout 未生效: 5s"
+  },
+  {
+    "id": "p20-errscount",
+    "note": "p20-errscount",
+    "file": "exercises/p20cli/cli.go",
+    "find": "\treturn fmt.Errorf(\"%d failures: %w\", len(errs), errs[0]) // 简化：计数+首个",
+    "replace": "\treturn fmt.Errorf(\"%d failures: %w\", len(errs)-1, errs[0]) // 简化：计数+首个",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestErrsCombineExtra",
+      "./exercises/p20cli/"
+    ],
+    "expect": "应计数并带首个错误"
+  },
+  {
+    "id": "p20-quiet-silent",
+    "note": "p20-quiet-silent",
+    "file": "exercises/p20cli/cli.go",
+    "find": "\tif !cfg.Quiet {",
+    "replace": "\tif true {",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestRunPipeline",
+      "./exercises/p20cli/"
+    ],
+    "expect": "-q 应零输出"
+  },
+  {
+    "id": "p20-usage-unwrap",
+    "note": "p20-usage-unwrap",
+    "file": "exercises/p20cli/cli.go",
+    "find": "\tfor err != nil {",
+    "replace": "\tif false {",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestExitCode",
+      "./exercises/p20cli/"
+    ],
+    "expect": "usage: wcgo"
+  },
+  {
+    "id": "p20-stdin-branch",
+    "note": "p20-stdin-branch",
+    "file": "exercises/p20cli/cli.go",
+    "find": "\tif len(cfg.Files) == 0 {",
+    "replace": "\tif false { // mutated",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestRunPipeline",
+      "./exercises/p20cli/"
+    ],
+    "expect": "stdout 应只有统计行"
+  },
+  {
+    "id": "p5deep-typekey-collide",
+    "note": "p5deep-typekey-collide",
+    "file": "exercises/p5deep/deep.go",
+    "find": "\tr.m[reflect.TypeFor[T]()] = v",
+    "replace": "\tr.m[reflect.TypeFor[any]()] = v // mutated: all types collide",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestTypeKey",
+      "./exercises/p5deep/"
+    ],
+    "expect": "config wrong"
+  },
+  {
+    "id": "p5deep-provider-key-collide",
+    "note": "p5deep-provider-key-collide",
+    "file": "exercises/p5deep/deep.go",
+    "find": "Store(d.reg, providerOf[T]{fn: p})",
+    "replace": "Store(d.reg, providerOf[any]{fn: func(c context.Context) (any, error) { return p(c) }})",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestProvideInvoke",
+      "./exercises/p5deep/"
+    ],
+    "expect": "no provider for"
+  },
+  {
+    "id": "p5deep-no-cache-store",
+    "note": "p5deep-no-cache-store",
+    "file": "exercises/p5deep/deep.go",
+    "find": "Store(d.reg, cached) // 结果缓存：T 类型 key，与 providerOf[T] 不撞",
+    "replace": "_ = cached // mutated: 结果不写缓存表",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestProvideInvoke",
+      "./exercises/p5deep/"
+    ],
+    "expect": "cache miss after once"
+  },
+  {
+    "id": "p5deep-return-local-cached",
+    "note": "p5deep-return-local-cached",
+    "file": "exercises/p5deep/deep.go",
+    "find": "\tv, ok := Load[T](d.reg)\n\tif !ok {\n\t\treturn zero, fmt.Errorf(\"invoke %T: cache miss after once\", zero)\n\t}\n\treturn v, nil",
+    "replace": "\tif _, ok := Load[T](d.reg); !ok {\n\t\treturn zero, fmt.Errorf(\"invoke %T: cache miss after once\", zero)\n\t}\n\treturn *new(T), nil",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestProvideInvoke",
+      "./exercises/p5deep/"
+    ],
+    "expect": "nil pointer dereference"
+  },
+  {
+    "id": "p5deep-unregistered-no-error",
+    "note": "p5deep-unregistered-no-error",
+    "file": "exercises/p5deep/deep.go",
+    "find": "return zero, fmt.Errorf(\"no provider for %T\", zero)",
+    "replace": "return zero, nil",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestProvideInvoke",
+      "./exercises/p5deep/"
+    ],
+    "expect": "want error for unregistered type"
+  },
+  {
+    "id": "p5deep-once-unlock-early",
+    "note": "p5deep-once-unlock-early",
+    "file": "exercises/p5deep/deep.go",
+    "find": "d.onceM.Lock()",
+    "replace": "d.onceM.Unlock()",
+    "run": [
+      "go",
+      "test",
+      "-race",
+      "-count=1",
+      "./exercises/p5deep/"
+    ],
+    "expect": "fatal error: sync:"
+  },
+  {
+    "id": "p6-expire-random-below",
+    "note": "p6-expire-random-below",
+    "file": "dnsproxi-go/cache/expire.go",
+    "find": "slot := c.randomBelow(live)",
+    "replace": "slot := 0",
+    "run": [
+      "sh",
+      "-c",
+      "cd dnsproxi-go && go test -count=1 -run TestExpireRoundNeverKillsLivingUnderSwapRemove ./cache/"
+    ],
+    "expect": "all alive intact"
+  },
+  {
+    "id": "p6-sketch-reset-mask",
+    "note": "p6-sketch-reset-mask",
+    "file": "dnsproxi-go/cache/sketch.go",
+    "find": "& nibbleHalveMask",
+    "replace": "& nibbleOneMask",
+    "run": [
+      "sh",
+      "-c",
+      "cd dnsproxi-go && go test -count=1 -run TestAgingHalving ./cache/"
+    ],
+    "expect": "want ~half"
+  },
+  {
+    "id": "p6-admit-valve-invert",
+    "note": "p6-admit-valve-invert",
+    "file": "dnsproxi-go/cache/sketch.go",
+    "find": "return roll&127 == 0",
+    "replace": "return roll&127 != 0",
+    "run": [
+      "sh",
+      "-c",
+      "cd dnsproxi-go && go test -count=1 -run TestAdmitDecision ./cache/"
+    ],
+    "expect": "1/128"
+  },
+  {
+    "id": "p6-reply-end-guard",
+    "note": "p6-reply-end-guard",
+    "file": "dnsproxi-go/cache/reply.go",
+    "find": "if q.End != rq.End {\n\t\treturn nil\n\t}\n\n\tout := make([]byte, len(e.Resp))",
+    "replace": "if false {\n\t\treturn nil\n\t}\n\n\tout := make([]byte, len(e.Resp))",
+    "run": [
+      "sh",
+      "-c",
+      "cd dnsproxi-go && go test -count=1 -run TestReplyCountdown ./cache/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p6-get-touch-lru",
+    "note": "p6-get-touch-lru",
+    "file": "dnsproxi-go/cache/cache.go",
+    "find": "c.access[k] = NowMs()\n\treturn e, true",
+    "replace": "return e, true",
+    "run": [
+      "sh",
+      "-c",
+      "cd dnsproxi-go && go test -count=1 -run TestGetRefreshesHeat ./cache/"
+    ],
+    "expect": "want victim b.test (a was touched)"
+  },
+  {
+    "id": "p6-nxdomain-rcode",
+    "note": "p6-nxdomain-rcode",
+    "file": "dnsproxi-go/main.go",
+    "find": "h.RCode = 3 // NXDOMAIN",
+    "replace": "h.RCode = 2",
+    "run": [
+      "sh",
+      "-c",
+      "cd dnsproxi-go && go test -count=1 -run TestD1Sinkhole ./"
+    ],
+    "expect": "want NXDOMAIN"
+  },
+  {
+    "id": "p6-name-jump-cap",
+    "note": "p6-name-jump-cap",
+    "file": "dnsproxi-go/wire/wire.go",
+    "find": "for range 128",
+    "replace": "for range 8",
+    "run": [
+      "sh",
+      "-c",
+      "cd dnsproxi-go && go test -count=1 -run TestDeepPointerChainWithinCap ./wire/"
+    ],
+    "expect": "11-iteration chain must parse under cap"
+  },
+  {
+    "id": "p6-doorkeeper-first-bump",
+    "note": "p6-doorkeeper-first-bump",
+    "file": "dnsproxi-go/cache/sketch.go",
+    "find": "if !s.doorMark(h) {\n\t\treturn\n\t}",
+    "replace": "_ = s.doorMark(h)",
+    "run": [
+      "sh",
+      "-c",
+      "cd dnsproxi-go && go test -count=1 -run TestDoorkeeper ./cache/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p4-take-stop",
+    "note": "p4-take-stop",
+    "file": "exercises/p4ejdb/ejdb_test.go",
+    "find": "if counted >= n {",
+    "replace": "if counted > n {",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestConsumeClosure",
+      "./exercises/p4ejdb/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p4-i64-noflip",
+    "note": "p4-i64-noflip",
+    "file": "exercises/p4ejdb/ejdb_test.go",
+    "find": "uint64(v)^1<<63",
+    "replace": "uint64(v)",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestI64IndexOrder",
+      "./exercises/p4ejdb/"
     ],
     "expect": "FAIL"
   }

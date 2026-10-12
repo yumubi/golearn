@@ -198,7 +198,8 @@ func run() error {   // 业务逻辑全在 run：main 只管退出码
    `toolA -q | toolB` 是常见形态。
 
 对照 Rust：`clap-verbosity-flag` + `env_logger`/`tracing` 那套
-默认 warn、`-vvv` 递增的习惯完全可移植，用 slog + Level flag 实现：
+默认 error（`ErrorLevel`，`-v` 升到 warn）、`-vvv` 递增的习惯完全
+可移植，用 slog + Level flag 实现：
 
 ```go
 lvl := slog.LevelWarn
@@ -323,7 +324,7 @@ dec := json.NewDecoder(os.Stdin); for dec.More() { var v T; dec.Decode(&v) }
 
 管道没有文件参数时的惯例：`flag.NArg() == 0 && !isatty(stdin)`
 → 读 stdin；`isatty(stdin)` 且无参数 → 打 usage 退出 2（对照
-`grep`/`jq` 的行为）。
+`grep` 的行为，实测 exit 2；`jq` 反而是挂起等输入的那个）。
 
 ### Go 工具生态代表（读源码学惯例）
 

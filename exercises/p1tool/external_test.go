@@ -10,7 +10,7 @@ import (
 // 已实现：通过导出访问器 N() 读取私有字段（编译器拦 c.n，不是 lint）。
 //
 // 现状：c.n 是私有字段，直接访问会编译错
-// （unexported field c.n — 编译器拦下，不是 lint）。
+// （unexported field c.n，编译器拦下，不是 lint）。
 //
 // Rust 对照：
 //
@@ -37,7 +37,7 @@ func TestPrivateCtor(t *testing.T) {
 	if c.N() != 10 {
 		t.Fatalf("want 10, got %d", c.N())
 	}
-	// 已验证：p1tool.newCounter() 在外部包编译不过——
-	// 报错 c.newCounter undefined (type p1tool.P is not in std) 之类，
+	// 已验证：p1tool.newCounter() 在外部包编译不过（实测报文见下），
+	// 报错 name newCounter not exported by package pkg，
 	// 小写标识符跨包不可见。这是包边界，不是命名约定。
 }

@@ -209,12 +209,12 @@ func Load(path string) (*Config, error) { ... }
 
 **模块纪律**：`go mod tidy` 是唯一真相（P1）；版本升级
 `go get -u ./...` 或逐包；主版本 2+ 路径带 `/v2`（Sematic Import
-Versioning）：对照 cargo 的版本号自动解析，Go 的 v2 路径是显式
+`go get -u ./...` 或逐包；主版本 2+ 路径带 `/v2`（Semantic Import
 的，很多人第一次 import 报 404 就栽在这。
 
 **重构时代的 IDE 纪律**：`gopls`（官方 LSP）驱动 rename/引包/
 跳转；保存即 `gofmt`（无配置）；lint 交给 `golangci-lint`（P1 提过，
-P19 讲配置）。
+`.golangci.yml` 挑启用集的配置也在 P1 章末参考）。
 
 ## 动手：练习 p2_5idiom（30-45 分钟）
 

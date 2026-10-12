@@ -13,7 +13,7 @@ import (
 // Rust: Result<T, E> 是类型，? 传播，编译器强制 unwrap 处理。
 // Go:   error 是普通返回值，if err != nil 是习惯不是语法。
 //
-//	—— 没有 ?，没有 try/catch，panic 只用于程序员 bug（≈ Rust panic!，不是 recoverable error）。
+//	没有 ?，没有 try/catch，panic 只用于程序员 bug（≈ Rust panic!，不是 recoverable error）。
 //
 // sentinal error（≈ Rust 的单元变体枚举）:
 var ErrEmpty = errors.New("empty input")
@@ -39,7 +39,7 @@ var (
 func divide(a, b int64) (int64, error) {
 	// 参考实现：%w 包装 sentinel（≈ thiserror #[source]）。
 	// errors.Is 沿 Unwrap 链穿透判真；消息带 a/b 上下文，
-	// 测试第 53 行拒绝裸 sentinel——上下文是给看日志的人的。
+	// 测试第 53 行拒绝裸 sentinel：上下文是给看日志的人的。
 	if b == 0 {
 		return 0, fmt.Errorf("divide %d by %d: %w", a, b, ErrDivZero)
 	}
@@ -71,7 +71,7 @@ func lookup(m map[string]int, key string) (int, error) {
 	// 参考实现：自定义错误类型 + errors.As downcast。
 	// ≈ Rust: m.get(key).ok_or(NotFoundError { key })，
 	// errors.As 是安全的 downcast_ref（沿 Unwrap 链穿透）。
-	// 注意返回 &NotFoundError{}（指针）——Error() 定义在指针接收者上。
+	// 注意返回 &NotFoundError{}（指针）：Error() 定义在指针接收者上。
 	v, ok := m[key]
 	if !ok {
 		return 0, &NotFoundError{Key: key}

@@ -35,7 +35,7 @@ deepsearch/
 │   ├── provider/            # DI 注册：env/http/llm/search 的 provider
 │   ├── transport/           # http.go + mcp.go：两种协议共用一个 service
 │   └── service/search/      # 业务核心，不知道 transport 存在
-├── pkg/                     # 可复用：di/slogtrap/httperr/env/util
+├── pkg/                     # 可复用：di/slogtrap/httperr/env/util/agentutil
 └── Dockerfile               # CGO_ENABLED=0 静态编译
 ```
 
@@ -54,7 +54,7 @@ service 不 import transport；transport 通过**使用方定义的接口**拿 s
 
 - `Provide[T](ctx, provider, opts...)` 注册（di.go:109）
 - `Invoke[T](ctx) (T, error)` 解析（di.go:137）
-- `Clean[T](ctx)` 清理 + 递归清理依赖（di.go:164）
+- `Clean[T](ctx)` 清理 + 递归清理依赖（依赖方开 WithCleanRecursive 才级联，di.go:164）
 
 **实现要点逐个读**：
 
@@ -109,7 +109,7 @@ go func() {
     sig := <-sigCh
     cancel()                      // 第一次信号：取消 ctx
     <-sigCh
-    os.Exit(1)                    // 第二次信号：强杀
+    os.Exit(1)                    // 第二次信号：不等清理直接退
 }()
 ```
 

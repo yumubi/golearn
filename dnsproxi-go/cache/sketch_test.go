@@ -10,7 +10,7 @@ import (
 func TestSketchCountAndMin(t *testing.T) {
 	s := NewSketch(256, false, true, 8)
 	k := key("hot.test")
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		s.Increment(k)
 	}
 	if got := s.Frequency(k); got != 15 {
@@ -41,14 +41,15 @@ func TestDoorkeeper(t *testing.T) {
 func TestAgingHalving(t *testing.T) {
 	s := NewSketch(256, true, true, 8)
 	k := key("hot.test")
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		s.Increment(k)
 	}
 	before := s.Frequency(k)
 	s.Reset()
 	after := s.Frequency(k)
-	// 20 次 ≈ 15 饱和 → 减半到 7，挡板清零后无 +1。允许边界 ±1。
-	if after > before/2+1 || after == 0 {
+	// 20 次 ≈ 15 饱和 → 减半到 7，挡板清零后无 +1。允许边界 ±1；
+	// 下界拦 mask 变异（0x1111 会把 15 压到 1，减半语义变成除 8）。
+	if after > before/2+1 || after < before/2-1 {
 		t.Fatalf("after reset frequency = %d (before %d), want ~half", after, before)
 	}
 	if s.Resets() != 1 {
@@ -62,18 +63,18 @@ func TestAgingUnlocksNewHotspot(t *testing.T) {
 	run := func(aging bool) uint32 {
 		s := NewSketch(256, true, aging, 8)
 		old := key("old-hot.test")
-		for i := 0; i < 100; i++ { // 旧热点打满
+		for range 100 { // 旧热点打满
 			s.Increment(old)
 		}
 		fresh := key("fresh.test")
-		for i := 0; i < 30; i++ { // 新热点来了
+		for range 30 { // 新热点来了
 			s.Increment(fresh)
 		}
 		return s.Frequency(fresh)
 	}
 	// 关老化：fresh 的格子被 old 的计数污染不了（不同行同格才污染），
 	// 这里断言的是纯行为：关老化时 fresh 至少 15（30 次 × 一半衰减没有）。
-	// 开老化：sample=2560，30 次远不到 reset 阈值——所以这个测试真正验证的
+	// 开老化：sample=2560，30 次远不到 reset 阈值，所以这个测试真正验证的
 	// 是"reset 时机没被误触发"。真正能看老化翻身的场景在 e2e（长流量）。
 	if got := run(false); got < 15 {
 		t.Fatalf("aging=off fresh frequency = %d, want >= 15", got)
@@ -119,7 +120,7 @@ func TestDeadVictimDoesNotGuard(t *testing.T) {
 
 	// 开准入，旧热点 victim 的频率极高（simulate：提前喂草图）。
 	c.Sketch = NewSketch(256, false, true, 8)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		c.Sketch.Increment(key("victim.test"))
 	}
 	// 冷候选人来了。
@@ -150,7 +151,7 @@ func TestAdmissionBlocksCold(t *testing.T) {
 	fc.ms = 2000
 	c.PutFull(key("warm.test"), mkEntry(60))
 	// 喂热在位者。
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		c.Sketch.Increment(key("hot.test"))
 		c.Sketch.Increment(key("warm.test"))
 	}
@@ -183,7 +184,7 @@ func TestAdmissionAdmitsHot(t *testing.T) {
 	fc.ms = 2000
 	c.PutFull(key("cold2.test"), mkEntry(60))
 	// 冷候选人先在草图里养热（模拟它在上游流里复访过多次）。
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		c.Sketch.Increment(key("star.test"))
 	}
 	fc.ms = 3000
