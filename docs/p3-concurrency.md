@@ -246,3 +246,6 @@ go run -race -run TestPanicKillsProcess                   # 体会进程死亡�
 - "Don't communicate by sharing memory, share memory by
   communicating"（Effective Go）：channel 传数据 ≈ Rust 的 move
   语义，但没有编译器盯着，纯靠纪律 + `-race` 兜底。
+
+时间相关的并发测试（Sleep/计时器怎么测）见 P21（testing/synctest：
+假时钟零注入）。

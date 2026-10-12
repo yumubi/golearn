@@ -1495,5 +1495,53 @@
       "./exercises/p4ejdb/"
     ],
     "expect": "FAIL"
+  },
+  {
+    "id": "p21-backoff-double",
+    "note": "P21 问题 1：Backoff 倍数改 3 后虚拟时间账本必须对不上（300ms 精确断言）",
+    "file": "exercises/p21test/retry.go",
+    "find": "\t\td *= 2\n",
+    "replace": "\t\td *= 3\n",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestRetryVirtualTime",
+      "./exercises/p21test/"
+    ],
+    "expect": "virtual elapsed = 400ms, want exactly 300ms"
+  },
+  {
+    "id": "p21-ctx-ignore",
+    "note": "P21 问题 2：删 ctx.Err() 早退后预先取消必须还被测试抓住（calls 应 0）",
+    "file": "exercises/p21test/retry.go",
+    "find": "\t\tif err := ctx.Err(); err != nil {\n\t\t\treturn err\n\t\t}\n\t\terr := fn()",
+    "replace": "\t\terr := fn()",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestRetryCtxCancelImmediate",
+      "./exercises/p21test/"
+    ],
+    "expect": "calls = 1, want 0"
+  },
+  {
+    "id": "p21-debounce-stopnoop",
+    "note": "P21 问题 2：Stop 变 no-op 后防抖计时器必须照常触发（fired 应 0）",
+    "file": "exercises/p21test/retry.go",
+    "find": "func (d *Debounce) Stop() {\n\td.mu <- struct{}{}\n\tdefer func() { <-d.mu }()\n\tif d.timer != nil {\n\t\td.timer.Stop()\n\t}\n}",
+    "replace": "func (d *Debounce) Stop() {\n\td.mu <- struct{}{}\n\tdefer func() { <-d.mu }()\n}",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestDebounceStop",
+      "./exercises/p21test/"
+    ],
+    "expect": "fired after Stop = 1, want 0"
   }
 ]

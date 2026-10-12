@@ -73,6 +73,7 @@ export default defineConfig({
           { text: 'P1 工具链 cheat sheet', link: '/p1-toolchain' },
           { text: 'P19 生态与常用库', link: '/p19-ecosystem' },
           { text: 'P20 写 CLI 工具', link: '/p20-cli-tool' },
+          { text: 'P21 synctest + fuzz', link: '/p21-testing-concurrency' },
           { text: 'P4 精读 ejdb', link: '/p4-ejdb' },
           { text: 'P5 精读 deepsearch', link: '/p5-deepsearch' },
           { text: 'P10 gRPC', link: '/p10-grpc' },

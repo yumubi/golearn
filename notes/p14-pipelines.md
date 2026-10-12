@@ -244,3 +244,6 @@ worker pool（P7）就是这个模式的真机版。
 `JoinSet` 也是"收全部结果"，但首错传播要自己写（遍历 join
 结果找 Err）；`buffer_unordered(n)` 直接给"限并发 + 流式收集"，
 比 Go 这套组装件更一步到位，但 Go 的部件看得见摸得着，学习价值更高。
+
+泄漏检测进阶：P21 的 synctest bubble 收尾自动指认泄漏 goroutine
+（本篇 NumGoroutine 法的升级版）。

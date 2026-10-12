@@ -31,6 +31,7 @@ title: 课程表：23 章速查
 | P18 | dnsproxi 日志落地 | [notes](/p18-dnsproxi-slog) | `dnsproxi-go/logger.go` | ✅ 每查询 req_id 注入 |
 | P19 | 生态与常用库选型地图 | [notes](/p19-ecosystem) | `exercises/p19eco/` | ✅ 4 tests（options/slog Handler/stringer） |
 | P20 | 写 CLI 工具（管道/flag/cobra/退出码/发布） | [notes](/p20-cli-tool) | `exercises/p20cli/`（含 cmd/） | ✅ 7 tests + wcgo 退出码实证 |
+| P21 | testing/synctest + fuzz（虚拟时钟/性质测试） | [notes](/p21-testing-concurrency) | `exercises/p21test/`（含 cmd/retryrun） | ✅ 10 tests -race + FuzzParseArgs 60s 2853 万 execs |
 
 ## 贯穿主线
 
