@@ -117,8 +117,11 @@ for n in sorted(glob.glob('notes/p2[1-9]-*.md')):
 
 # 10 测试数量不得减少；新增 t.Skip 必须带 `skip-ok: 理由`
 def count_tests(ref):
-    cmd = f"git grep -h '^func Test' {ref} -- '*_test.go' | wc -l" if ref else "git grep --untracked -h '^func Test' -- '*_test.go' | wc -l"
-    return int(sh(cmd).stdout.strip())
+    if ref:
+        return int(sh(f"git grep -h '^func Test' {ref} -- '*_test.go' | wc -l").stdout.strip())
+    files = sh("git ls-files -co --exclude-standard -- '*_test.go'").stdout.split()
+    return sum(len(re.findall(r'^func Test', open(f).read(), re.M)) for f in files if os.path.exists(f))
+
 
 b, n = count_tests(BASE), count_tests(None)
 rec(f'测试函数总数不减少（BASE {b} -> 现 {n}）', n >= b)
