@@ -9,8 +9,10 @@
 读完你能对同事说清：为什么 `*sql.DB` 不是连接而是连接池、一个可空字段
 为什么有三种NULL写法且各有归属、事务在 Go 里为什么靠纪律不靠类型系统、
 什么时候该放弃 database/sql 直接上 pgx。终点证据：`exercises/p9db/`
-5 个测试全绿（sqlite 零环境依赖），其中 `TestNullStrategies` 把三策略
-各写一遍，`TestTxAtomicity` 用中途 panic 坐实回滚。四个问题依次是：
+5 个测试全绿（sqlite 零环境依赖），三 NULL 读取姿势在
+`TestNullStrategies` 里各写一遍，`TestTxAtomicity` 用中途返回 error
+坐实回滚（panic 版留改造题，实测 `defer tx.Rollback()` 在 panic 展开
+时照跑）。四个问题依次是：
 
 1. `*sql.DB` 为什么不是连接？
 2. NULL 三策略怎么选？
@@ -138,7 +140,7 @@ for rows.Next() {
 }
 if err := rows.Err(); err != nil { return err } // ⚠️ 迭代中发生的错误在这里冒出
 
-// 批量（COPY 级性能，比循环 INSERT 快 10-100×）
+// 批量（pgx.Batch 管道化：一次网络往返发完，不再逐条等响应）
 batch := &pgx.Batch{}
 for _, u := range users {
     batch.Queue("INSERT INTO users(id,name) VALUES($1,$2)", u.ID, u.Name)
@@ -157,7 +159,7 @@ pool.QueryRow(ctx, "SELECT name FROM users WHERE id=$1", 42).Scan(&name)
 | | database/sql + pgx 驱动 | pgx 原生 |
 |---|---|---|
 | 何时用 | 要换库（sqlite 测试/MySQL 生产） | 锁定 PG |
-| 性能 | 抽象层有开销（接口装箱） | 快 20-40%，支持 COPY/batch/listen |
+| 性能 | 抽象层有开销（接口装箱） | pgx README："The pgx interface is faster"；支持 COPY/batch/listen |
 | 类型 | NullXxx 三策略 | 指针 + pgtype 表达力强 |
 | JSONB | 手 scan []byte | `pgtype.JSONB` 直接进 struct |
 
@@ -234,7 +236,7 @@ docker stop p9pg
 3. 事务靠纪律不靠类型：`defer tx.Rollback()` + 每条错误路径显式
    回滚，10 行 `WithTx` 助手换来 sqlx 的 Drop 安全感（Commit 后
    Rollback 是幂等的 ErrTxDone）。
-4. 锁定 PG 就上 pgx 原生（快 20-40% + COPY/batch/listen）；要换库
+4. 锁定 PG 就上 pgx 原生（接口更快 + COPY/batch/listen）；要换库
    自由就 database/sql。sqlc + goose 是 2026 年标配（章末参考）。
 
 ---

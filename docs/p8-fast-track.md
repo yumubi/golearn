@@ -16,7 +16,7 @@ title: P8 · 快速扩展：泛型、标准库、测试、HTTP 的四个问题
 `fn max<T: PartialOrd>` 的三条差别；能背出日常最高频的标准库三件
 （slices、cmp、sync.OnceValue）；能用 table-driven + `-race` + `go vet`
 搭起最小正确性门禁；能用纯标准库写出带 1.22 路由、超时和优雅关停的
-HTTP 服务。终点证据：`exercises/p8fast/` 8 个测试全绿（含 httpkv 的
+HTTP 服务。终点证据：`exercises/p8fast/` 9 个测试全绿（含 httpkv 的
 `TestHTTPKV`/`TestPathValue`，P13 后加的 `TestMetricsGuarded` 守护
 /metrics 三行为），`go run ./exercises/p8fast/httpkv/`
 起服务后 PUT/GET/DELETE 的 curl 冒烟全对（P13/P15/P16 就挂在这个服务上）。
@@ -74,8 +74,9 @@ type providerOf[T any] struct { fn func(ctx) (T, error) } // P5 里你已经踩�
 **差异二：泛型实例化是运行时字典（GC shape stenciling）**：
 相同内存布局的类型共享一份代码 + dictionary 传类型信息。
 Rust 是单态化（零开销）+ 枚举优化。**后果**：Go 泛型有字典查找开销，
-热路径上 `sort.Slice`（反射）vs `slices.SortFunc`（泛型）差 5-10×，
-vs 手写循环差 ~1.5×（labs/counter 里的教训同源）。
+热路径上 `sort.Slice`（反射）vs `slices.SortFunc`（泛型）实测约
+1.3-1.4×（10 万元素 int 切片纯排序 8.01ms vs 6.38ms、带 clone 512µs
+vs 356µs，M4 实拍），差距来自反射路径 + 额外分配（3 vs 0 allocs/op）。
 
 **差异三：没有默认类型参数、没有特化、没有 const 泛型**：
 Rust 的 `impl Trait for T where T: Foo`、特化、`[u8; N]` 在 Go 全都不存在。
@@ -288,7 +289,7 @@ httpkv 还补了 `IdleTimeout: 60s`（空闲连接回收）。观察验证在练
 ## 动手：练习 p8fast + httpkv（45-60 分钟）
 
 ```sh
-go test -race ./exercises/p8fast/...           # 验收：8 tests 全绿
+go test -race ./exercises/p8fast/...           # 验收：9 tests 全绿
 go test -race -run TestOnceValue -v ./exercises/p8fast/   # 单跑
 ```
 
@@ -359,8 +360,9 @@ maps.Clone(m)                  // ≈ m.clone()
 
 ```go
 sync.Map          // 并发读多写少的 map，分读写两视图（≈ dashmap 的简化版）
-                  // ⚠️ 类型不安全(map[any]any)，1.24+ 有 sync.HashTrieMap 方向；
-                  //   日常优先 mutex+map[K]V，除非 profile 证明锁是瓶颈
+                  // ⚠️ 类型不安全(map[any]any)；1.24 起 runtime 内部实现换成
+                  //   hash-trie（性能优化，非新公开 API）。日常优先 mutex+map[K]V，
+                  //   除非 profile 证明锁是瓶颈
 sync.OnceFunc(f)  // 返回闭包，第一次调用执行 f（≈ OnceLock + 初始化的糖）
 sync.OnceValue(f) // 返回闭包并缓存返回值（≈ OnceFunc + memoize；手写 DI 那题的官方解，P5 对照）
 sync.WaitGroup.Go(f) // 1.25+：wg.Go(func(){}) 替代 Add/Done 三行
@@ -397,7 +399,7 @@ strconv                                        // Atoi/ParseInt/FormatFloat，�
 ### 迭代器补充（Go 1.23+）
 
 ```go
-func All[V any](s []V) iter.Seq[int, V]  // 实际签名 iter.Seq2[int, V]
+func All[Slice ~[]E, E any](s Slice) iter.Seq2[int, E]  // go doc slices.All 原样
 for i, v := range slices.All(xs) { }      // range over func，Go 的 .iter()
 maps.Keys(m)                              // map keys 迭代器，配合 slices.Sorted 排序
 ```

@@ -94,10 +94,13 @@ json.Unmarshal(got.Meta, &back)       // jsonb 回来是 []byte，unmarshal 验�
 （对照 diesel 里要写 `sql("tags @> ")` 的窘迫）。
 
 **timestamptz 的两个选择**：
-默认 `pgtype.Timestamptz`（显式，带 Valid）；
+默认 `pgtype.Timestamptz`（显式，带 Valid，本练习生成的实际形态）；
 在 `sqlc.yaml` 加 override 映射成 `time.Time`（省 Valid 判断，NULL 时零值）。
 教程 yaml 里给了 override 示例但注释掉了：**生产建议保留 pgtype**，
-NULL 语义显式比隐式好（P9 NULL 三策略在这里的延伸）。
+NULL 语义显式比隐式好（P9 NULL 三策略在这里的延伸）。审读实测一个
+坑：`db_type: pg_catalog.timestamptz` 写法在 sqlc v1.31.1 不生效
+（生成物仍是 pgtype）；要真换 `time.Time` 得用 column 级写法
+（`column: articles.created_at`，实测生效）。
 
 ## 12.4 事务：P11 纪律的 pgx 形态 + 一个新坑
 

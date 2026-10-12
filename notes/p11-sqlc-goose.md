@@ -154,18 +154,20 @@ err := withTx(ctx, pool, func(tx *sql.Tx) error {
 
 ## 问题 4：两个真实翻车教会什么？
 
-这章实际踩了三个坑，全是真实的。生成器的用法查文档就会，这些坑
-文档不会告诉你。
+这章实际踩了三个坑。坑二已复现（报错原文见下，goose v3.28.0 实拍）；
+坑一在当前 sqlc v1.31.1 未能复现（见下，诚实标注）；坑三是实测语义。
+这些坑文档不会告诉你。
 
-**坑一：queries 文件里的长中文注释让 sqlc 解析错位**。
-`-- 命名查询：sqlc 的输入。每个带 name 注解的语句...` 这行 60+ 字节的
-中文注释放在文件头，导致**下一条** `-- name: ListUsersOlderThan :many`
-注解被解析成"没有类型后缀"，generate 报：
-`specifies parameter ":many" without containing a RETURNING clause`。
-二分排查（逐段删注释复测）定位到：**注解行的紧邻上一行中文注释过长时，
-sqlc v1.31.1 的 scanner 会丢注解尾部 token**。
-修法：queries 文件注释全 ASCII。教训：**生成器的解析器不是编译器，
-别赌它对 Unicode 鲁棒**。
+**坑一：queries 文件里的长中文注释让 sqlc 解析错位（写于早期版本，
+本机 v1.31.1 未能复现）**。
+当时的现象：`-- 命名查询：...` 这行 60+ 字节的中文注释放在注解行的
+紧邻上一行，下一条 `-- name: ListUsersOlderThan :many` 被解析成
+"没有类型后缀"，报 `specifies parameter ":many" without containing
+a RETURNING clause`。2026-10-12 审读复测：把同措辞长中文注释贴到
+`-- name: GetUser :one` 上一行，`sqlc generate` 成功（RC=0），
+两次构造（60+ 字节、带全角冒号原句）均不复现。修法（注释全 ASCII）
+作为防御保留。教训不变：**生成器的解析器不是编译器，别赌它对
+Unicode/版本鲁棒**；跑不出就写"未能复现"，不硬编故事。
 
 **坑二：迁移注释里写了 `-- goose` 字样**。
 `-- goose 的 SQL 迁移约定：文件名 NNNN_name.sql，-- +goose Up / Down 分区。`
@@ -177,8 +179,8 @@ sqlc v1.31.1 的 scanner 会丢注解尾部 token**。
 不是时间戳。测试断言写 `20260101000000` 就红了。先跑一遍看真实值，
 再固化断言。
 
-两个翻车的共同形状：报错信息都不指向真凶（一个报 SQL 语法，一个报
-注解解析），定位靠二分 + 怀疑生成器本身。这是用代码生成工具的基本功。
+坑二的形状：报错信息不指向真凶（报注解解析，不报"你的注释里写了
+注解字面量"），定位靠二分 + 怀疑生成器本身。这是用代码生成工具的基本功。
 
 ## 动手：练习 p11sqlm（30-45 分钟）
 
@@ -186,7 +188,7 @@ sqlc v1.31.1 的 scanner 会丢注解尾部 token**。
 cd /Users/akka/Dev/learning/go
 sqlc generate                                  # 改了 .sql 后重新生成
 go test -race ./exercises/p11sqlm/             # 验收：3 tests 全绿
-goose -dir exercises/p11sqlm/migrations status # 看版本表（需一个真实 sqlite 文件库）
+go run github.com/pressly/goose/v3/cmd/goose@v3.28.0 sqlite3 "file:/tmp/p11.db" -dir exercises/p11sqlm/migrations status  # 看版本表（v3.28 CLI：DRIVER DBSTRING 前置，file 库随跑随建）
 ```
 
 **预测题**（跑之前写答案）：
@@ -196,7 +198,8 @@ goose -dir exercises/p11sqlm/migrations status # 看版本表（需一个真实 
 2. 新建迁移 `0003_posts.sql` 后，`GetDBVersion` 返回几？Down 一层呢？
    （§问题 2）
 3. 在 `users.sql` 的 `-- name: GetUser :one` 上一行贴一条 60 字节的
-   中文注释，`sqlc generate` 会成功吗？报错长什么样？（§问题 4）
+   中文注释，`sqlc generate` 会成功吗？（实测 v1.31.1：会成功；坑一
+   写于早期版本、未能复现，先跑再下结论）（§问题 4）
 
 **观察验证**：
 
@@ -257,8 +260,11 @@ sql:
 ListUsers/ListUsersOlderThan/UpdateBio/DeleteUser/CountUsers，
 ASCII-only 注释守则写在文件头第一行。
 
-### 翻车复现记录
+### 翻车复现记录（2026-10-12 审读复测）
 
-坑一、坑二的具体报错文本、二分排查过程保留在 git history
-（`exercises/p11sqlm/queries/users.sql` 文件头注释有英文存档）。
-上游值得提 issue：sqlc scanner 对长 CJK 注释的处理。
+坑二已复现：迁移文件首行加 `-- goose 的 SQL 迁移约定：... -- +goose Up / Down 分区。`
+注释后，goose v3.28.0 报 `failed to parse SQL migration file: failed to
+parse annotation ... invalid annotation`（go run
+github.com/pressly/goose/v3/cmd/goose@v3.28.0 ... up 实拍）。
+坑一本机 v1.31.1 两次构造均未复现，报错文本按历史记录转述，不再声称
+可复现。上游 issue 是否值得提，以复现为准。

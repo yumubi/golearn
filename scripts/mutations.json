@@ -374,5 +374,241 @@
       "./dnsproxi-go/"
     ],
     "expect": "FAIL"
+  },
+  {
+    "id": "p8-httpkv-deny",
+    "note": "P8 JSON 收紧：删掉 DisallowUnknownFields 后未知字段请求不再 400",
+    "file": "exercises/p8fast/httpkv/main.go",
+    "find": "\tdec.DisallowUnknownFields() // encoding/json 默认忽略未知字段，这里收紧成报错\n",
+    "replace": "",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestHTTPKV",
+      "./exercises/p8fast/httpkv/"
+    ],
+    "expect": "unknown field status"
+  },
+  {
+    "id": "p8-maxk-ok-flag",
+    "note": "P8 (T,ok) 惯例：空切片 MaxK 返回 ok=true 破坏惯例",
+    "file": "exercises/p8fast/p8fast.go",
+    "find": "return zero, false",
+    "replace": "return zero, true",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestMaxK",
+      "./exercises/p8fast/"
+    ],
+    "expect": "want (0,false)"
+  },
+  {
+    "id": "p8-get-miss-err",
+    "note": "P8 httpkv 404 语义：get 未命中不再返回 err，ghost GET 变 200",
+    "file": "exercises/p8fast/httpkv/main.go",
+    "find": "\tif !ok {\n\t\treturn Item{}, errNotFound\n\t}\n\treturn v, nil",
+    "replace": "\tif !ok {\n\t\treturn Item{}, nil\n\t}\n\treturn v, nil",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestHTTPKV",
+      "./exercises/p8fast/httpkv/"
+    ],
+    "expect": "missing key status"
+  },
+  {
+    "id": "p9-withtx-norollback",
+    "note": "P9 事务纪律：WithTx 的 defer Rollback 改成 Commit 后错误路径不回滚",
+    "file": "exercises/p9db/p9db_test.go",
+    "find": "defer tx.Rollback() // Commit 后是幂等的 ErrTxDone，无害",
+    "replace": "defer tx.Commit()",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestTxAtomicity",
+      "./exercises/p9db/"
+    ],
+    "expect": "tx not rolled back"
+  },
+  {
+    "id": "p9-sqlite-shared",
+    "note": "P9 环境坑：去 cache=shared 后池多连接看不到表",
+    "file": "exercises/p9db/p9db_test.go",
+    "find": "file:p9db_test?mode=memory&cache=shared",
+    "replace": "file:p9db_test?mode=memory",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestPoolConcurrency",
+      "./exercises/p9db/"
+    ],
+    "expect": "no such table"
+  },
+  {
+    "id": "p9-cancel-deadline",
+    "note": "P9 ctx 取消：50ms 改 50s 后长查询不再被及时取消",
+    "file": "exercises/p9db/p9db_test.go",
+    "find": "50*time.Millisecond",
+    "replace": "50*time.Second",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-timeout",
+      "20s",
+      "-run",
+      "TestContextCancel",
+      "./exercises/p9db/"
+    ],
+    "expect": "long query should be cancelled"
+  },
+  {
+    "id": "p10-put-validation",
+    "note": "P10 错误码语义：空 key 返回 NotFound 而非 InvalidArgument，状态码断言死",
+    "file": "exercises/p10grpc/server/server.go",
+    "find": "return nil, status.Errorf(codes.InvalidArgument, \"key required\")",
+    "replace": "return nil, status.Errorf(codes.NotFound, \"key required\")",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestUnary",
+      "./exercises/p10grpc/server/"
+    ],
+    "expect": "want InvalidArgument(3)"
+  },
+  {
+    "id": "p10-bulkset-eof",
+    "note": "P10 客户端流收尾：io.EOF 判定改 ErrUnexpectedEOF 后 CloseAndRecv 收不到汇总",
+    "file": "exercises/p10grpc/server/server.go",
+    "find": "if err == io.EOF { // 客户端 CloseSend → 正常收尾",
+    "replace": "if err == io.ErrUnexpectedEOF {",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestClientStreamBulkSet",
+      "./exercises/p10grpc/server/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p10-bufnet-scheme",
+    "note": "P10 bufconn 惯用咒语：去 passthrough:/// 前缀后真去解析 bufnet 地址",
+    "file": "exercises/p10grpc/server/server_test.go",
+    "find": "\"passthrough:///bufnet\"",
+    "replace": "\"bufnet\"",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestUnary",
+      "./exercises/p10grpc/server/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p10-unimpl-shim",
+    "note": "P10 预测题 1：删 UnimplementedKVServer 内嵌后 RegisterKVServer 调用点编译失败",
+    "file": "exercises/p10grpc/server/server.go",
+    "find": "\tkvpb.UnimplementedKVServer // 见上：理解了再决定留不留；生产常保留\n",
+    "replace": "",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestUnary",
+      "./exercises/p10grpc/server/"
+    ],
+    "expect": "missing method mustEmbedUnimplementedKVServer"
+  },
+  {
+    "id": "p11-withtx-commit",
+    "note": "P11 事务纪律：withTx 的 defer Rollback 改 Commit 后错误路径不回滚，q.WithTx 场景回滚断言死",
+    "file": "exercises/p11sqlm/helpers.go",
+    "find": "defer tx.Rollback()",
+    "replace": "defer tx.Commit()",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestWithTxGenerated",
+      "./exercises/p11sqlm/"
+    ],
+    "expect": "rollback failed"
+  },
+  {
+    "id": "p11-delete-rows",
+    "note": "P11 execrows 影响行数：DeleteUser 恒返 1 后第二次删除断言死",
+    "file": "exercises/p11sqlm/db/users.sql.go",
+    "find": "return result.RowsAffected()",
+    "replace": "result.RowsAffected()\n\treturn 1, nil",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestGeneratedCRUD",
+      "./exercises/p11sqlm/"
+    ],
+    "expect": "second delete rows"
+  },
+  {
+    "id": "p11-goose-down",
+    "note": "P11 Down 必写：删 0002 的 Down 分区后 down/up 循环坏",
+    "file": "exercises/p11sqlm/migrations/0002_age.sql",
+    "find": "-- +goose Down\n-- sqlite 3.35+ 支持 DROP COLUMN\nALTER TABLE users DROP COLUMN age;",
+    "replace": "",
+    "run": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "TestGooseDownAndVersion",
+      "./exercises/p11sqlm/"
+    ],
+    "expect": "FAIL"
+  },
+  {
+    "id": "p12-rollback-commit",
+    "note": "P12 事务纪律：withTxPgx 的 defer Rollback 改 Commit 后错误路径不回滚",
+    "file": "exercises/p12pgx/helpers.go",
+    "find": "defer tx.Rollback(ctx)",
+    "replace": "defer tx.Commit(ctx)",
+    "run": [
+      "sh",
+      "-c",
+      "P12_PG_DSN=\"postgres://postgres:p9@127.0.0.1:15433/p12?sslmode=disable\" go test -count=1 -run TestWithTxPgx ./exercises/p12pgx/"
+    ],
+    "expect": "rollback failed"
+  },
+  {
+    "id": "p12-top-order",
+    "note": "P12 排序语义：TopArticles ORDER BY views 倒序改升序后 top 断言死",
+    "file": "exercises/p12pgx/db/articles.sql.go",
+    "find": "ORDER BY views DESC LIMIT $1",
+    "replace": "ORDER BY views ASC LIMIT $1",
+    "run": [
+      "sh",
+      "-c",
+      "P12_PG_DSN=\"postgres://postgres:p9@127.0.0.1:15433/p12?sslmode=disable\" go test -count=1 -run TestExecRowsAndTop ./exercises/p12pgx/"
+    ],
+    "expect": "FAIL"
   }
 ]

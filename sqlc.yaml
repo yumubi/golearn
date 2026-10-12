@@ -1,6 +1,15 @@
 version: '2'
 sql:
   # P11 的 sqlite 配置保留；P12 新增 pgx/v5 引擎：同一套工作流，换血一行。
+  - engine: sqlite
+    schema: exercises/p11sqlm/migrations
+    queries: exercises/p11sqlm/queries
+    gen:
+      go:
+        package: db
+        out: exercises/p11sqlm/db
+        sql_package: database/sql
+        emit_json_tags: true
   - engine: postgresql
     schema: exercises/p12pgx/migrations
     queries: exercises/p12pgx/queries
@@ -10,6 +19,9 @@ sql:
         out: exercises/p12pgx/db
         sql_package: pgx/v5 # 生成 pgx 原生 API（pgxpool/PgxTx），不是 database/sql
         emit_json_tags: true
-        overrides:
-          - db_type: pg_catalog.timestamptz
-            go_type: time.Time
+        # override 示例（按笔记 12.3：生产建议保留 pgtype.Timestamptz，故注释掉）。
+        # 注意：db_type 写法 pg_catalog.timestamptz 在 sqlc v1.31.1 实测不生效；
+        # 要映射成 time.Time 需 column 级写法：
+        # overrides:
+        #   - column: articles.created_at
+        #     go_type: time.Time
