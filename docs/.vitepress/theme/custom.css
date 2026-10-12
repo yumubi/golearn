@@ -26,14 +26,16 @@
   line-height: 1.4;
 }
 
-/* 移动端：本地导航栏收窄 + 标题不换行溢出 */
+/* 移动端：本地导航栏收窄 + 长词/长标题防溢出 */
 @media (max-width: 767px) {
   .VPLocalNav {
     height: 40px;
   }
 
-  .vp-doc {
-    /* 长代码块/表格允许横向滚动而不是撑破布局 */
+  .vp-doc,
+  .vp-doc h1,
+  .vp-doc h2,
+  .vp-doc h3 {
     overflow-wrap: break-word;
   }
 
