@@ -14,7 +14,7 @@ title: 怎么学：按阶段走
 ```mermaid
 flowchart LR
     subgraph S1["① 语法核心 · 半天到一天"]
-        P15[P1.5 语法速通] --> P2[P2 语言核心] --> P25[P2.5 惯用法] --> P3[P3 并发] --> P14[P14 errgroup]
+        P1_5[P1.5 语法速通] --> P2[P2 语言核心] --> P25[P2.5 惯用法] --> P3[P3 并发] --> P14[P14 errgroup]
     end
     subgraph S2["② 服务搭建 · 1 天"]
         P8[P8 标准库/HTTP] --> P9["P9/P12 数据库"] --> P6[P6 毕业项目读数]

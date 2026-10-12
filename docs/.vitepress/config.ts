@@ -1,6 +1,10 @@
 import { defineConfig } from 'vitepress'
+import { mermaidPlugin } from './theme/mermaid-plugin'
 
 // golearn 文档站。内容 = notes/*.md 原文，导航按"阶段"组织（编号是写作顺序）。
+// mermaid：markdown-it 插件把 ```mermaid fence 换成 <vitepress-mermaid> 组件
+//（见 theme/mermaid-plugin.ts + MermaidDiagram.vue；vitepress-plugin-mermaid
+// 会把 dayjs 塞进 optimizeDeps 导致 hydration 全站崩，弃用）。
 export default defineConfig({
   lang: 'zh-CN',
   title: 'golearn',
@@ -10,6 +14,9 @@ export default defineConfig({
   markdown: {
     // 教程里全是 ```sh/```go 代码块
     lineNumbers: false,
+    config: (md) => {
+      md.use(mermaidPlugin)
+    },
   },
   themeConfig: {
     siteTitle: 'golearn',
