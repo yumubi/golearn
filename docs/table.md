@@ -1,5 +1,5 @@
 ---
-title: 课程表：22 章速查
+title: 课程表：23 章速查
 ---
 
 # 课程表
@@ -30,6 +30,7 @@ title: 课程表：22 章速查
 | P17 | dnsproxi 指标落地 | [notes](/p17-dnsproxi-metrics) | `dnsproxi-go/` :9153 | ✅ 7=2+4+1 对账 + errors{reason} |
 | P18 | dnsproxi 日志落地 | [notes](/p18-dnsproxi-slog) | `dnsproxi-go/logger.go` | ✅ 每查询 req_id 注入 |
 | P19 | 生态与常用库选型地图 | [notes](/p19-ecosystem) | `exercises/p19eco/` | ✅ 4 tests（options/slog Handler/stringer） |
+| P20 | 写 CLI 工具（管道/flag/cobra/退出码/发布） | [notes](/p20-cli-tool) | `exercises/p20cli/`（含 cmd/） | ✅ 6 tests + wcgo 退出码实证 |
 
 ## 贯穿主线
 

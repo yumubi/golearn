@@ -12,7 +12,7 @@
 | ① 语法核心 | P1.5 → P2 → P2.5 → P3 → P14 | 半天到一天 | 能向别人复述每章 Take-away |
 | ② 服务搭建 | P8 → P12（或 P9）→ P6 LESSON.md | 1 天 | 能画出 dnsproxi 的请求路径 |
 | ③ 可观测性 | P13 → P15 → P16 → P17 → P18 | 1 天 | 能解释"为什么 req_id 不进 metrics label" |
-| ④ 按需查 | P1 进阶命令、P19 生态地图、P4/P5 精读法、P10/P11 | 用到才翻 | 无 |
+| ④ 按需查 | P1 进阶命令、P19 生态地图、P20 写 CLI 工具、P4/P5 精读法、P10/P11 | 用到才翻 | 无 |
 
 每章打开方式（详见 README）：先读章头“这章学完你能干什么”和正文的主要
 问题（正文是讲义），卡壳才翻章末参考。练习：预测题先写答案再跑对答案，
@@ -46,6 +46,7 @@
 | P17 dnsproxi 指标落地 | [notes/p17-dnsproxi-metrics.md](notes/p17-dnsproxi-metrics.md) | `dnsproxi-go/`（:9153/metrics） | ✅ RED 重建（qtype×outcome 低基数）+ cache_entries 双更新点 + 7=2+4+1 冒烟对账；P19 补 upstream_errors_total{reason} 双场景实测（refused/timeout） |
 | P18 dnsproxi 日志落地 | [notes/p18-dnsproxi-slog.md](notes/p18-dnsproxi-slog.md) | `dnsproxi-go/logger.go` | ✅ 独立 module 重写 ctxHandler（UDP 版每查询 ctx）+ [hit]/[miss] 结构化冒烟实拍；级别分层表 |
 | P19 生态与常用库选型地图 | [notes/p19-ecosystem.md](notes/p19-ecosystem.md) | `exercises/p19eco/` | ✅ 4 tests 全绿（functional options/slog Handler 门控/stringer generate） |
+| P20 写 CLI 工具（管道/flag/cobra/退出码/发布） | [notes/p20-cli-tool.md](notes/p20-cli-tool.md) | `exercises/p20cli/`（含 cmd/ 可跑） | ✅ 6 tests 全绿 + wcgo 真机退出码 0/1/2 实证 |
 
 ## 用法
 

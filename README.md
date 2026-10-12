@@ -25,7 +25,7 @@ flowchart LR
 | ① 语法核心 | P1.5 → P2 → P2.5 → P3 → P14 | Go 这门语言怎么写、怎么写得地道 | 必读，测试要真跑 |
 | ② 服务搭建 | P8 → P9 或 P12 → P6 LESSON | 一个真实后端怎么搭 | 必读；有 PG17 直读 P12 |
 | ③ 可观测性 | P13 → P15 → P16 → P17 → P18 | 上线后怎么看得见 | 整条弧连读，别拆散 |
-| ④ 按需参考 | P1 进阶命令、P19 生态地图、P4/P5（精读法）、P10（gRPC）、P11（goose） | 用到才翻 | 不排进日程 |
+| ④ 按需参考 | P1 进阶命令、P19 生态地图、P20 写 CLI 工具、P4/P5（精读法）、P10（gRPC）、P11（goose） | 用到才翻 | 不排进日程 |
 
 - **快速路径（有 Rust/Java 底子）**：①②③ 一共 2-3 天。跳过 P1/P4/P5，
   P12 替代 P9（若装着 PG17）。
@@ -74,6 +74,7 @@ cd /Users/akka/Dev/learning/go
 | P17 | 毕业项目指标落地（dnsproxi RED） | [notes/p17-dnsproxi-metrics.md](notes/p17-dnsproxi-metrics.md) | `dnsproxi-go/` :9153 | ✅ 7=2+4+1 冒烟对账 + errors{reason} 双场景实测 |
 | P18 | 毕业项目日志落地（dnsproxi slog） | [notes/p18-dnsproxi-slog.md](notes/p18-dnsproxi-slog.md) | `dnsproxi-go/logger.go` | ✅ 每查询 req_id 注入冒烟实拍 |
 | P19 | 生态与常用库选型地图 | [notes/p19-ecosystem.md](notes/p19-ecosystem.md) | `exercises/p19eco/` | ✅ 4 tests |
+| P20 | 写 CLI 工具（管道/flag/cobra/退出码/发布） | [notes/p20-cli-tool.md](notes/p20-cli-tool.md) | `exercises/p20cli/`（含 cmd/） | ✅ 6 tests + wcgo 退出码实证 |
 
 ## 网站版（VitePress，rust-for-frontend 同款体验）
 
