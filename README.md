@@ -77,6 +77,7 @@ cd /Users/akka/Dev/learning/go
 | P19 | 生态与常用库选型地图 | [notes/p19-ecosystem.md](notes/p19-ecosystem.md) | `exercises/p19eco/` | ✅ 4 tests |
 | P20 | 写 CLI 工具（管道/flag/cobra/退出码/发布） | [notes/p20-cli-tool.md](notes/p20-cli-tool.md) | `exercises/p20cli/`（含 cmd/） | ✅ 7 tests + wcgo 退出码实证 |
 | P21 | testing/synctest + fuzz（虚拟时钟/性质测试） | [notes/p21-testing-concurrency.md](notes/p21-testing-concurrency.md) | `exercises/p21test/`（含 cmd/retryrun） | ✅ 10 tests -race + FuzzParseArgs 60s 2853 万 execs |
+| P22 | 工具链深潜与文档工程（pprof/lint/generate/GODEBUG/go.work/doc 工程） | [notes/p22-toolchain-docs.md](notes/p22-toolchain-docs.md) | `exercises/p22tool/`（含 cmd/docstats） | ✅ 4 tests -race + CLI 退出码 0/1/2 + pprof 五 profile 实采 |
 
 ## 网站版（VitePress，rust-for-frontend 同款体验）
 

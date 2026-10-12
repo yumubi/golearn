@@ -194,3 +194,7 @@ go generate ./...                       # 显式触发，产物进 git
 
 对照 Rust 的宏/derive：Go 没有编译期元编程，**约定是生成代码提交
 进仓库**（stringer、mockgen、sqlc 都是这条路，P11 全靠 sqlc）。
+
+这节的每个主题的深潜版在 P22（工具链深潜与文档工程）：pprof 完整
+取证流程、golangci-lint、GODEBUG/GOEXPERIMENT 体系、go.work，以及
+文档工程（doc comment/Example 测试/版本发布）。

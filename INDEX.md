@@ -12,7 +12,7 @@
 | ① 语法核心 | P1.5 → P2 → P2.5 → P3 → P14 | 半天到一天 | 能向别人复述每章 Take-away |
 | ② 服务搭建 | P8 → P12（或 P9）→ P6 LESSON.md | 1 天 | 能画出 dnsproxi 的请求路径 |
 | ③ 可观测性 | P13 → P15 → P16 → P17 → P18 | 1 天 | 能解释"为什么 req_id 不进 metrics label" |
-| ④ 按需查 | P1 进阶命令、P19 生态地图、P20 写 CLI 工具、P21 测试武器（synctest/fuzz）、P4/P5 精读法、P10/P11 | 用到才翻 | 无 |
+| ④ 按需查 | P1 进阶命令、P19 生态地图、P20 写 CLI 工具、P21 测试武器（synctest/fuzz）、P22 工具链深潜与文档工程、P4/P5 精读法、P10/P11 | 用到才翻 | 无 |
 
 每章打开方式（详见 README）：先读章头“这章学完你能干什么”和正文的主要
 问题（正文是讲义），卡壳才翻章末参考。练习：预测题先写答案再跑对答案，
@@ -48,6 +48,7 @@
 | P19 生态与常用库选型地图 | [notes/p19-ecosystem.md](notes/p19-ecosystem.md) | `exercises/p19eco/` | ✅ 4 tests 全绿（functional options/slog Handler 门控/stringer generate） |
 | P20 写 CLI 工具（管道/flag/cobra/退出码/发布） | [notes/p20-cli-tool.md](notes/p20-cli-tool.md) | `exercises/p20cli/`（含 cmd/ 可跑） | ✅ 7 tests 全绿 + wcgo 真机退出码 0/1/2 实证 |
 | P21 testing/synctest + fuzz：时间与输入的测试武器 | [notes/p21-testing-concurrency.md](notes/p21-testing-concurrency.md) | `exercises/p21test/`（含 cmd/retryrun） | ✅ 10 tests -race（虚拟时钟 300ms 精确账本/泄漏 panic 指认/三种挂死真机形态）+ FuzzParseArgs 60s 2853 万 execs 实测 |
+| P22 工具链深潜与文档工程（pprof/lint/generate/GODEBUG/go.work/doc 工程） | [notes/p22-toolchain-docs.md](notes/p22-toolchain-docs.md) | `exercises/p22tool/`（含 cmd/docstats） | ✅ 4 tests -race 全绿 + CLI 退出码 0/1/2 实证 + pprof 五 profile 实采 |
 
 ## 用法
 
