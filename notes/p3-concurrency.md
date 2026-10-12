@@ -18,6 +18,8 @@ $ ulimit -s
 
 单位是 KB。这是地址空间的预留，不是实际占用，但 10 万个线程按这个值算要预留约 780 GiB 地址空间。线程做不到"一个请求一个执行体"。
 
+Java 21 的虚拟线程和 Kotlin 的协程解决的是同一个问题。JS 干脆只有一个线程，用事件循环加 `async/await` 交错执行，所以没有这里说的代价，也没有真正的并行。
+
 Go 的办法是把执行体做成用户态的 goroutine，由运行时复用到少量线程上。调度器有三个角色：G 是 goroutine，M 是 OS 线程，P 是持有运行队列的调度上下文。
 
 ## goroutine
@@ -60,6 +62,8 @@ worker 0
 ```
 
 三个 worker 的顺序每次可能不同。调度器不保证先起的先跑。
+
+对 Java 读者，`wg.Wait()` 像 `CountDownLatch`。对 Kotlin 读者，`go` 像 `launch`，但不需要 `CoroutineScope`，也没有结构化并发，goroutine 泄漏要自己防。对 JS 读者，`Promise.all` 是最接近的东西。
 
 和 tokio 比，`go` 同样是急切的：语句执行完 goroutine 就已经可以被调度了。区别是 Go 没有 `.await`，让出点由编译器和运行时在函数调用处插入，源码里看不到。
 
@@ -154,6 +158,8 @@ range 收到 30
 
 `range` 会一直收到 channel 关闭。关闭后再接收得到零值，`ok` 是 `false`。
 
+无缓冲 channel 在 Java 里最像 `SynchronousQueue`，有缓冲的像 `ArrayBlockingQueue`，Kotlin 有同名的 `Channel`。JS 没有对应物。
+
 只有发送方应该 `close`，对已关闭的 channel 再发送会 panic。这和 Rust 里 drop 掉 `Sender` 是同一个意思，不同的是 Go 要你手动写。练习 `TestPool` 的 worker 就靠 `close(jobs)` 知道该退出。
 
 ## select
@@ -176,6 +182,8 @@ $ go run main.go
 超时
 拿到 结果
 ```
+
+Kotlin 的 `select {}` 和 JS 的 `Promise.race` 做类似的事，Java 标准库里没有。
 
 `select` 有三个要记的规则：
 
@@ -223,6 +231,8 @@ true
 - 谁创建谁 `cancel`，通常是 `defer cancel()`。
 - ctx 只传取消信号、截止时间和请求级数据，不传业务参数。
 
+Kotlin 的 `Job.cancel()` 靠作用域传播，JS 用 `AbortController` 加 `AbortSignal`，Java 靠 `Thread.interrupt()` 加手动检查。Go 的 ctx 最像 `AbortSignal`：显式传、显式检查。
+
 Rust 的取消在类型系统里，drop 自动触发。Go 的取消在参数列表里，你忘了传或忘了检查，取消就静默失效。所以 ctx 靠纪律，不靠编译器。
 
 ## 数据竞争
@@ -244,7 +254,9 @@ $ go run main.go
 c = 946
 ```
 
-结果不是 1000，每次跑还不一样。编译器一声不吭，因为 Go 没有 borrow checker，也没有 `Send`/`Sync`。
+结果不是 1000，每次跑还不一样。JS 单线程，没有这类问题。Java 和 Kotlin 读者对 `synchronized`、`volatile` 和 `AtomicLong` 很熟，Go 的 `Mutex` 和 `atomic` 一一对应。
+
+编译器一声不吭，因为 Go 没有 borrow checker，也没有 `Send`/`Sync`。
 
 防线是 race detector，加 `-race` 运行：
 
@@ -326,6 +338,8 @@ $ echo $?
 
 `main` 的最后一行永远没机会打印。任何 goroutine panic 都会杀掉整个进程，退出码 2。tokio 里 task panic 只杀该 task。
 
+Java 的线程里抛出未捕获异常，只终止该线程。Node 里未处理的异常默认也会终止整个进程，和 Go 更接近。
+
 所以每个 goroutine 的入口都要想清楚要不要 `recover`。批量任务的生命周期交给 errgroup（P14 展开）。
 
 ## 小结
@@ -400,3 +414,15 @@ go test -race -run TestCounters -v ./exercises/p3conc/    # race detector 绿灯
 | task panic 只杀该 task | goroutine panic 杀全进程 | 每个入口自己 recover |
 
 时间相关的并发测试（Sleep 和计时器怎么测）见 P21，`testing/synctest` 提供假时钟。
+
+### Java/Kotlin 与 TS/JS 类比
+
+| 概念 | Java / Kotlin | TS / JS |
+|---|---|---|
+| `go f()` | 虚拟线程 `Thread.ofVirtual().start`，Kotlin `launch` | 无，`async` 函数只是交错执行 |
+| `WaitGroup` | `CountDownLatch`，Kotlin `coroutineScope` | `Promise.all` |
+| `chan T` | `BlockingQueue`，Kotlin `Channel` | 无，近似异步迭代器 |
+| `select` | Kotlin `select {}` | `Promise.race` |
+| `context.Context` | Kotlin `Job` 取消，Java `Thread.interrupt` | `AbortSignal` |
+| `Mutex` / `atomic` | `synchronized` / `AtomicLong` | 无，单线程 |
+| goroutine panic | 只杀该线程 | Node 未处理异常默认杀进程 |

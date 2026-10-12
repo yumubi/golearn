@@ -29,7 +29,7 @@ int 的大小: 8
 
 接口值是两个机器字，64 位机上共 16 字节。第一个字指向类型信息和方法表，叫 itab，第二个字指向实际数据。
 
-通过接口调用方法，就是先查 itab 找到函数地址，再间接调用。这和 Rust 的 trait object（胖指针加 vtable）是同一个设计。
+通过接口调用方法，就是先查 itab 找到函数地址，再间接调用。这和 Rust 的 trait object（胖指针加 vtable）是同一个设计，也是 Java 接口调用在 JVM 里的 `invokeinterface` 要做的事。
 
 另一件事是零值。Go 分配内存时会清零，所以任何类型的"全 0 字节"状态都是合法的零值。后面"零值"一节会用到这个事实。
 
@@ -59,6 +59,8 @@ robot-7: beep
 
 `Dog` 和 `Robot` 没写过 `impl Speaker for Dog`，也互相不认识。Go 的规则是结构化满足：类型的方法集覆盖接口的方法集，就自动实现了这个接口。
 
+这和 TypeScript 的结构化类型是同一个思路：对象形状对得上就行。Java 和 Kotlin 则要显式写 `implements` 或 `: Speaker`。
+
 检查发生在编译期。给一个没有 `Speak` 的类型试试：
 
 ```sh
@@ -69,7 +71,7 @@ $ go run main.go
 
 由此带来一个惯例：接口定义在使用方。`Searcher` 接口写在调用它的包里，被调用的包根本不知道自己被抽象了。标准库全是一两个方法的小接口。
 
-代价是方法必须和类型定义在同一个包里。所以你不能给 `string` 加方法，也不能给别人的类型补方法。
+代价是方法必须和类型定义在同一个包里。所以你不能给 `string` 加方法，也不能给别人的类型补方法。Kotlin 的扩展函数、JS 的 `prototype` 扩展，Go 都不给。
 
 ## 方法集
 
@@ -118,6 +120,8 @@ hi
 
 两行完全等价。`g.Hello()` 是编译期转发糖，编译器把它改写成 `g.Base.Hello()`。
 
+Kotlin 读者可以把它看成没有 `by` 关键字的委托。Java 读者要注意，这里没有 `extends`，没有 `super`，也没有 `@Override`。
+
 这不是继承。想把 `g` 赋给 `Base` 类型的变量，编译器会拒绝：
 
 ```go
@@ -156,7 +160,7 @@ Child
 
 ## 错误
 
-Go 没有 `Result` 和 `?`。`error` 是一个普通接口，错误就是返回值，`if err != nil` 是习惯不是语法。
+Go 没有 `Result` 和 `?`，也没有 `try/catch`。`error` 是一个普通接口，错误就是返回值，`if err != nil` 是习惯不是语法。
 
 要解决的第一件事，是让错误带上下文，同时调用方还能认出它是哪一类。用 `%w` 包装：
 
@@ -207,6 +211,8 @@ key = user:42
 AsType key = user:42
 ```
 
+`%w` 对应 Java 的 `new Exception(msg, cause)` 和 JS 的 `new Error(msg, { cause })`，`errors.As` 对应 `catch` 里按类型匹配，也就是 `instanceof`。
+
 分界线是：`Is` 按值比 sentinel，`As` 按类型取结构体。两者都沿着 `Unwrap()` 链穿透。练习 `TestErrorWrapping`、`TestErrorAs` 和 TestAsTypeVsAs 各练一种。
 
 ## 接口里的 nil
@@ -246,7 +252,7 @@ func good(fail bool) error {
 }
 ```
 
-练习 `TestInterfaceNil` 的参考实现就是这样。Rust 没有这个坑，`Option<Box<dyn T>>` 把"没有"写在类型里。
+练习 `TestInterfaceNil` 的参考实现就是这样。Rust 没有这个坑，`Option<Box<dyn T>>` 把"没有"写在类型里。Java 和 JS 的 `null` 只有一种，也不会遇到。
 
 ## 零值
 
@@ -272,6 +278,8 @@ $ go run main.go
 hello world
 [1] 1
 ```
+
+Java 的字段也有默认零值，但局部变量没有，且对象引用默认是 `null`。Go 的零值覆盖所有类型，切片和 map 的零值是 nil。
 
 nil 切片能直接 `append`。但 map 不行：
 
@@ -428,3 +436,15 @@ FAIL
 - 零值可用是传递的：`SyncedBuffer{lock, buffer}` 的两个字段零值都可用，整体就可用（Effective Go 原例）。
 - `new(T)` 等价于 `&T{}`，字面量能带字段值。`new` 在 1.26 起也能带初始化值。
 - P15 的 `slog.NewJSONHandler` 必须传 writer，opts 传 nil 则落回默认级别。
+
+### Java/Kotlin 与 TS/JS 类比
+
+| 概念 | Java / Kotlin | TS / JS |
+|---|---|---|
+| 隐式满足接口 | 需 `implements`，Kotlin 需 `: Iface` | 结构化类型，最接近 |
+| 嵌入 | Kotlin `by` 委托，Java 无 | 组合或 mixin |
+| 方法提升 | 无，Java 用 `extends` | 无 |
+| `error` 返回值 | checked exception，Kotlin `Result` | `try/catch`，`Error` 的 `cause` |
+| `errors.As` | `catch` 加 `instanceof` | `instanceof Error` 子类 |
+| 零值 | 字段默认值，局部变量无 | `undefined` |
+| type switch | `switch` 模式匹配（Java 21） | `typeof` 与 `instanceof` |

@@ -9,6 +9,8 @@
 
 程序运行时，变量放在两个地方。栈跟着函数调用走，函数返回就收回，几乎零成本。堆由垃圾回收（GC）管理，分配和回收都有开销。
 
+Java 读者对此很熟：JVM 也做逃逸分析。JS 引擎同理。区别是 Java 的对象默认都在堆上，Go 的结构体默认在栈上。
+
 Go 不让你选。编译器做逃逸分析：变量如果在函数返回后还被引用，就放到堆上。看一个例子：
 
 ```go
@@ -55,6 +57,8 @@ fmt.Println(a, b, c, x, y)
 $ go run main.go
 1 2 3 1 hi
 ```
+
+Kotlin 的 `val`/`var` 和 TS 的 `const`/`let` 都不强制这一点。Go 把"声明了不用"升格成编译错误。
 
 声明了不用是编译错误，不是 Rust 那样的 warning：
 
@@ -135,7 +139,7 @@ $ go run main.go
 99
 ```
 
-后几行省略的表达式会隐式重复上一行。最后一行说明了 Go 的"枚举"只是 `int` 加常量，`Level(99)` 照样编译通过，没有 Rust `enum` 的类型安全。练习 `TestIota` 练的就是这个。
+Java 的 `enum` 和 TS 的 `enum` 都是真正的类型，Go 没有。后几行省略的表达式会隐式重复上一行。最后一行说明了 Go 的"枚举"只是 `int` 加常量，`Level(99)` 照样编译通过，没有 Rust `enum` 的类型安全。练习 `TestIota` 练的就是这个。
 
 ## for 与 range
 
@@ -168,6 +172,8 @@ $ go run main.go
 ```
 
 遍历字符串时，`i` 是字节下标，`r` 是字符。"语"从字节 2 开始，所以下标是 2，下一个字符就是 5 了，下面"字符串"一节会解释。
+
+JS 读者会觉得眼熟：1.22 之前的 Go 像 `var`，之后像 `let`。
 
 1.22 起循环变量每轮新建。闭包捕获它再也不会出错：
 
@@ -209,6 +215,8 @@ len 5 cap 8
 ```
 
 容量不够时分配一块更大的数组并拷贝，通常翻倍。
+
+Java 的 `List.subList` 同样是视图，JS 的 `Array.slice` 则会拷贝，`Uint8Array.subarray` 才是视图。
 
 子切片 `a[1:3]` 不拷贝，和原切片共享同一块数组。Rust 的借用检查会拦住这种别名，Go 不会：
 
@@ -267,6 +275,8 @@ $ go run main.go
 1 true
 ```
 
+Java 的 `HashMap.get` 缺键返回 `null`，JS 的 `Map.get` 返回 `undefined`，Go 返回零值，没法靠 `null` 判断。
+
 这是第一个坑：取缺失的键返回零值，不报错。需要区分"没有"和"值就是零"时，必须用 `v, ok :=`。
 
 第二个坑是 nil map 能读不能写，写入直接 panic（见 P2 的"零值"一节）。
@@ -321,6 +331,8 @@ $ go run main.go
 4 4
 0:G 1:o 2:语 5:言
 ```
+
+Java 和 JS 的字符串是 UTF-16，`"Go语言".length` 是 4，遇到 emoji 才出现这类问题。Go 是 UTF-8，坑在汉字上就出现了。
 
 `Go` 占 2 字节，"语言"各占 3 字节，共 8。`s[2]` 是"语"的第一个字节 232，不是字符。
 
@@ -392,6 +404,8 @@ float64 3.5
 `fallthrough` 会强行进入下一个分支，几乎不用，见到先怀疑是 bug。练习 `TestGrade` 对应无表达式 `switch`。
 
 ## defer
+
+它相当于 Java 的 `try/finally` 和 `try-with-resources`、Kotlin 的 `use`、JS 的 `finally`，但写在资源获取的下一行。
 
 `defer` 把一个调用推迟到当前函数返回前执行。粒度是函数，不像 Rust 的 `Drop` 是作用域。它有三条精确语义。
 
@@ -550,6 +564,8 @@ fmt.Println(c.n)
 ```
 
 ## 值语义与引用语义
+
+Java 和 JS 的对象变量本身就是引用，传参拷贝的是引用。Go 的结构体是值，要引用必须自己写 `*`。
 
 Go 的传参和赋值一律是拷贝。有些类型内部含指针，拷贝的是"头"，这就是体系背景里那组数字的含义：
 
@@ -713,3 +729,16 @@ outer:
 | 泛型 | 全功能 | 接口约束（P8） |
 | 字符串 | `String` 可变，`&str` 只读 | 统一只读，改靠重建 |
 | 迭代器 | 惰性链为主 | 显式 `for` 为主，`iter` 包是补充 |
+
+### Java/Kotlin 与 TS/JS 类比
+
+| 概念 | Java / Kotlin | TS / JS |
+|---|---|---|
+| `:=` | Kotlin `val`，Java `var` | `const` / `let` |
+| `iota` 枚举 | `enum` 类 | `enum` |
+| 切片子视图 | `List.subList` | `subarray`（`slice` 会拷贝） |
+| map 缺键 | `null` | `undefined` |
+| 字符串 | UTF-16 | UTF-16 |
+| `defer` | `finally`，`use` | `finally` |
+| 闭包循环变量 | 须 effectively final | `let` 每轮新建，`var` 共享 |
+| 结构体传参 | 对象是引用 | 对象是引用 |
