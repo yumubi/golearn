@@ -251,7 +251,7 @@ go test ./exercises/p2_5idiom/ -v
 `-run 'TestTableDriven/empty'` 只跑一个子用例，体会 table-driven 的
 定位成本。
 
-**改造题**：给 `Fetcher` 接口加一个内存假实现（fake），不用 mock
+**改造题**（参考答案是 `TestFake` 里的 `fakeReader`）：给 `Fetcher` 接口加一个内存假实现（fake），不用 mock
 框架：体会"Go 测试靠手写 fake，接口小所以 fake 也小"。
 
 ## Take-away
