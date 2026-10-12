@@ -117,7 +117,8 @@ for { }                         // loop（死循环，配 break）
 for i, v := range xs { }        // Rust for (i, &v) in xs.iter().enumerate()
 ```
 
-`range` 的五类目标，返回值个数不同（这是高频坑源）：
+`range` 的目标共 8 类（语言规范 range 小节，Go 1.26 仍是这 8 类），
+返回值个数不同（这是高频坑源）：
 
 | 目标 | 形态 | 等价 Rust |
 |---|---|---|
@@ -126,10 +127,17 @@ for i, v := range xs { }        // Rust for (i, &v) in xs.iter().enumerate()
 | map | `for k, v := range m` | 迭代**无序**（每次运行顺序可能不同） |
 | 字符串 | `for i, r := range str` | i 是**字节下标**，r 是 rune（见 §6） |
 | channel | `for v := range ch` | 迭代到 close（P3） |
+| 整数（1.22） | `for i := range n`，不用下标写 `for range n` | `for i in 0..n` |
+| 函数 1 值（1.23） | `for v := range seq`，seq 是 `iter.Seq[V]` | `impl Iterator<Item = V>` |
+| 函数 2 值（1.23） | `for k, v := range seq2`，seq2 是 `iter.Seq2[K, V]` | `Iterator<Item = (K, V)>` |
+
+函数形态还有 0 值版本（`func(yield func() bool)`），极少用。
+函数迭代器是"推式"（迭代器调用循环体，循环体返回 false 即 break），
+Rust 的 Iterator 是"拉式"（调用方 `next()`），所以 Go 里没有
+`.map().filter()` 链，组合靠 `slices`/`maps` 包的函数（P8 迭代器节）。
 
 Go 1.22 起 range 循环变量**每轮新建**，闭包捕获不再踩共享变量的坑
-（1.22 前是全 notes 最经典的 bug 源）。1.23 起 `range` 还能迭代
-`iter.Seq` 函数（P8 迭代器节）。
+（1.22 前是全 notes 最经典的 bug 源）。
 
 ## §4 数组、切片与底层结构
 
