@@ -270,6 +270,9 @@ dec.DisallowUnknownFields()           // ≈ deny_unknown_fields（默认忽略�
 PUT handler 开着 `DisallowUnknownFields`，带 `bogus:1` 的请求吃 400。
 `omitzero` 的可编译例子（含自定义 IsZero）：
 `exercises/p8fast/modern_std_test.go` 的 TestOmitZero。
+`encoding/json/v2` 是实验性下一代（GOEXPERIMENT=jsonv2 启用，默认关）：
+反序列化热点值得盯（1.26 实测 Unmarshal 2 倍速、分配 6→1），
+Marshal 暂无优势，API 未定型别上生产。详见 P19。
 
 **优雅关停（你 dnsproxi G5 的 HTTP 版）**：
 

@@ -37,7 +37,7 @@ Go 社区与 Rust 生态最大的气质差异：**Rust 惯于 `tokio`+`serde`+
 |---|---|---|
 | HTTP 服务 | `net/http` | 1.22+ 路由模式匹配（`r.PathValue`），不用框架 |
 | HTTP 客户端 | `net/http` | `http.Client` 连接池内置，配 Timeout |
-| JSON | `encoding/json` | serde 对标（能力弱些但够用） |
+| JSON | `encoding/json` | serde 对标（能力弱些但够用）；下一代 `encoding/json/v2` 实验中（见下） |
 | 日志 | `log/slog`（1.21+） | 结构化日志官方答案（P15 深潜） |
 | 时间 | `time` | 不引 dayjs 类库 |
 | 并发原语 | `sync`/`channel` | 锁、Once、WaitGroup 全在 |
@@ -49,6 +49,14 @@ Go 社区与 Rust 生态最大的气质差异：**Rust 惯于 `tokio`+`serde`+
 **`golang.org/x/...` 是半官方特区**：核心团队维护、API 可能变但
 事实上生产标配（errgroup、crypto 补充、net 路由）。看到它别当
 第三方警惕。
+
+**`encoding/json/v2`（实验性，GOEXPERIMENT=jsonv2 才启用）**：默认关，
+`import "encoding/json/v2"` 在默认构建直接编译失败（实测：
+"build constraints exclude all Go files"）。何时值得关注：反序列化
+热点路径。1.26 实测（本机 M4，100000x bench）：同一 struct
+Unmarshal v1 296.8ns/6 allocs vs v2 147.1ns/1 alloc（2 倍速、
+6 分之 1 分配），Marshal 两者相近（v1 71ns vs v2 136ns，v2 反而慢）。
+API 定型前别上生产。
 
 **什么时候破例**：标准库没有的领域，数据库驱动（database/sql 只
 是接口）、gRPC、指标、分布式追踪。这时才进问题 2 的选型地图。

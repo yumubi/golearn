@@ -250,6 +250,8 @@ P50/P90/P99 分位、PCG 种子）+ 五档同机压测 + `dnsproxi-go/LESSON.md`
 3. 准入/老化的开销在噪声内：TinyLFU 4 hash + 4 Or、每秒 10 老化
    周期，万级 qps 下都不是瓶颈（D5/D6 "预算内做正确性"的实测注脚）。
 4. P50 Rust 稳定快（表内五档差 0.14-0.63ms）；Go 偶发 GC 停顿进 max（30-170ms 离群）。
+   （GC 侧跟进：Go 1.26 起 Green Tea GC 默认开，alloc 微基准下与老 GC
+   区间交叠，见 `labs/experiments/results-gc-2026-10-12.md`。）
 
 **翻车×2（都在压测器，不在被测系统）**：① dnsq 的
 `SetReadDeadline` 只设一次，第 2 包起 deadline 已过期 → 96% 假丢包，
