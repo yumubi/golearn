@@ -152,6 +152,14 @@ scanner := bufio.NewScanner(f)        // 逐行：默认 64KB 行长上限
 scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)  // 长行要调大
 ```
 
+路径安全进阶：扫描"用户指定的目录"时用 `os.Root`（1.24+）：
+`r, _ := os.OpenRoot(root)` 后 `r.Stat(name)`/`r.Open(name)` 只接受
+根内相对路径，`..` 逃逸、绝对路径、symlink 出根一律报错，比手写
+`filepath.Clean` + 前缀检查可靠。可编译例子：
+`exercises/p20cli/root.go`（TestRootEscape 演示逃逸被拒）。Rust
+对照：`std::path` 组件级检查（`Components` 逐段过滤）是约定做法，
+os.Root 把检查下沉到了 openat 系统调用层。
+
 `Scanner.Err()` 必查：**行太长/读出错时 Scan() 返回 false 但不报
 错**，漏查就是静默截断（数据类工具的大忌）。
 

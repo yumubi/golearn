@@ -287,7 +287,8 @@ Rust enum sum type 做不到的"运行时扩展点"（外部类型塞进统一�
 - Go 1.26 起有泛型的 `errors.AsType[E]`：取类型直接返回 (E, bool)，
   不再要先声明变量再传指针；`go doc errors.As` 的建议是
   "For most uses, prefer AsType"，`As` 保留给 target 不实现 error
-  的少数场景。
+  的少数场景。与 `errors.As` 并排可运行的对照例子：
+  `exercises/p2lang/astype.go`（TestAsTypeVsAs，同一 %w 链两种取法）。
 - 判断 `context.DeadlineExceeded` 这类 sentinel 也走 `errors.Is`。
 - panic 只用于程序员 bug（≈ Rust panic!），不可恢复错误不进 panic。
 - 自定义错误类型建议实现 `Unwrap() error` 而不是埋字段，否则

@@ -246,6 +246,10 @@ go run -race -run TestPanicKillsProcess                   # 体会进程死亡�
 - "Don't communicate by sharing memory, share memory by
   communicating"（Effective Go）：channel 传数据 ≈ Rust 的 move
   语义，但没有编译器盯着，纯靠纪律 + `-race` 兜底。
+- `wg.Go(f)`（1.25+）：`go f` + `Add(1)` + 内部 `defer Done()` 三合一，
+  消灭"Add 忘在 goroutine 里"的竞态样板。可运行例子：
+  `exercises/p3conc/wggo.go`（TestWaitGroupGo）。Rust 对照：
+  `JoinSet::spawn` 自动计入集合，`wg.Go` 自动计入 WaitGroup。
 
 时间相关的并发测试（Sleep/计时器怎么测）见 P21（testing/synctest：
 假时钟零注入）。

@@ -112,6 +112,8 @@ Go 1.23+ 有迭代器（`iter.Seq` + range over func，最像 Rust 的部分）�
 ```go
 for i, v := range slices.All(xs) { }   // range over func，实际签名 iter.Seq2[int, V]
 maps.Keys(m)                           // map keys 迭代器，配合 slices.Sorted 排序
+strings.SplitSeq(s, sep)               // 1.24+：迭代器版 Split，不建切片，
+                                       // 大输入 + 早停省分配（TestSplitSeq）
 ```
 
 Rust 的 `.iter().filter().map().collect()` 链有了对应物，但**生态主流
@@ -256,6 +258,7 @@ type Item struct {
 	ID    int    `json:"id"`
 	Name  string `json:"name"`
 	Extra string `json:"extra,omitempty"` // None → 字段省略 ≈ Option + skip_serializing_if
+	Meta  Meta   `json:"meta,omitzero"`   // 1.24+：struct 零值/IsZero() 也能省（omitempty 对 struct 无效的老坑补上了）
 	// 没有 untagged enum！Rust 的 #[serde(untagged)] 在 Go 要手写 UnmarshalJSON
 }
 
@@ -270,6 +273,8 @@ dec.DisallowUnknownFields()           // ≈ deny_unknown_fields（默认忽略�
 没有 zero-copy。Go 的哲学：JSON 是数据交换格式不是类型系统延伸，
 复杂的 schema 用自定义 `UnmarshalJSON` 手写（20 行内解决）。httpkv 的
 PUT handler 开着 `DisallowUnknownFields`，带 `bogus:1` 的请求吃 400。
+`omitzero` 的可编译例子（含自定义 IsZero）：
+`exercises/p8fast/modern_std_test.go` 的 TestOmitZero。
 
 **优雅关停（你 dnsproxi G5 的 HTTP 版）**：
 

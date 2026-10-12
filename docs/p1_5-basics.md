@@ -505,6 +505,20 @@ struct 拷贝 vs slice 共享）。
 - 常量是无类型的：`const Big = 1 << 62` 赋给 int64 不溢出，
   先算后定型的。
 
+### 内建 min/max/clear（1.21+）
+
+```go
+lo, hi := min(a, b), max(a, b)   // 泛型：数值、字符串都行
+clear(m)                          // map：全删，len 0，引用不变
+clear(xs)                         // slice：元素归零，len 不变
+```
+
+注意 `min(xs...)` **不行**（内建不收变参），折叠着写：
+`lo = min(lo, x)`。可运行例子：`exercises/p1_5basics/builtin121.go`
+（配 TestMinMaxBuiltins/TestClearBuiltins）。Rust 对照：`a.min(b)`
+（Ord trait 方法）对应 `min(a, b)`；clear 无直接对应物（Rust 清空
+是 `map.clear()` 方法，Go 是内建函数）。
+
 ### 标签与 goto（知道即可）
 
 `break`/`continue`/`goto` 可带标签跳出多层循环（Rust 的
