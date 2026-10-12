@@ -229,13 +229,24 @@ go test ./exercises/p20cli/ -v
    退出码（1/1/2），`errors.Is` 穿透 `%w` 链识别用法错。
 4. `TestWalkCollect`：WalkDir 遍历 + 收集错误 + `.git` 剪枝，断言
    部分失败时结果仍完整、错误清单非空。
-5. `TestScanLongLine`：故意造 1MB 长行，验证不调 `scanner.Buffer`
-   会静默截断，调了才对（问题 3 的坑直接踩一遍）。
+5. `TestScanLongLine`：造一条 512KB 的长行（超过默认 64KB 上限），
+   断言 `Count` 调过 `scanner.Buffer` 后能完整读完（问题 3 的坑；
+   不调的后果见下面的预测题）。
 6. `TestRunPipeline`：stdin/文件两模式 + `-q` 静默 + 坏文件收集
    继续（问题 1 的"输出只进注入的 writer"验收）。
 7. `TestErrsCombineExtra`：钉住教学包里简化版 `errsCombine` 的行为
    （空列表返回 nil，多个错误计数并带首个），完整的 `errors.Join`
    版本在问题 4。
+
+**预测题**（先写答案再跑）：
+
+1. 把 `cli.go` 的 `Count` 里 `sc.Buffer(...)` 那行注释掉，
+   `TestScanLongLine` 会怎样？`sc.Scan()` 返回什么？错误从哪儿来？
+   （`Scan` 返回 false，`sc.Err()` 是 `bufio.ErrTooLong`；`Count` 的
+   `Err()` 检查把它包成 `scan: ...` 返回。漏查 `Err()` 才是静默截断。）
+2. `wcgo < /dev/null` 输出什么、退出码几？`wcgo --bogus` 呢？不存在的
+   文件呢？（`0 0 0` 退出 0；2；1。注意 `wcgo` 不带参数且 stdin 是终端时
+   不会报用法错，而是挂着等输入，因为它没做 isatty 检测。）
 
 **观察题**（终端里跑，测试没法替你感受）：
 
@@ -243,12 +254,18 @@ go test ./exercises/p20cli/ -v
 go run ./exercises/p20cli/cmd/ README.md          # 看输出
 go run ./exercises/p20cli/cmd/ README.md | wc -l  # 管道下数据干净
 go run ./exercises/p20cli/cmd/ /nonexistent; echo "exit=$?"  # exit=1
-go run ./exercises/p20cli/cmd/; echo "exit=$?"               # exit=2 用法错
+go run ./exercises/p20cli/cmd/ --bogus; echo "exit=$?"      # exit=2 用法错（未知 flag）
 ```
 
-**改造题**：给 `wcgo` 加 `-l`（只数行）flag + `--verbose` 日志
-开关，`go run ... -v README.md` 看日志走 stderr（用
-`2>/dev/null` 验证 stdout 数据不丢）。
+**改造题**：
+
+1. 补上参考节说的惯例：无文件参数且 stdin 是终端时打 usage、退出 2
+   （提示：`os.Stdin.Stat()` 的 `Mode()&os.ModeCharDevice != 0`），
+   在 `TestParseFlags` 或新测试里钉住，用 `go run ./exercises/p20cli/cmd/`
+   在真终端里验证不再挂起。
+2. 给 `wcgo` 加 `-l`（只数行）flag + `--verbose` 日志开关，
+   `go run ... -v README.md` 看日志走 stderr（用 `2>/dev/null`
+   验证 stdout 数据不丢）。
 
 ## Take-away
 

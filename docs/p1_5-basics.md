@@ -446,6 +446,10 @@ go test -run TestSliceShare -v ./exercises/p1_5basics/   # 单跑
 **观察题**：跑 `go test -v` 看 iota 块和 range-map 的输出；多跑几次
 range map，验证顺序真的会变（§5 坑 3 的实证）。
 
+**对照题**（断言即答案，读完对应小节再看）：`TestIota`（§2 枚举无类型
+安全）、`TestGrade`（§7 无表达式 switch）、`TestValueSemantics`（§12
+struct 拷贝 vs slice 共享）。
+
 **改造题**：`TestPointerReceiver` 里把 `Add` 改成值接收者，看编译
 错；再把接口断言改成 `&c`，想清楚为什么就绿了（§10）。
 

@@ -96,7 +96,7 @@ func TestScanLongLine(t *testing.T) {
 	r := strings.NewReader(long + "\n")
 	s, err := Count(r)
 	if err != nil {
-		t.Fatalf("调过 Buffer 后 1MB 行应完整: %v", err)
+		t.Fatalf("调过 Buffer 后 512KB 行应完整: %v", err)
 	}
 	// Scanner 不计换行：Bytes 只在本包 Count 里累加（含换行的字节由
 	// bufio 底层读入；这里断言行内容完整而不是字节精确值）。

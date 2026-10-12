@@ -3,7 +3,7 @@
 // go run ./exercises/p20cli/cmd/ README.md
 // go run ./exercises/p20cli/cmd/ README.md | wc -l   # stdout 纯数据
 // go run ./exercises/p20cli/cmd/ /nonexistent; echo "exit=$?"  # 1
-// go run ./exercises/p20cli/cmd/; echo "exit=$?"               # 2（无参数无管道）
+// go run ./exercises/p20cli/cmd/ --bogus; echo "exit=$?"      # 2（未知 flag = 用法错）
 package main
 
 import (

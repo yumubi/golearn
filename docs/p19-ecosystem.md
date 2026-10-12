@@ -185,6 +185,12 @@ go list -m all | head -20     # 看依赖树
    `go generate ./exercises/p19eco/` 跑 stringer，看 `level_string.go`
    生成物（体会 P1 generate 节 + P2.5 惯例的合流）。
 
+**预测题**：`TestPingCtx` 里 `NewServer(":0", WithTimeout(time.Hour))`
+后用一个已取消的 ctx 调 `Ping`，会等一小时吗？返回什么错误？
+（`select` 里 `ctx.Done()` 立刻就绪，返回 `context.Canceled`，这就是
+"ctx 第一参数"惯例的行为证据。）`TestStringer` 的 `Warn.String()`
+返回什么？为什么是小写（`-linecomment`）？
+
 **改造题**（在练习包里）：
 
 1. `TestSlogHandler`：给一个只打 `level>=warn` 的自定义 slog

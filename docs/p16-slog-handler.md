@@ -166,6 +166,11 @@ go test -race ./exercises/p16slogh/ ./exercises/p8fast/httpkv/
 | TestMultiHandler / Level | §16.5 | 双 sink 扇出 + 各自过滤 |
 | httpkv 全站 | §16.4 | 业务调用点零 req_id，输出仍有 |
 
+**观察题**：起 httpkv（`go run ./exercises/p8fast/httpkv/`），
+`curl -si localhost:8090/kv/nope`。响应头有 `X-Request-Id`，服务日志
+`kv miss` 那行有同一个 `req_id`；再回 `main.go` 找这行日志的调用点，
+确认调用点只写了 `key` 和 `status`，没有 req_id（handler 注入的）。
+
 **改造题**：给 CtxHandler 加"注入缺失告警"：extract 返回空且记录级别
 ≥ Info 时，往 stderr 打一行 debug 提示（用 fmt，别用 slog 自己否则递归）。
 

@@ -155,6 +155,11 @@ curl -s localhost:9153/metrics | grep dnsproxi
 | upstream_duration P99（histogram_quantile） | 与 dnsq 的 P99 同量级 |
 | in_flight 峰值 | worker pool 模式 ≤ N |
 
+**预测题**（看表前先写答案）：把上游指向一个没人监听的端口，发 3 个
+查询。`upstream_errors_total{reason}` 是几？`queries_total` 的 outcome
+落在哪个标签？`upstream_duration_seconds_count` 增加吗？再换成
+黑洞上游（不回包）呢？答案在下表。
+
 **改造题（已完成，见下表）**：`dnsproxi_upstream_errors_total{reason}`
 已落地，reason 分类 `upstreamErrReason`：`errors.As(net.Error)` 判超时、
 `errors.Is(syscall.ECONNREFUSED)` 判拒收、兜底 network。真机双场景实测：

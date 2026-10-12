@@ -313,6 +313,11 @@ curl -s -X DELETE localhost:8090/kv/a -o /dev/null -w "%{http_code}\n"  # 204
 # Ctrl-C 停服务：日志出现 shutting down（优雅关停在收尾在飞请求）
 ```
 
+**改造题**：给 `MaxK` 加一个兄弟 `MaxKFunc[T any](xs []T, cmp func(a, b T) int) (T, bool)`
+（比较函数版，对照 Rust `max_by`），写 table-driven 测试覆盖空切片、
+单元素、`strings.Compare` 和自定义结构体按字段比较。验收：
+`go vet ./exercises/p8fast/ && go test -race ./exercises/p8fast/` 全绿。
+
 代码里每个考点都有注释锚点：1.22 路由模式、PathValue、优雅关停、
 pprof 挂载。改坏了 `go test -race ./exercises/p8fast/httpkv/` 会告诉你。
 

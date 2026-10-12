@@ -184,6 +184,12 @@ go test -run TestEmbedding -v ./exercises/p2lang/   # 单跑某题
    的结果变吗？`g` 能赋给 `Base` 类型变量吗？（§问题 2）
 3. `maybeFail(false)` 返回的 err 是 nil 吗？为什么？（§问题 3）
 
+**观察题**：打开 `lang_test.go` 的 `maybeFail`，删掉
+`if e == nil { return nil }` 三行（回到 `return e`），再跑
+`go test -run TestInterfaceNil ./exercises/p2lang/`。实测输出是
+`want nil, got <nil>`：打印出来是 nil，`!= nil` 却为真，这就是
+(type, value) 二元组的坑。看完用 `git checkout` 还原。
+
 **改造题**：给 `exercises/p2lang/` 加一个 `Cat` 类型，只定义
 `Speak() string`，让 `speakAll` 接受它。验收：`go vet
 ./exercises/p2lang/ && go test ./exercises/p2lang/` 全绿，

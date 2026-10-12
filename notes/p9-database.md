@@ -204,6 +204,16 @@ P9_PG_DSN="postgres://postgres:p9@127.0.0.1:15432/p9?sslmode=disable" \
 docker stop p9pg
 ```
 
+**改造题**：
+
+1. 给 `WithTx` 写一个 panic 版测试：`fn` 里先 INSERT 再 `panic("boom")`，
+   用 `recover` 接住后查行数。预测：事务回滚吗？panic 还会继续上抛吗？
+   （实测：回滚，`defer tx.Rollback()` 在 panic 展开时照跑；panic 不被
+   `WithTx` 吞掉。要不要在 `WithTx` 里 recover 是设计取舍，写下你的理由。）
+2. 在 `TestNullStrategies` 里加第四种读法 `sql.Null[string]`（Go 1.22
+   泛型版，不用再区分 NullString/NullInt64），读 `SELECT NULL`，
+   断言 `Valid == false`。
+
 **环境坑（真实踩过）**：sqlite `:memory:` 每连接一份库，连接池会
 "看不到表"，用 `file:x?mode=memory&cache=shared` + `SetMaxOpenConns(1)`。
 

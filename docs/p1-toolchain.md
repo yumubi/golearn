@@ -87,15 +87,24 @@ scp 一个文件。你后面精读 ejdb/deepsearch 时会发现它们的 Dockerf
 ## 动手：练习 p1tool（15-30 分钟）
 
 ```bash
-go test ./exercises/p1tool/...          # 跑一遍，看哪些红
-go test -run TestNotFound -v ./exercises/p1tool/   # 单跑某题
+go test ./exercises/p1tool/... -v       # 4 个测试，参考实现已全绿
+go test -run TestErrorWrapping -v ./exercises/p1tool/   # 单跑某题
 ```
 
-打开 `exercises/p1tool/` 按注释修到绿，三道题对应三个考点：
+4 个测试分布在两个文件，对应三个考点：
 
-1. `error_test.go`：`errors.Is` + `%w` 包装链（P2 问题 3 的预演）。
-2. `external_test.go`：跨包可见性，大写导出 vs 小写私有。
-3. `notfound.go`：实现 `NotFound()`，interface 隐式实现的第一次手感。
+1. `error_test.go`：`TestErrorWrapping` 验证 `divide` 返回的错误用
+   `errors.Is` 能认出 `ErrDivZero`（`%w` 包装链，P2 问题 3 的预演）；
+   `TestErrorAs` 用 `errors.As` 从 `lookup` 的错误里取回
+   `*NotFoundError`（类型定义在 `notfound.go`，≈ Rust downcast）。
+2. `external_test.go`：`TestVisibility` / `TestPrivateCtor` 以外部包身份
+   使用 `pkg.go` 的 `Counter`：只能走导出的 `Add`/`N`/`MustNew`，
+   私有字段 `c.n` 和 `newCounter` 编译器直接拦。
+
+**预测题**：把 `external_test.go` 里 `TestVisibility` 的 `c.N()` 改成
+`c.n`，`go test` 是"测试失败"还是"编译失败"？是 lint 在拦吗？
+（实测：`c.n undefined (type *pkg.Counter has no field or method n)`，
+`[build failed]`，测试根本没跑起来：可见性是编译器规则。改完记得改回。）
 
 **验收**：`go vet ./exercises/p1tool/ && go test ./exercises/p1tool/`
 全绿，且 `go mod tidy` 后 go.sum 无变化（依赖卫生）。

@@ -222,6 +222,14 @@ P19 讲配置）。
 go test ./exercises/p2_5idiom/ -v
 ```
 
+**预测题**（先写答案再跑）：
+
+1. `legacy.go` 的 `SentinelCompare(ErrNotFound)` 返回什么？
+   `SentinelCompare(fmt.Errorf("x: %w", ErrNotFound))` 呢？这说明
+   为什么要用 `errors.Is`？（实测：`true`、`false`，`==` 只认未包装的原值）
+2. `TestTableDriven` 跑 `-v` 时，子测试名长什么样？
+   `"mixed spaces"` 里的空格会变成什么？（t.Run 把空格改成 `_`）
+
 这个包预置了一段"能跑但不地道"的代码（`legacy.go`），你的任务按
 注释提示重构：
 
@@ -232,6 +240,11 @@ go test ./exercises/p2_5idiom/ -v
 3. `TestGuardClause`：else 金字塔 → 提前返回，主逻辑零缩进。
 4. `TestGetter`：`GetCount()` → 改名 `Count()`，调用方同步改。
 5. `TestTableDriven`：一坨复制粘贴的测试函数 → 合并成 table-driven。
+
+**观察题**：`go test -v -run TestTableDriven ./exercises/p2_5idiom/`
+看 `TestTableDriven/mixed_spaces` 这样的子测试名；再用
+`-run 'TestTableDriven/empty'` 只跑一个子用例，体会 table-driven 的
+定位成本。
 
 **改造题**：给 `Fetcher` 接口加一个内存假实现（fake），不用 mock
 框架：体会"Go 测试靠手写 fake，接口小所以 fake 也小"。
