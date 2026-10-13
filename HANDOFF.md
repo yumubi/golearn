@@ -282,3 +282,17 @@ violations（含 results/LESSON 历史 em-dash 全文件清理）。
 镜像层、sidecar 型探针、namespace/cgroup 等首现均有一句话解释。
 实战命令全部真跑实拍；踩坑实录（Mach-O exec format error、容器内
 127.0.0.1、yaml lint 三轮）进入正文。
+
+### 社区风格调研结论（2026-10-13，tavily）
+
+- 标杆文体（Go by Example / LGWT / Effective Go / Diátaxis）无"代码行数
+  占比"标准；真实指标是"每节可跑例子 + 真实输出"（Effective Go 的
+  `prints` 体、Diátaxis 的 deliver visible results early）。
+- Write the Docs 原则明言"太多例子伤 skimmable"；40% 行数线不再作为
+  追求目标，P23-26 已达 25-31% 视为收敛。
+- "预测后运行"有 UCLA 实证（predict 组显著优于 tell-and-practice）；
+  理想预测题 = 40-60% 首答错误率（对应真实误区）。
+- 廖雪峰本人哲学"代码越少越好"，他的短板是缺实战项目（社区评价
+  "看完什么都做不了"）；本教程以 dnsproxi/httpkv 载体补齐，定位正确。
+- 后续执行裁决：P21/P22 做批9 式真跑补块（文体是 tutorial，特性天然
+  可跑）；P19 生态（10%）是 reference/explanation 文体不补；P6 豁免。
