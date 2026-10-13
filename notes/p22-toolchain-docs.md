@@ -50,12 +50,63 @@ go tool pprof -base=before.pb.gz after.pb.gz
 | goroutine | 多少 goroutine、卡在哪 | 快照 | 采到 |
 | block/mutex | 锁等待/阻塞时长 | 需 SetBlockProfileRate | 低频场景才开 |
 
+goroutine 快照实拍（idle 的 httpkv，7 个 goroutine 全是 runtime
+自留）：
+
+```text
+$ go tool pprof -top 'http://localhost:6060/debug/pprof/goroutine'
+Showing nodes accounting for 7, 100% of 7 total
+      flat  flat%   sum%        cum   cum%
+         5 71.43% 71.43%          5 71.43%  runtime.gopark
+         1 14.29% 85.71%          1 14.29%  runtime.sigNoteSleep
+```
+
+泄漏排查就是"预期 7 个，实测 700 个"的差值定位：goroutine 类
+profile 的 cum 路径直接显示每个卡在哪一行。
+
 取证纪律：先 allocs（分配大户 = GC 税源头，P6 实证 mark assist
 8.1 万次/3s），再 CPU，最后才 trace。heap 看驻留、allocs 看流量，
 搞反了会盯着"驻留小但分配疯狂"的对象错过优化点。
 
-`top` 输出两列：flat 是函数自身耗时，cum 是含被调用的总耗时。
-优化 flat 高的 leaf 函数、cum 高的调度路径。
+`top` 实拍（httpkv + 20 并发 GET 压测 4 秒采样，真机输出）：
+
+```text
+File: httpkv
+Type: cpu
+Duration: 4.11s, Total samples = 1.44s (35.06%)
+      flat  flat%   sum%        cum   cum%
+     0.86s 59.72% 59.72%      0.86s 59.72%  syscall.rawsyscalln
+     0.14s  9.72% 69.44%      0.14s  9.72%  runtime.pthread_cond_wait
+     0.12s  8.33% 77.78%      0.12s  8.33%  runtime.kevent
+```
+
+读法：flat = 函数自身耗时，cum = 含被调用的总耗时；优化 flat 高
+的 leaf 函数、cum 高的调度路径。这份 top 里 syscall 占 60%：
+低负载服务的 CPU 大头在系统调用与调度，说明"优化前先看采样在
+哪"比"凭直觉优化热点"可靠。
+
+
+### dlv：断点调试器（真机会话节选）
+
+pprof 回答"哪里慢"，dlv 回答"为什么算错"。非交互可用（CI/脚本
+加 `--allow-non-terminal-interactive=true`）：
+
+```text
+$ dlv test ./exercises/p21test/ -- --test.run TestDlvDemo
+(dlv) break p21test.add
+Breakpoint 1 set at 0x104c095a0 for golearn/exercises/p21test.add()
+    ./exercises/p21test/dlvdemo_test.go:5
+(dlv) continue
+> [Breakpoint 1] golearn/exercises/p21test.add() (hits goroutine(35):1)
+(dlv) print a
+2
+(dlv) print b
+3
+```
+
+注意 `break add` 会撞上 runtime 里一堆同名 add（ambiguous），断点
+要写全限定名 `包名.函数`。vs Rust：rust-gdb/rust-lldb 裸 gdb/lldb，
+dlv 是懂 goroutine/chan 的专用后端。
 
 ## lint 与 generate
 
@@ -109,6 +160,18 @@ GOEXPERIMENT 是"未定型的未来"：默认关的实验（jsonv2，P19 实测
 编译都过不去）、默认开可退回的 baseline（greenteagc，T4 双跑
 `GOEXPERIMENT=nogreenteagc` 可关）。生产二进制别带非 baseline
 实验；排查"升级后行为差异"先查 GODEBUG 默认值表。
+
+GODEBUG 也是"现场取证旋钮"（真机，`schedtrace=500` 每 500ms 打
+一行调度器账）：
+
+```text
+SCHED 0ms: gomaxprocs=10 idleprocs=8 threads=4 spinningthreads=1
+  needspinning=0 idlethreads=0 runqueue=1 [ 0 0 0 0 0 0 0 0 0 0 ]
+```
+
+一行读出 GMP 现状：10 个 P 只有 2 个在干活（idleprocs=8）、
+4 个内核线程、全局队列 1 个待跑。排查"goroutine 堆积但 CPU
+很闲"时这行就是第一手证据（P3 的 GMP 落到工具上）。
 
 ## go.work：多模块工作区
 
@@ -213,6 +276,9 @@ go build -ldflags "-X golearn/exercises/p22tool.Version=v0.1.0" \
 3. 方法 `Result.Exporteds` 在统计里的键名是什么？为什么不是裸
    `Exporteds`（godoc 站点上方法挂在类型名下）？
 4. go.work 该不该提交？replace 呢？
+5. `go tool pprof` 采 CPU，一个 idle 的服务（没请求）会采到
+   什么？（提示：上面实拍里 Duration 5s 但 Total samples = 0。）
+6. `break add` 在 dlv 里能设上吗？断点名要写什么形态？
 
 **观察验证**：上面命令块每条输出都实拍过（退出码 0/1/2 与 P20
 惯例一致）。四个测试看点：`TestDirRealPackage`（包自统计 100%）、

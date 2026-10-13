@@ -38,9 +38,15 @@ synctest.Test(t, func(t *testing.T) {   // bubble 内
 })  // 真实耗时：毫秒级
 ```
 
-关键性质：**虚拟时间与真实墙钟解耦**。假时钟起点是 2000-01-01 UTC
-午夜（bubble 开头打印 `time.Now()` 可确认），虚拟时间走 300ms 还
-是 100 小时，真实 CPU 时间只取决于代码执行量。
+午夜。bubble 开头打印 `time.Now()` 即可确认：
+
+```text
+=== RUN   TestVirtualStart
+    vt_test.go:11: bubble start: 2000-01-01 00:00:00 +0000 UTC
+--- PASS: TestVirtualStart (0.00s)
+```
+
+虚拟时间走 300ms 还是 100 小时，真实 CPU 时间只取决于代码执行量：
 
 ```sh
 $ go test -race -run TestRetryVirtualTime -v ./exercises/p21test/
@@ -95,6 +101,26 @@ goroutine 21 [sync.Mutex.Lock, synctest bubble 1]:
 实验抓出来的。锁不进 durable 清单，意味着"等锁"永远不能作为
 bubble 的时间推进源。
 
+
+## -race：动态分析武器
+
+`-race` 不扫代码，是 happens-before 动态分析（向量时钟插桩）：
+只抓**实际发生**的竞争路径，所以要多跑（`-count`）配合不同调度。
+两 goroutine 无锁自增 1000 次，detector 把双方栈都点出来（真机
+输出节选）：
+
+```text
+==================
+WARNING: DATA RACE
+Read at 0x00c0001b81e8 by goroutine 8:
+  p21test.TestRaceDemo.func1()  race_test.go:16
+Previous write at 0x00c0001b81e8 by goroutine 9:
+  p21test.TestRaceDemo.func1()  race_test.go:16
+```
+
+退出码非 0，CI 直接红。`-race` 可与 fuzz 同跑（实测 execs 从
+40 万/s 掉到 6 万/s，慢 6 倍），日常排期先 fuzz 后 race。
+
 ## bubble 的三种死法
 
 都在 `TestBubbleHangs`/`TestGoroutineLeakDetection` 以子进程隔离
@@ -144,6 +170,18 @@ func FuzzParseArgs(f *testing.F) {
 }
 ```
 
+fuzz 的语料是**资产**：interesting 输入缓存在构建缓存（failing
+才落 `testdata/fuzz/`），之后每次普通 `go test -run FuzzParseArgs`
+（不带 `-fuzz`）都会重放全部语料当回归测试（真跑 0.2s）：
+
+```sh
+$ go test -run FuzzParseArgs ./exercises/p21test/
+ok  	golearn/exercises/p21test	0.209s
+```
+
+**性质测试的复利**：250 个语料输入 × 3 条性质，每次 CI 白拿，
+不用写一行额外断言。
+
 种子质量决定起步：空输入、未知 flag、unicode、超长串，每条覆盖
 一个分支。fuzz 参数只支持基本类型（`[]string` 不行），用空格分隔
 串编码 argv 是权宜。
@@ -188,6 +226,9 @@ go run ./exercises/p21test/cmd/retryrun -n 2 -base 100ms -- sh -c 'exit 1'
    `fired` 是多少？虚拟时间走满 200ms 后呢？
 4. 把 `Retry` 的 `sleepCtx` 换成裸 `time.Sleep(wait)`，取消响应
    会怎样退化？
+5. `-race` 和 `-fuzz` 能同跑吗？能的话 throughput 掉多少量级？
+6. fuzz 跑出的 250 个 interesting 输入存在 `testdata/fuzz/` 吗？
+   （提示：什么才落盘。）
 
 **观察验证**：
 
@@ -246,7 +287,7 @@ bubble 里 rand 不确定会让虚拟账本对不上。提示：把 rand 抽象�
 
 `go doc testing/synctest.Test` 摘要：新 bubble 中跑 f；等全部
 goroutine 退出；死锁 fail；禁 T.Run/T.Parallel/T.Deadline。
-常用 flag：`-fuzz=<正则>`、`-fuzztime=60s`、`-race` 与 fuzz 互斥。
+常用 flag：`-fuzz=<正则>`、`-fuzztime=60s`；`-race` 可叠加 fuzz（实测慢 6 倍）。
 
 ### Rust 对照总表
 
