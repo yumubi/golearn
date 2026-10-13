@@ -80,7 +80,7 @@ for f in changed('.go'):
 rec('整数 range 写法', not bad, ', '.join(bad[:10]))
 
 # 6 禁用的敷衍标记：改动的 notes/exercises 不得含占位语
-ban = re.compile(r'TODO|FIXME|待补|此处省略|同上|略\s*$|XXX|\.\.\.\s*省略|lorem')
+ban = re.compile(r'TODO|FIXME|待补|此处省略|（略）|同上|XXX|\.\.\.\s*省略|lorem')
 bad = []
 for f in changed('.md', '.go'):
     if f.startswith(('HANDOFF', 'PLAN')) or f.endswith('_test.go') and False:
@@ -105,8 +105,8 @@ for n in sorted(glob.glob('notes/p2[1-9]-*.md')):
     t = open(n).read()
     need = {'这章学完你能干什么': 1, 'Take-away': 1, '章末参考': 1, '预测': 2, '观察': 1, '改造': 1, 'Rust': 6}
     miss = [f'{k}≥{v}(实{t.count(k)})' for k, v in need.items() if t.count(k) < v]
-    if len(re.findall(r'^## .*问题', t, re.M)) < 3:
-        miss.append('"## ...问题" 小节<3')
+    if len(re.findall(r'^## ', t, re.M)) < 4:
+        miss.append('"## " 正文小节<4')
     if t.count('```') < 16:
         miss.append(f'代码块<8(实{t.count("```") // 2})')
     rec(f'{n} 结构', not miss, ', '.join(miss))

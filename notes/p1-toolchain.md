@@ -1,25 +1,28 @@
 # P1 · 工具链速通：cargo → go
 
-> 读者：会 cargo，第一次碰 go 工具链。目标：把肌肉记忆一一映射到
-> go 命令，10 分钟读完，练习 15 分钟。这章是速查表：类比总表在开头，
-> 它本身就是章末参考，记住"import 驱动"这一条差异就够开工。
-> 下一步：P1.5 语法速通 → P2 换语言直觉；P14 学并发组装。
+> 这章学完你能干什么：不看文档敲出完整一圈，`go mod init` 起项目、
+> `go get`/`go mod tidy` 管依赖、`go test -v ./...` 跑测试、`gofmt`
+> 收尾，并解释 go.sum 为什么存哈希、internal/ 是谁强制的。
+> 读者：会 cargo，第一次碰 go 工具链。前置：无。下一步：P1.5 语法
+> 速通；P14 学并发组装。
+>
+> 动手方式：开空目录跟着敲，每个命令都真跑一遍。
 
-## 这章学完你能干什么
+## 体系背景：编译模型决定一切
 
-不看文档敲出完整一圈：`go mod init` 起项目、`go get`/`go mod tidy`
-管依赖、`go test -v ./...` 跑测试、`gofmt` 收尾，并解释为什么
-go.sum 存哈希、internal/ 是编译器强制的。练习终点：三道题全绿
-（`error_test.go` 的 `%w` 包装链、`external_test.go` 的跨包可见性、
-`notfound.go` 的第一次隐式实现）。
+go 工具链的所有"怪"，都从一个事实推出来：**编译是按包 DAG 并行
+编的，产物是静态链接的原生二进制**。
 
-三个问题：
+没有宏、没有 build.rs、没有 trait solver，依赖解析就是一层 import
+扫描。所以 `go build` 快得像没在编译；产物扔到另一台机器直接跑，
+不需要装任何 runtime。部署 = `scp` 一个文件。deepsearch 的
+Dockerfile 就是 `CGO_ENABLED=0 go build` + `FROM alpine` 塞一个
+二进制（P5 精读会看到原文），scratch 镜像是这套打法的极简形态。
 
-1. cargo 的命令和文件，go 里各对应什么？
-2. 为什么说 go.mod 是"源码导入的投影"，不是清单？
-3. 可见性规则比 Rust 粗在哪，换来什么？
+这一条后面还会反复兑现：可见性模型粗（零配置）、没有 feature
+flags（要么编进去要么不编）、交叉编译零配置。
 
-## 问题 1：cargo 的命令和文件，go 里各对应什么？
+## 命令映射：你会的 cargo 对应什么
 
 | 你会的 | Go 对应 | 差异要点 |
 |---|---|---|
@@ -27,30 +30,40 @@ go.sum 存哈希、internal/ 是编译器强制的。练习终点：三道题全
 | `Cargo.toml` | `go.mod` | 只有 module 名 + go 版本 + require 列表 |
 | `Cargo.lock` | `go.sum` | 存的是**内容哈希**，不是版本号；必须提交 |
 | `cargo add serde` | `go get github.com/...` | **先写 import 再 `go mod tidy`** 是更地道的流 |
-| `cargo build` | `go build ./...` | `./...` = workspace 全部包，天天用 |
+| `cargo build` | `go build ./...` | `./...` = 全部包，天天用 |
 | `cargo run` | `go run ./cmd/xxx` | go run 只能跑 main 包 |
 | `cargo test` | `go test ./...` | 测试文件 `_test.go`，和源码**同目录同包** |
 | `cargo test -- --nocapture` | `go test -v ./...` | `-v` 兼打印+进度 |
 | `cargo clippy` | `go vet ./...` | 更弱；生态靠 `golangci-lint` 补 |
-| `cargo fmt` | `gofmt -w .` / `go fmt ./...` | **没有配置项**。全社区一种格式，没有 prettier 之争 |
+| `cargo fmt` | `gofmt -w .` | **没有配置项**，全社区一种格式 |
 | `cargo doc --open` | `go doc -http=:6060` | 或直接看 pkg.go.dev |
 | `[dev-dependencies]` | 无 | 测试和源码同包，依赖不分 dev/prod |
-| edition 2021/2024 | go 1.x in go.mod | 每 6 个月一个版本，兼容性极好（Go1 兼容承诺） |
-| feature flags | 无 | 要么编译进去要么不编；用 build tags 手动切 |
-| workspace（cargo） | go.work（多 module） | 单 module 内多目录不需要 workspace |
-| crates.io | proxy.golang.org | 默认走 GOPROXY，国内配 goproxy.cn |
+| feature flags | 无 | 用 build tags 手动切 |
+| workspace（cargo） | go.work（多 module） | 单 module 多目录不需要 workspace |
+| crates.io | proxy.golang.org | 国内配 goproxy.cn |
 
-## 问题 2：为什么说 go.mod 是"源码导入的投影"，不是清单？
+## go.mod 是"导入的投影"，不是清单
 
-**最大心智差异**：cargo 按版本来 require，go 按导入路径来 require。
-`go.mod` 里没有的包，只要 `import` 了，`go mod tidy` 会自动加。
-反过来，没被 import 的依赖会被 tidy 删掉，go.mod 是"源码导入的
-投影"，不是清单。
+最大心智差异：cargo 按版本来 require，go 按**导入路径**来 require。
+`go.mod` 里没有的包，只要 `import` 了，`go mod tidy` 自动加；没被
+import 的依赖会被 tidy 删掉。
 
-## 问题 3：可见性规则比 Rust 粗在哪，换来什么？
+```sh
+$ go mod init demo && go mod tidy
+$ head go.mod
+module demo
 
-Rust 一个 crate 里可以随便 mod；Go **一个目录就是一个包**，包名 =
-目录名（`_test` 结尾的目录除外）。同一目录下的文件必须同一个包名。
+go 1.26
+
+require golang.org/x/sync v0.13.0   // ← import 了 errgroup 才出现的行
+```
+
+所以 go.mod 不用手维护，它是源码的投影。`go.sum` 才是锁文件，
+存每个模块的内容哈希，保证任何人拉到的字节都一样。
+
+## 可见性：一个目录一个包
+
+Rust 一个 crate 里随便 mod；Go **一个目录就是一个包**，包名 = 目录名。
 
 ```
 deepsearch/               ← module root (go.mod)
@@ -61,24 +74,12 @@ deepsearch/               ← module root (go.mod)
 └── go.mod
 ```
 
-- **`internal/` 是编译器强制可见性**：别人 `import deepsearch/internal/...`
-  直接编译错。Rust 的 `pub(crate)` 只有编译器 lint，Go 的 internal 是
-  硬约束。
-- **大写 = 导出**。`func Open()` 是 pub，`func open()` 是私有。
-  没有 `pub(crate)`/`pub(super)` 的中间档，包级私有就到底了。
+`internal/` 是**编译器强制**的私有：别人 import 它直接编译错。
+Rust 的 `pub(crate)` 只是 lint，Go 的 internal 是硬约束。
+大写 = 导出（`func Open()` 是 pub），没有中间档，包级私有到底。
 
-### 编译模型：为什么 go build 这么快
-
-Java 心智：javac → jar → JVM。Rust 心智：crate 图 + 单体产物。
-
-Go：**编译 = 按包 DAG 并行编译，依赖只有一层 import 扫描**（没有宏、
-没有 build.rs、没有 trait solver），产物是**静态链接**的原生二进制。
-`go build` 完扔到另一台机器直接跑，不需要 runtime 安装。
-
-这是 Go 工具链设计的因果：没有宏 → 增量编译便宜；静态链接 → 部署 =
-scp 一个文件。精读 deepsearch 会看到它的 Dockerfile 就是
-`CGO_ENABLED=0 go build` + `FROM alpine` 塞一个二进制（P5 §213；ejdb
-没有 Dockerfile），scratch 是这套打法的极简形态（见 L133）。
+这个规则粗，但换来零配置：看目录名就知道包边界，没有任何
+"mod.rs 放哪"的争论。
 
 ## 动手：练习 p1tool（15-30 分钟）
 
@@ -87,114 +88,73 @@ go test ./exercises/p1tool/... -v       # 4 个测试，参考实现已全绿
 go test -run TestErrorWrapping -v ./exercises/p1tool/   # 单跑某题
 ```
 
-4 个测试分布在两个文件，对应三个考点：
+4 个测试两个文件，对应三个考点：
 
-1. `error_test.go`：`TestErrorWrapping` 验证 `divide` 返回的错误用
-   `errors.Is` 能认出 `ErrDivZero`（`%w` 包装链，P2 问题 3 的预演）；
+1. `error_test.go`：`TestErrorWrapping` 验证 `divide` 的错误用
+   `errors.Is` 能认出 `ErrDivZero`（`%w` 包装链，P2 的预演）；
    `TestErrorAs` 用 `errors.As` 从 `lookup` 的错误里取回
-   `*NotFoundError`（类型定义在 `notfound.go`，≈ Rust downcast）。
-2. `external_test.go`：`TestVisibility` / `TestPrivateCtor` 以外部包身份
-   使用 `pkg.go` 的 `Counter`：只能走导出的 `Add`/`N`/`MustNew`，
+   `*NotFoundError`（≈ Rust downcast）。
+2. `external_test.go`：`TestVisibility` / `TestPrivateCtor` 以外部包
+   身份用 `pkg.go` 的 `Counter`：只能走导出的 `Add`/`N`/`MustNew`，
    私有字段 `c.n` 和 `newCounter` 编译器直接拦。
 
-**预测题**：把 `external_test.go` 里 `TestVisibility` 的 `c.N()` 改成
-`c.n`，`go test` 是"测试失败"还是"编译失败"？是 lint 在拦吗？
-（实测：`c.n undefined (type *pkg.Counter has no field or method n)`，
-`[build failed]`，测试根本没跑起来：可见性是编译器规则。改完记得改回。）
+**预测题**：把 `TestVisibility` 里 `c.N()` 改成 `c.n`，`go test`
+报"测试失败"还是"编译失败"？跑之前写答案，再跑：
+
+```sh
+$ go test ./exercises/p1tool/
+# exercises/p1tool/external_test.go:12:9: c.n undefined
+#       (type *pkg.Counter has no field or method n)
+FAIL    build failed    # ← 测试根本没跑起来：可见性是编译器规则
+```
 
 **验收**：`go vet ./exercises/p1tool/ && go test ./exercises/p1tool/`
-全绿，且 `go mod tidy` 后 go.sum 无变化（依赖卫生）。
+全绿，`go mod tidy` 后 go.sum 无变化。
 
-## Take-away
+## 小结
 
 - `go mod tidy` 是依赖的唯一真相：import 驱动，不是清单驱动。
 - internal/ 硬私有、大写导出，可见性模型比 Rust 粗但零配置。
-- 静态链接单二进制是 Go 部署的默认答案，Dockerfile 见 deepsearch。
+- 静态链接单二进制是部署默认答案：编译模型没有宏和钩子，
+  `CGO_ENABLED=0` 产物直接扔 alpine/scratch。
 
 ## 章末参考
 
-### 工具链进阶：这半年会真用到的命令
-
-**构建与缓存**：
+### 工具链进阶（深潜版在 P22）
 
 ```sh
 go build -trimpath -ldflags="-s -w" -o bin/app ./cmd/app
-#   -trimpath   去掉本机路径（可复现构建）
-#   -s -w       去符号表/调试信息（≈ strip，产物小 20-30%）
-#   -o          输出路径
-go clean -cache        # 清编译缓存（构建诡异报错时的第一反应）
-go env GOMODCACHE      # 模块缓存在哪（只读；要改代码得 replace 本地路径）
-```
+#   -trimpath 去本机路径（可复现）；-s -w ≈ strip，小 20-30%
+go clean -cache        # 构建诡异报错的第一反应
+GOOS=linux GOARCH=arm64 go build -o app ./cmd/app   # 交叉编译零配置
+CGO_ENABLED=0 go build ...                          # 纯静态（scratch 标配）
 
-交叉编译是**零配置**的（cargo 要装 target，Go 全内置）：
-
-```sh
-GOOS=linux GOARCH=arm64 go build -o app ./cmd/app
-GOOS=windows GOARCH=amd64 go build -o app.exe ./cmd/app
-CGO_ENABLED=0 go build ...   # 纯 Go 静态编译（scratch 镜像的标配）
-```
-
-**依赖管理进阶**：
-
-```sh
-go get pkg@v1.2.3      # 定版本；@latest / @upgrade / @none
-go get pkg@master      # 跟分支（临时试 patch）
-go mod edit -replace=old=./local/new   # 本地路径替换（调试依赖必会）
-go mod why pkg         # 这个依赖为什么在依赖树里
-go mod graph | head    # 依赖图
+go get pkg@v1.2.3      # 定版本；@latest / @none
+go mod edit -replace=old=./local/new   # ≈ cargo [patch]
+go mod why pkg         # ≈ cargo tree -i
 go list -m -u all      # 哪些依赖有新版
-```
 
-对照 cargo：`-replace` ≈ `[patch]`，`go mod why` ≈ `cargo tree -i`。
-主版本 2+ 的导入路径带 `/v2`（P2.5 模块纪律节）。
+go test -count=1 ./...                 # 禁缓存（CI 必加）
+go test -timeout 30s ./...             # 默认 10m，防死锁卡 CI
+go test -bench=. -benchmem ./pkg/      # 基准（P7 方法论）
+go test -race ./...                    # 数据竞争检测，CI 必开（P3）
 
-**测试工具族**（P8 问题 3 展开 table-driven，这里是命令面）：
-
-```sh
-go test -run TestXxx/子测试名 ./pkg/    # 精确到子测试
-go test -count=1 ./...                  # 禁用测试缓存（CI 必加）
-go test -timeout 30s ./...              # 默认 10m，防死锁卡 CI
-go test -bench=. -benchmem ./pkg/       # 基准测试（P7 方法论）
-go test -coverprofile=c.out ./pkg/ && go tool cover -html=c.out
-go test -race ./...                     # 数据竞争检测，CI 必开（P3）
-```
-
-**诊断三剑客**（Rust 没有的 gift，直接在二进制里）：
-
-```sh
 go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30
-#   CPU 火焰图：net/http/pprof 一行 import 即得端点
-go tool trace trace.out  # 调度延迟/GC/系统调用时间线
-go vet ./...             # 静态检查（printf 格式串、lock 拷贝等）
+go tool trace trace.out                # 调度/GC 时间线
+golangci-lint run                      # vet 的补位，聚合 50+ linter
+//go:generate stringer -type=Level     # 代码生成入口，产物进 git
 ```
 
-本教程的实验里 trace 看调度（dnsproxi 采过 23.7MB 时间线）、
-`GODEBUG=gctrace=1` + TotalAlloc 看分配账（labs/results-2026-10-10）
-已实跑；pprof 端点本教程只演示到"一行 import 即得"。
-**生产环境 pprof 端点是 Go 服务的标配**（默认不开，net/http/pprof
-路由挂上即可）。
+pprof 完整取证、GODEBUG/GOEXPERIMENT 体系、go.work、文档工程，
+全部在 P22 深潜。
 
-**golangci-lint**（go vet 太弱的补位）：
+### Rust 对照总表
 
-```sh
-golangci-lint run        # 聚合 20+ linter：errcheck（漏查 error）、
-                         # govet、staticcheck、revive……
-```
-
-对照 clippy 的 `-W clippy::all`：golangci-lint 是聚合器，配置文件
-`.golangci.yml` 挑启用集。社区 CI 常开：errcheck、govet、staticcheck、
-ineffassign、unused 五件套起步。
-
-**go generate**（代码生成的口子，不是宏）：
-
-```sh
-//go:generate stringer -type=Level     # 写在 .go 文件注释里
-go generate ./...                       # 显式触发，产物进 git
-```
-
-对照 Rust 的宏/derive：Go 没有编译期元编程，**约定是生成代码提交
-进仓库**（stringer、mockgen、sqlc 都是这条路，P11 全靠 sqlc）。
-
-这节的每个主题的深潜版在 P22（工具链深潜与文档工程）：pprof 完整
-取证流程、golangci-lint、GODEBUG/GOEXPERIMENT 体系、go.work，以及
-文档工程（doc comment/Example 测试/版本发布）。
+| 主题 | Go | Rust | 差异要点 |
+|---|---|---|---|
+| 清单 | go.mod（导入投影） | Cargo.toml（显式声明） | go 按 import 驱动 |
+| 锁 | go.sum（内容哈希） | Cargo.lock（版本号） | 字节级可复现 |
+| 私有 | internal/（编译器） | pub(crate)（lint） | Go 是硬约束 |
+| 格式 | gofmt（无配置） | rustfmt（可配置） | 全社区一种格式 |
+| 元编程 | 无宏，go:generate 产物进 git | 宏/derive 编译期展开 | Go 代码生成是显式步骤 |
+| 交叉编译 | GOOS/GOARCH 内置 | rustup target 逐个装 | Go 全平台开箱 |
