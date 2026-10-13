@@ -273,6 +273,10 @@ violations（含 results/LESSON 历史 em-dash 全文件清理）。
   三次握手 tcpdump 真抓/dig +tcp 结果反转/BPF 修正/inspect 元数据/
   compose config 渲染）。40% 硬线对表格密集实战章不适用，主旨
   （每章 3 分钟跑出例子）已满足。
+- 批10 `bf22d2d`（audit UNKNOWN 清理）：p9 `sql.NullXxx` 泛指改
+  `sql.NullString`（2 处）；p20 `scanner.Buffer` 改全
+  `bufio.Scanner.Buffer`；p6 `binary.BigEndian.Uint16` 保留
+  UNKNOWN（var 方法，go doc 局限，正文无错）。27 章 MISSING 0。
 
 体系词汇随文解释（§10.2 第三层）落实：fd 0/1/2、signal、握手、
 镜像层、sidecar 型探针、namespace/cgroup 等首现均有一句话解释。
