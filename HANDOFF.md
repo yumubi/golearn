@@ -293,6 +293,12 @@ violations（含 results/LESSON 历史 em-dash 全文件清理）。
   可否优雅处理）；P24 +1（cache hit 上游不转发，fake upstream
   计数实证 upstream got 1）。P13/P15 复查合格不动。验证：
   slop-lint 0×3、mirror、gate --fast PASS、ci 全绿。
+- 批12 收尾同步：INDEX.md + docs/table.md 状态列反映批11/12
+  增量（P20-P24 五行：-race 节/dlv 会话/schedtrace/预测环节
+  标记），提交 85d2f62 与 table 同步提交。§8 验收 9 条复核全过
+  （27 章体系背景全覆盖、预测环节全覆盖、命令+输出同块体、
+  Rust 对照章末单表合规、gate 完整 PASS 含变异 99/99；
+  变异假 FAIL 根因是 p12pg 容器退出，start 后全杀）。
 
 体系词汇随文解释（§10.2 第三层）落实：fd 0/1/2、signal、握手、
 镜像层、sidecar 型探针、namespace/cgroup 等首现均有一句话解释。
