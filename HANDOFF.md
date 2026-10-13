@@ -299,6 +299,20 @@ violations（含 results/LESSON 历史 em-dash 全文件清理）。
   （27 章体系背景全覆盖、预测环节全覆盖、命令+输出同块体、
   Rust 对照章末单表合规、gate 完整 PASS 含变异 99/99；
   变异假 FAIL 根因是 p12pg 容器退出，start 后全杀）。
+- 批13：P21-P26 审读台账建设（audit-scope.txt 批 D：
+  p21:15/p22:15/p23-p26:12）。6 章 174 条断言全部真跑/真读
+  源码核对：p21 34 OK、p22 41（33 OK/8 FIXED）、p23 20+4 FIXED、
+  p24 21+3 FIXED、p25 27（26 OK/2 FIXED）、p26 24（22 OK/2
+  FIXED）。笔记修正 21 处，要点：dlv 会话原引不存在的
+  p21test.add（全历史 -S 确认）改为真实 Backoff 断点会话；
+  golangci-lint copyloops linter 不存在改 gocritic；go work
+  use -add flag 不存在；docker stop 宽限期 30s 改 10s（官方
+  文档）；healthcheck test 改既定 CMD plain 约定并删不存在的
+  /kv/__probe 端点描述；compose config 渲染 name: p26lab 与
+  BPF udp[4:2] 字段等实拍级修正。台账 lint 收尾：em-dash 全清、
+  "同上"展开、tcp-syn|tcp-fin 管道转义、长句拆分。验证：
+  slop-lint 0×6、mirror 零漂移、gate --fast PASS、完整 gate
+  PASS（p12pg start/stop 全流程）、pnpm run ci 全绿。
 
 体系词汇随文解释（§10.2 第三层）落实：fd 0/1/2、signal、握手、
 镜像层、sidecar 型探针、namespace/cgroup 等首现均有一句话解释。
