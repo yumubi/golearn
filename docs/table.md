@@ -30,11 +30,11 @@ title: 课程表：28 章速查
 | P17 | dnsproxi 指标落地 | [notes](/p17-dnsproxi-metrics) | `dnsproxi-go/` :9153 | ✅ 7=2+4+1 对账 + errors{reason} |
 | P18 | dnsproxi 日志落地 | [notes](/p18-dnsproxi-slog) | `dnsproxi-go/logger.go` | ✅ 每查询 req_id 注入 |
 | P19 | 生态与常用库选型地图 | [notes](/p19-ecosystem) | `exercises/p19eco/` | ✅ 4 tests（options/slog Handler/stringer） |
-| P20 | 写 CLI 工具（管道/flag/cobra/退出码/发布） | [notes](/p20-cli-tool) | `exercises/p20cli/`（含 cmd/） | ✅ 7 tests + wcgo 退出码实证 |
-| P21 | testing/synctest + fuzz（虚拟时钟/性质测试） | [notes](/p21-testing-concurrency) | `exercises/p21test/`（含 cmd/retryrun） | ✅ 10 tests -race + FuzzParseArgs 60s 2853 万 execs |
-| P22 | 工具链深潜与文档工程（pprof/lint/generate/GODEBUG/go.work/doc 工程） | [notes](/p22-toolchain-docs) | `exercises/p22tool/`（含 cmd/docstats） | ✅ 4 tests -race + CLI 退出码 0/1/2 + pprof 五 profile 实采 |
-| P23 | Linux 运行时：进程/信号/fd/容器（httpkv 骨架） | [notes](/p23-linux-runtime) | 实战即练习（httpkv + docker） | ✅ 优雅关停/容器内 SIGTERM/cgroup 实拍 |
-| P24 | 网络协议栈：从 ping 到 DNS 全链路（dnsproxi 教具） | [notes](/p24-network-stack) | 实战即练习（tcpdump 抓包） | ✅ DNS 逐字节/TTL 账本/TCP 状态机实拍 |
+| P20 | 写 CLI 工具（管道/flag/cobra/退出码/发布） | [notes](/p20-cli-tool) | `exercises/p20cli/`（含 cmd/） | ✅ 7 tests + wcgo 退出码实证 + 预测环节 |
+| P21 | testing/synctest + fuzz（虚拟时钟/性质测试） | [notes](/p21-testing-concurrency) | `exercises/p21test/`（含 cmd/retryrun） | ✅ 10 tests -race + 2853 万 execs + -race 节（DATA RACE 实拍/race×fuzz 同跑实证） |
+| P22 | 工具链深潜与文档工程（pprof/lint/generate/GODEBUG/go.work/doc 工程） | [notes](/p22-toolchain-docs) | `exercises/p22tool/`（含 cmd/docstats） | ✅ 4 tests -race + pprof top/goroutine 实拍 + schedtrace + dlv 会话节 |
+| P23 | Linux 运行时：进程/信号/fd/容器（httpkv 骨架） | [notes](/p23-linux-runtime) | 实战即练习（httpkv + docker） | ✅ 优雅关停/容器内 SIGTERM/cgroup 实拍 + 预测环节（kill -9 可否优雅） |
+| P24 | 网络协议栈：从 ping 到 DNS 全链路（dnsproxi 教具） | [notes](/p24-network-stack) | 实战即练习（tcpdump 抓包） | ✅ DNS 逐字节/TTL 账本/TCP 状态机实拍 + 预测环节（cache hit 不转发） |
 | P25 | 容器与云原生：镜像/限额/健康检查 | [notes](/p25-containers-cloud) | 实战即练习（labs/compose/） | ✅ 多阶段 351MB→26.6MB + GOMAXPROCS 取整实测 + healthcheck |
 | P26 | 部署实战：compose 编排收官 | [notes](/p26-deploy) | `labs/compose/` | ✅ 三服务编排真跑（dnsproxi+httpkv+upstream）+ 健康条件依赖 |
 
