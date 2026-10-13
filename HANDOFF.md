@@ -277,6 +277,15 @@ violations（含 results/LESSON 历史 em-dash 全文件清理）。
   `sql.NullString`（2 处）；p20 `scanner.Buffer` 改全
   `bufio.Scanner.Buffer`；p6 `binary.BigEndian.Uint16` 保留
   UNKNOWN（var 方法，go doc 局限，正文无错）。27 章 MISSING 0。
+- 批11 `d806326`（社区调研落地）：P21 14%→16%、P22 18%→21%
+  （批9 式真跑补块）。P21 新增「-race：动态分析武器」节（DATA
+  RACE 双栈实拍）+ 假时钟起点实拍（2000-01-01 UTC）+ fuzz 语料
+  -run 重放实拍（0.2s）；修正错误：-race 与 fuzz 非互斥（实测
+  execs 40 万/s→6 万/s）。P22 pprof top 实拍（syscall 60% flat
+  读法）+ goroutine 快照（idle 7 个）+ schedtrace 实拍（SCHED 行
+  读 GMP）+ 新增 dlv 节（真机会话，ambiguous 断点坑）。预测题各
+  +2（对应真实误区）。验证：slop-lint 0×2、mirror、gate --fast
+  PASS、ci 全绿、audit MISSING 0（P21 18 条/P22 9 条）。
 
 体系词汇随文解释（§10.2 第三层）落实：fd 0/1/2、signal、握手、
 镜像层、sidecar 型探针、namespace/cgroup 等首现均有一句话解释。
