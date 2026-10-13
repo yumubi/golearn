@@ -173,7 +173,7 @@ id=2 Null[string]: Valid=true
 
 最后一行是 Go 1.22 加的泛型版 `sql.Null[string]`，不用再区分 `NullString` 和 `NullInt64`。
 
-怎么选？一次性脚本和报表用 COALESCE，最快。表结构里有语义的可空字段，比如"删除时间"，用指针。不想引入指针的 struct 字段用 `sql.NullXxx`。练习 `TestNullStrategies` 把三种各写一遍。
+怎么选？一次性脚本和报表用 COALESCE，最快。表结构里有语义的可空字段，比如"删除时间"，用指针。不想引入指针的 struct 字段用 `sql.NullString`（或 Go 1.22+ 的 `sql.Null[string]`）。练习 `TestNullStrategies` 把三种各写一遍。
 
 pgx 原生接口直接支持指针，还有 `pgtype.Text` 这类类型，表达力比 `database/sql` 的 Null 类型强。P12 的 timestamptz 取舍会回到这条分界。
 
@@ -316,7 +316,7 @@ $ go run main.go
 1. PG 每条连接一个进程，默认上限 100，所以连接池是必需品。
 2. `*sql.DB` 是池不是连接，`Open` 不建连接，错误要查过才知道。
 3. `QueryRow` 的 `ErrNoRows` 延迟到 `Scan` 才冒出，永远用带 ctx 的版本。
-4. NULL 三种读法：COALESCE、指针、`sql.NullXxx`，按场景选。
+4. NULL 三种读法：COALESCE、指针、`sql.NullString`/`sql.Null[string]`，按场景选。
 5. 事务靠纪律：`WithTx` 加 `defer tx.Rollback()`，panic 也会回滚。
 6. 锁定 PG 用 pgx 原生，要换库用 `database/sql`。
 

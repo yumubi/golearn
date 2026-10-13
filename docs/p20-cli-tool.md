@@ -205,7 +205,7 @@ go test ./exercises/p20cli/ -v
    穿透 `%w` 链识别用法错。
 4. `TestWalkCollect`：WalkDir 遍历 + 收集错误 + `.git` 剪枝，断言
    部分失败时结果仍完整。
-5. `TestScanLongLine`：故意造 512KB 长行，验证不调 `scanner.Buffer`
+5. `TestScanLongLine`：故意造 512KB 长行，验证不调 `bufio.Scanner.Buffer`
    会静默截断，调了才对。
 6. `TestRunPipeline`：stdin/文件两模式 + `-q` 静默 + 坏文件收集
    继续。`TestErrsCombineExtra` 钉住汇总行为：空列表 nil、计数
