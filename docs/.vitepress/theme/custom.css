@@ -50,8 +50,7 @@
   --vp-layout-max-width: 100%;
 }
 
-/* 正文列固定可读宽度，居中，不随 224px 侧边一起铺满 */
-.VPContent.has-sidebar .container > .content-container {
-  max-width: 832px;
-  margin-inline: auto;
+/* 正文列放宽：默认主题 .VPDoc.has-aside .content-container 限 688px，装不下 80+ 列输出 */
+.VPDoc.has-sidebar.has-aside .content-container {
+  max-width: 1100px;
 }
