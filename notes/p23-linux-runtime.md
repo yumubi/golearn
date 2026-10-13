@@ -257,6 +257,8 @@ macOS 无 cgroups，容器里才有；这也是"本机没毛病、进容器毛�
    handler）？
 2. `docker stop` 的宽限期参数是哪个 flag？改成 2 秒后再 stop，
    不装 handler 的进程会怎样？
+3. httpkv 装了 SIGTERM handler 之后，`kill -9` 还能被优雅处理
+   吗？为什么？
 
 **观察**（全部真跑）：
 

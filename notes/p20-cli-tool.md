@@ -206,6 +206,17 @@ go test ./exercises/p20cli/ -v
    继续。`TestErrsCombineExtra` 钉住汇总行为：空列表 nil、计数
    + 首个错误（完整合并见 P2.5 的 `errors.Join`）。
 
+**预测题**（跑之前写答案；猜错的地方才是认知边界）：
+
+1. `go run ./exercises/p20cli/cmd/ --bogus` 的退出码是多少？
+   build 成二进制再跑呢？（两者不一样，先猜再验。）
+2. `wcgo` 读一个 512KB 的单行文件（不带 `-l`），不调
+   `Scanner.Buffer` 时输出什么？报错还是给结果？
+3. `wcgo /nonexistent 2>/dev/null | wc -c` 输出几个字节？错误
+   信息去哪了？
+4. WalkDir 遇到无权限目录，`TestWalkCollect` 断言的结果是"部分
+   结果 + 错误"还是"整体失败、零结果"？
+
 **观察题**（终端里跑，测试没法替你感受）：
 
 ```sh
