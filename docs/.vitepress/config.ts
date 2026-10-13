@@ -75,6 +75,8 @@ export default defineConfig({
           { text: 'P20 写 CLI 工具', link: '/p20-cli-tool' },
           { text: 'P21 synctest + fuzz', link: '/p21-testing-concurrency' },
           { text: 'P22 工具链深潜与文档工程', link: '/p22-toolchain-docs' },
+          { text: 'P23 Linux 运行时', link: '/p23-linux-runtime' },
+          { text: 'P24 网络协议栈', link: '/p24-network-stack' },
           { text: 'P4 精读 ejdb', link: '/p4-ejdb' },
           { text: 'P5 精读 deepsearch', link: '/p5-deepsearch' },
           { text: 'P10 gRPC', link: '/p10-grpc' },
