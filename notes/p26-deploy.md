@@ -140,12 +140,12 @@ shutting down）→ 超时才 SIGKILL。整栈的退出顺序也是编排器排�
 
 ```sh
 $ docker compose config
-name: compose
+name: p26lab # 项目名取自目录名（labs 存档在 /tmp/p26lab 起栈）
 services:
   dnsproxi:
     depends_on:
       httpkv:
-        condition: service_healthy    ← 你的意图被原样保留
+        condition: service_healthy # ← 你的意图被原样保留（渲染还补 required: true）
     environment:
       DNS_LISTEN: :15353
       DNS_UPSTREAM: upstream:15300
@@ -155,14 +155,14 @@ services:
 
 ```sh
 $ docker compose up -d && sleep 2
- Container compose-dnsproxi-1  Started
+ Container p26lab-dnsproxi-1  Started
 $ docker compose ps --format "{{.Name}} {{.Status}}"
-compose-dnsproxi-1   Up 2 seconds
-compose-httpkv-1     Up 5 seconds (healthy)
-compose-upstream-1   Up 5 seconds
+p26lab-dnsproxi-1   Up 2 seconds
+p26lab-httpkv-1     Up 5 seconds (healthy)
+p26lab-upstream-1   Up 5 seconds
 
-$ docker stop compose-httpkv-1            # 或 compose down
-$ docker logs compose-httpkv-1 2>&1 | tail -1
+$ docker stop p26lab-httpkv-1            # 或 compose down
+$ docker logs p26lab-httpkv-1 2>&1 | tail -1
 {"level":"INFO","msg":"shutting down"}    ← P23 的信号链在容器里兑现
 ```
 

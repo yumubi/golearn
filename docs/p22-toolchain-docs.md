@@ -45,7 +45,8 @@ go tool pprof -http=:8080 cpu.pb.gz   # 自带火焰图 tab
 go tool pprof -base=before.pb.gz after.pb.gz
 ```
 
-五种 profile 的分工（实测本仓 httpkv 服务，Apple M4）：
+五种 profile 的分工（实测本仓 httpkv 服务，Apple M4；驻留/累计
+两列是快照值，随运行时长漂移，复核 2026-10-13 同为 kB 量级）：
 
 | profile | 回答的问题 | 采集方式 | 本仓实测 |
 |---|---|---|---|
@@ -69,9 +70,10 @@ Showing nodes accounting for 7, 100% of 7 total
 泄漏排查就是"预期 7 个，实测 700 个"的差值定位：goroutine 类
 profile 的 cum 路径直接显示每个卡在哪一行。
 
-取证纪律：先 allocs（分配大户 = GC 税源头，P6 实证 mark assist
-8.1 万次/3s），再 CPU，最后才 trace。heap 看驻留、allocs 看流量，
-搞反了会盯着"驻留小但分配疯狂"的对象错过优化点。
+取证纪律：先 allocs（分配大户 = GC 税源头，dnsproxi LESSON 读数 4
+实证 mark assist 8.1 万次/3s，E5 trace），再 CPU，最后才 trace。
+heap 看驻留、allocs 看流量，搞反了会盯着"驻留小但分配疯狂"的
+对象错过优化点。
 
 `top` 实拍（httpkv + 20 并发 GET 压测 4 秒采样，真机输出）：
 
@@ -88,7 +90,9 @@ Duration: 4.11s, Total samples = 1.44s (35.06%)
 读法：flat = 函数自身耗时，cum = 含被调用的总耗时；优化 flat 高
 的 leaf 函数、cum 高的调度路径。这份 top 里 syscall 占 60%：
 低负载服务的 CPU 大头在系统调用与调度，说明"优化前先看采样在
-哪"比"凭直觉优化热点"可靠。
+哪"比"凭直觉优化热点"可靠。（复核 2026-10-13：ab -n 200000 -c 20
+打负载 4s 采样，rawsyscalln 57.46% flat、kevent 13.10%、
+pthread_cond_wait 9.01%，三函数名与占比量级复现。）
 
 
 ### dlv：断点调试器（真机会话节选）
@@ -97,20 +101,23 @@ pprof 回答"哪里慢"，dlv 回答"为什么算错"。非交互可用（CI/脚
 加 `--allow-non-terminal-interactive=true`）：
 
 ```text
-$ dlv test ./exercises/p21test/ -- --test.run TestDlvDemo
-(dlv) break p21test.add
-Breakpoint 1 set at 0x104c095a0 for golearn/exercises/p21test.add()
-    ./exercises/p21test/dlvdemo_test.go:5
+$ dlv test ./exercises/p21test/ -- --test.run TestBackoffTable
+(dlv) break p21test.Backoff
+Breakpoint 1 set at 0x105124b60 for golearn/exercises/p21test.Backoff()
+    ./exercises/p21test/retry.go:18
 (dlv) continue
-> [Breakpoint 1] golearn/exercises/p21test.add() (hits goroutine(35):1)
-(dlv) print a
-2
-(dlv) print b
-3
+> [Breakpoint 1] golearn/exercises/p21test.Backoff() (hits goroutine(35):1) (PC: 0x105124b60)
+(dlv) print base
+100000000
+(dlv) print attempt
+0
+(dlv) print cap
+1000000000
 ```
 
-注意 `break add` 会撞上 runtime 里一堆同名 add（ambiguous），断点
-要写全限定名 `包名.函数`。vs Rust：rust-gdb/rust-lldb 裸 gdb/lldb，
+注意 `break add` 会撞上 runtime 里一堆同名 add（ambiguous，真机报
+`Location "add" ambiguous: regexp.(*machine).add, runtime.(*addrRanges).add, runtime.add…`），
+断点要写全限定名 `包名.函数`。vs Rust：rust-gdb/rust-lldb 裸 gdb/lldb，
 dlv 是懂 goroutine/chan 的专用后端。
 
 ## lint 与 generate
@@ -124,7 +131,7 @@ golangci-lint：
 linters:
   enable:
     - errcheck # 未检查的 error
-    - copyloops # for range 拷贝大结构（P3 的坑）
+    - gocritic # rangeValCopy/rangeExprCopy 查 for range 拷贝大结构（P3 的坑）
     - gofumpt # gofmt 严格版
 ```
 
@@ -173,6 +180,10 @@ GODEBUG 也是"现场取证旋钮"（真机，`schedtrace=500` 每 500ms 打
 SCHED 0ms: gomaxprocs=10 idleprocs=8 threads=4 spinningthreads=1
   needspinning=0 idlethreads=0 runqueue=1 [ 0 0 0 0 0 0 0 0 0 0 ]
 ```
+（复核 2026-10-13：GOMAXPROCS=10 GODEBUG=schedtrace=500 短程序
+复跑，首行同样落在 gomaxprocs=10 idleprocs=8 threads=4 形态，
+runqueue/runq 槽位逐跑漂移属正常。注：Go 1.26 起该行尾部新增
+schedticks=[…] 字段。）
 
 一行读出 GMP 现状：10 个 P 只有 2 个在干活（idleprocs=8）、
 4 个内核线程、全局队列 1 个待跑。排查"goroutine 堆积但 CPU
@@ -185,7 +196,7 @@ monorepo 里两个 module 互相引用，没工作区就得推 tag 才能
 
 ```sh
 go work init ./exercises ./dnsproxi-go   # 生成 go.work
-go work use -add ./labs                   # 增补
+go work use ./labs                        # 增补（无 -add 这个 flag）
 ```
 
 go.work 是**本地开发文件，不提交**（CI 不认它，CI 靠 require/
@@ -282,7 +293,7 @@ go build -ldflags "-X golearn/exercises/p22tool.Version=v0.1.0" \
    `Exporteds`（godoc 站点上方法挂在类型名下）？
 4. go.work 该不该提交？replace 呢？
 5. `go tool pprof` 采 CPU，一个 idle 的服务（没请求）会采到
-   什么？（提示：上面实拍里 Duration 5s 但 Total samples = 0。）
+   什么？（提示：idle 采样 Duration 计满但 Total samples = 0。）
 6. `break add` 在 dlv 里能设上吗？断点名要写什么形态？
 
 **观察验证**：上面命令块每条输出都实拍过（退出码 0/1/2 与 P20

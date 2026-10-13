@@ -2,8 +2,9 @@
 
 > 这章学完你能干什么：解释 Ctrl-C 到优雅关停之间 OS 层发生的每一步；
 > 用 `lsof` 读一个进程的 fd 表；把 httpkv 塞进容器并解释"为什么
-> SIGTERM 不处理会等 30 秒被 SIGKILL"。骨架：把 httpkv 从裸跑跑到
-> `docker run`。读者：读完 P8（httpkv 就是这章的道具）。前置：无。
+> SIGTERM 不处理会在宽限期（Linux 容器默认 10 秒）后被 SIGKILL"。
+> 骨架：把 httpkv 从裸跑跑到 `docker run`。读者：读完 P8（httpkv
+> 就是这章的道具）。前置：无。
 >
 > 实战说明：本机是 macOS（本教程开发机），`strace`/`cgroup` 部分
 > 给 Linux 命令与预期输出，其余全部实拍。
@@ -39,7 +40,8 @@ $ echo $?
 每个进程有父进程（PPID）。shell 启动的程序，父就是 shell；容器里
 PID 1 是 ENTRYPOINT 那个进程。**PID 1 特殊**：内核不给它默认信号
 处置，没人装 handler 的 PID 1 收到 SIGTERM 什么都不做。这就是
-"容器里 Ctrl-C 没反应 / docker stop 卡 30 秒"的根源。
+"容器里 Ctrl-C 没反应 / docker stop 卡满宽限期（默认 10 秒）"
+的根源。
 
 `$?` 读的 8 位退出码（P20 讲过 0/1/2 惯例）：正常退出是 `exit(n)`，
 被信号杀死是 128+信号号。实证（sh wait 拿后台进程的退出码）：
@@ -72,7 +74,7 @@ defer stop()
 // ... srv.ListenAndServe()
 <-ctx.Done()          // 收到 SIGTERM：NotifyContext 把 ctx cancel
 logger.Info("shutting down")
-shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 defer cancel()
 srv.Shutdown(shutdownCtx)   // 停止接新连接，等在途请求收尾
 ```
@@ -138,7 +140,8 @@ $ lsof -p <pid> | grep -c TCP
 就是写 fd 2**，docker 的日志驱动收的正是容器的 fd 1/2 字节流。
 
 fd 泄漏是长进程的经典死法：每请求开文件不关，fd 表涨到
-`ulimit -n`（默认 256/1024），再 open 就是 EMFILE。Go 的
+`ulimit -n`（Linux 默认软限常是 1024；macOS 现代版本 1048576，
+`ulimit -Sn` 实测），再 open 就是 EMFILE。Go 的
 `defer f.Close()` 和连接池都是防它的。
 
 真机全表（nohup 启动，真输出）：
@@ -183,7 +186,9 @@ EOF
 # 3. 跑：真机实拍
 $ docker run -d --name golearn-httpkv -p 18090:8090 golearn-httpkv
 $ curl -s -X PUT -d '{"Value":"in-container","TTL":0}' localhost:18090/kv/k
-{"value":"in-container","at":"2026-10-13T06:44:45.399356555Z"}
+{"value":"in-container","at":"0001-01-01T00:00:00Z"}   # PUT 回显请求体；At 由 GET 落库时补
+$ curl -s localhost:18090/kv/k
+{"value":"in-container","at":"2026-10-13T06:44:45Z"}    # GET 读回：At=time.Now
 $ docker exec golearn-httpkv id
 uid=65534(nobody) gid=65534(nobody)   # ← USER nobody 生效，不跑 root
 ```
@@ -212,7 +217,8 @@ $ docker logs golearn-httpkv 2>&1 | tail -1
 ```
 
 反例：如果 main 不装 handler（没有 `signal.NotifyContext`），PID 1
-无视 SIGTERM，docker stop 等满 30 秒宽限期后发 SIGKILL（`$?`=137）
+无视 SIGTERM，docker stop 等满宽限期（Linux 容器默认 10 秒，
+`docker stop -t` 可改）后发 SIGKILL（`$?`=137）
 （在途请求全断）。这就是云原生清单里"必须处理 SIGTERM"的 OS 依据。
 
 ## cgroups：限额与 GOMAXPROCS
@@ -244,8 +250,8 @@ macOS 无 cgroups，容器里才有；这也是"本机没毛病、进容器毛�
 3. fd 表是全部 I/O 的把手；日志进 stderr = 写 fd 2 = 容器日志
    驱动的数据源；fd 泄漏到 ulimit 是长进程经典死法。
 4. 容器 = namespace（看见什么）+ cgroup（能用多少）+ 联合文件
-   系统；PID 1 不装 handler 就收不到 SIGTERM，docker stop 30 秒
-   后 SIGKILL。
+   系统；PID 1 不装 handler 就收不到 SIGTERM，docker stop 宽限期
+   （Linux 默认 10 秒）后 SIGKILL。
 5. Go 1.25+ 自动按 cgroup CPU 限额设 GOMAXPROCS；"本机好容器差"
    先查限额对齐。
 

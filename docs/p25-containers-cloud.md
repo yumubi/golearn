@@ -152,10 +152,10 @@ GOMAXPROCS= 10 NumCPU= 10       ← 内存不影响调度器
 healthcheck 把这个判断交给编排器：
 
 ```yaml
-# compose 版（P26 展开）
+# compose 版（P26 展开）；存档 labs/compose/compose.yaml 用 nc -z 探端口
 healthcheck:
-  # test: ['CMD', 'wget', '-q', 'localhost:8090/kv/__probe']
-  test: CMD wget -q localhost:8090/kv/__probe # 打真实请求
+  test: CMD nc -z localhost 8090
+  # test: CMD wget -q localhost:8090/kv/__probe # 改造题落地后的目标形态（打真实请求）
   interval: 3s # 每 3 秒探一次
   retries: 3 # 连败 3 次判 unhealthy
 ```
@@ -180,7 +180,7 @@ mux.HandleFunc("GET /kv/__probe", func(w http.ResponseWriter, r *http.Request) {
 （探针流量也是流量）；`start_period` 给启动留宽限（JVM 类慢启动
 的 Go 服务一般不用）。
 
-探针端点代码（P22 的 mux 惯用法，P26 编排就用它）：
+探针端点代码（P22 的 mux 惯用法；当前 P26 编排存档用 nc -z，这段是改造题把探针换成真实请求的蓝图）：
 
 ```go
 mux.HandleFunc("GET /kv/__probe", func(w http.ResponseWriter, r *http.Request) {

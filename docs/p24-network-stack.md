@@ -62,7 +62,7 @@ TCP RST（端口没服务，httpkv 没起时 curl 的
 curl 的退出码区分前两种（真跑，httpkv 没起）：
 
 ```sh
-$ curl -s --max-time 2 localhost:8091/kv/x; echo "exit=$?"
+$ curl -sS --max-time 2 localhost:8091/kv/x; echo "exit=$?"
 curl: (7) Failed to connect to localhost port 8091: Connection refused
 exit=7                          ← RST：机器活着，端口没服务
 ```
@@ -133,7 +133,7 @@ $ dig +time=2 @127.0.0.1 -p 15353 tcpdump.test A +noall +answer
 | | `4011` | TTL=64、协议 0x11=17（UDP；TCP 是 06） |
 | | `7f00 0001`×2 | 源/目的 127.0.0.1 |
 | UDP 头 | `c461 3bf9 0031 fe44` | 源端口 50273 → 目的 15353；长 0x31=49、校验和 |
-| DNS header | `108d 0120 0001 0000 0000 0001` | ID=0x108d；flags=0x0100（RD=1 递归请求）；QDCOUNT=1 |
+| DNS header | `108d 0120 0001 0000 0000 0001` | ID=0x108d；flags=0x0120（RD=1 + AD=1，dig 默认带 AD）；QDCOUNT=1 |
 | question | `0774 6370 6475 6d70 0474 6573 7400` | len+label 编码：`7 tcpdump`、`4 test`、0 结束 |
 | | `0001 0001` | QTYPE=A(1)、QCLASS=IN(1) |
 | EDNS(附加) | `0000 2910 0000...` | OPT 记录（type 0x29），dig 默认带 EDNS0 |
@@ -141,22 +141,22 @@ $ dig +time=2 @127.0.0.1 -p 15353 tcpdump.test A +noall +answer
 响应包（46 字节）的关键差异：
 
 ```text
-...108d 8180 0001 0001 0000 0000 0774...  c00c 0001 0001
-0000 003c 0004 0a00 0001
+...6212 8180 0001 0001 0000 0001 0774...  c00c 0001 0001
+0000 012c 0004 0102 0304
 ```
 
 - flags `8180`：QR=1（是响应）+ RD/RA=1（递归可用）。P17 冒烟
   翻车记就是 QR 位丢了导致 dig 不认。
 - `c00c`：**压缩指针**，0xc0|0x0c 指回 offset 12 的 question 域，
-  不重复传 qname（P6 wire/name.go 手工解析的就是它）。
-- `0000 003c`：TTL=60 秒，下一节的缓存账本主角。
-- `0004 0a00 0001`：RDLENGTH=4，A 记录 10.0.0.1。
+  不重复传 qname（P6 `wire.ParseName` 手工解析的就是它）。
+- `0000 012c`：TTL=300 秒（fakeup 固定 300），下一节的缓存账本主角。
+- `0004 0102 0304`：RDLENGTH=4，A 记录 1.2.3.4。
 
 **qname 的 len+label 编码**（`07 tcpdump 04 test 00`）是 DNS 一切
 解析的起点，Rust 版 `parse_header` 同款逻辑：读到 0 结束，遇到
 0xc0 开头是指针跳转。
 
-Go 侧手工解析就是这两条规则的循环（P6 `wire.Name` 的骨架）：
+Go 侧手工解析就是这两条规则的循环（P6 `wire.ParseName` 的骨架）：
 
 ```go
 func ParseName(buf []byte, off int) (string, int, error) {
@@ -191,22 +191,22 @@ func ParseName(buf []byte, off int) (string, int, error) {
 ```sh
 $ DNS_CACHE=1 DNS_LISTEN=:15353 DNS_UPSTREAM=127.0.0.1:15300 /tmp/dnsproxi-go &
 $ dig +noedns +noad @127.0.0.1 -p 15353 ttl.test A +noall +answer   # 第一次
-ttl.test.		60	IN	A	10.0.0.1
+ttl.test.		300	IN	A	1.2.3.4
 $ dig +noedns +noad @127.0.0.1 -p 15353 ttl.test A +noall +answer   # 第二次（隔 2 秒）
-ttl.test.		58	IN	A	10.0.0.1
+ttl.test.		298	IN	A	1.2.3.4
 ```
 
 代理日志（真机实拍）：
 
 ```text
 {"msg":"cache miss, forwarding","qname":"ttl.test","req_id":"q-...87"}
-{"msg":"cache hit","qname":"ttl.test","ttl_left":58,"req_id":"q-...89"}
+{"msg":"cache hit","qname":"ttl.test","ttl_left":298,"req_id":"q-...89"}
 ```
 
-第一次 miss 转发上游（fakeup 计数 hit=1），第二次直接命中内存：
-answer 的 TTL 从 60 变 58，`ttl_left` 用（P6 G2 的 `time.Now`
-单调钟）算出应答年龄。上游只被问了 1 次（fakeup 日志核对），
-走到 0 条目过期重新回源。
+第一次 miss 转发上游，第二次直接命中内存：answer 的 TTL 从 300 变
+298，`ttl_left` 用（P6 G2 的 `time.Now` 单调钟）算出应答年龄。
+上游只被问了 1 次：metrics `forwarded=1, hit=1`（fakeup 本身不打
+日志，上游计数以代理 metrics 为准），走到 0 条目过期重新回源。
 
 **默认 dig 为什么绕过缓存**（真机翻出来，比 P18 记录更细一层）：
 `dig +noedns` 仍带 **AD 位**（报文 flags 是 0x0120 不是 0x0100），
@@ -330,8 +330,8 @@ sudo tcpdump -i lo0 -nn 'udp port 15353 and (udp[10] & 0x80 != 0)'
 # 只看查询（QR=0），macOS 实测抓到 UDP length 38 的查询包
 sudo tcpdump -i lo0 -nn -c 1 'udp port 15353 and (udp[10] & 0x80 = 0)' -X
 
-# 按 UDP length 筛包长：EDNS 查询 41B（udp[6:2] 是 length 字段）
-sudo tcpdump -i lo0 -nn 'udp port 15353 and udp[6:2] = 0x0031'
+# 按 UDP length 筛包长：EDNS 查询 41B（udp[4:2] 是 length 字段，6:2 是校验和）
+sudo tcpdump -i lo0 -nn 'udp port 15353 and udp[4:2] = 0x0031'
 ```
 
 存 pcap 离线分析（Wireshark 的 `dns.qry.name` 过滤器比 BPF 好
