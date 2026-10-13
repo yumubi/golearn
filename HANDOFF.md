@@ -264,10 +264,15 @@ violations（含 results/LESSON 历史 em-dash 全文件清理）。
   labs/compose/）。章数 26→28。完整闸门（含 99 变异 + PG 容器）
   PASS。
 
-- 批8（批后巡检补遗）：P10（gRPC）漏在批次表外（24 章清单笔误），
-  补齐：问题式骨架 → 名词小节（从 .proto 到能跑的服务/四种流的
-  签名/拦截器：函数洋葱/bufconn）+ 体系背景（RPC 三层叠：
-  HTTP/2/protobuf/stub）。
+- 批8 `a5e3f3b`（批后巡检补遗）：P10（gRPC）漏在批次表外（24 章
+  清单笔误），补齐：问题式骨架 → 名词小节（从 .proto 到能跑的
+  服务/四种流的签名/拦截器：函数洋葱/bufconn）+ 体系背景
+  （RPC 三层叠：HTTP/2/protobuf/stub）。
+- 批9 `f6e914d`（§8.2 落地）：用户裁决豁免批1-5 旧章，P23-26 四章
+  代码占比 20-27% → 25-31%（全部真跑素材：SIGKILL 对照/exit=137/
+  三次握手 tcpdump 真抓/dig +tcp 结果反转/BPF 修正/inspect 元数据/
+  compose config 渲染）。40% 硬线对表格密集实战章不适用，主旨
+  （每章 3 分钟跑出例子）已满足。
 
 体系词汇随文解释（§10.2 第三层）落实：fd 0/1/2、signal、握手、
 镜像层、sidecar 型探针、namespace/cgroup 等首现均有一句话解释。
