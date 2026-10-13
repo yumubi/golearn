@@ -46,11 +46,11 @@
 | P17 dnsproxi 指标落地 | [notes/p17-dnsproxi-metrics.md](notes/p17-dnsproxi-metrics.md) | `dnsproxi-go/`（:9153/metrics） | ✅ RED 重建（qtype×outcome 低基数）+ cache_entries 双更新点 + 7=2+4+1 冒烟对账；upstream_errors_total{reason} 双场景实测（refused/timeout） |
 | P18 dnsproxi 日志落地 | [notes/p18-dnsproxi-slog.md](notes/p18-dnsproxi-slog.md) | `dnsproxi-go/logger.go` | ✅ 独立 module 重写 ctxHandler（UDP 版每查询 ctx）+ [hit]/[miss] 结构化冒烟实拍；级别分层表 |
 | P19 生态与常用库选型地图 | [notes/p19-ecosystem.md](notes/p19-ecosystem.md) | `exercises/p19eco/` | ✅ 4 tests 全绿（functional options/slog Handler 门控/stringer generate） |
-| P20 写 CLI 工具（管道/flag/cobra/退出码/发布） | [notes/p20-cli-tool.md](notes/p20-cli-tool.md) | `exercises/p20cli/`（含 cmd/ 可跑） | ✅ 7 tests 全绿 + wcgo 真机退出码 0/1/2 实证 |
-| P21 testing/synctest + fuzz：时间与输入的测试武器 | [notes/p21-testing-concurrency.md](notes/p21-testing-concurrency.md) | `exercises/p21test/`（含 cmd/retryrun） | ✅ 10 tests -race（虚拟时钟 300ms 精确账本/泄漏 panic 指认/三种挂死真机形态）+ FuzzParseArgs 60s 2853 万 execs 实测 |
-| P22 工具链深潜与文档工程（pprof/lint/generate/GODEBUG/go.work/doc 工程） | [notes/p22-toolchain-docs.md](notes/p22-toolchain-docs.md) | `exercises/p22tool/`（含 cmd/docstats） | ✅ 4 tests -race 全绿 + CLI 退出码 0/1/2 实证 + pprof 五 profile 实采 |
-| P23 Linux 运行时：进程、信号、fd 与容器 | [notes/p23-linux-runtime.md](notes/p23-linux-runtime.md) | 实战即练习（httpkv + docker） | ✅ 优雅关停/容器内 SIGTERM/cgroup 实拍（macOS 无 strace 部分为文字说明） |
-| P24 网络协议栈：从 ping 到 DNS 全链路 | [notes/p24-network-stack.md](notes/p24-network-stack.md) | 实战即练习（tcpdump 抓包） | ✅ DNS 报文逐字节/TTL 缓存账本/TCP 状态机实拍 |
+| P20 写 CLI 工具（管道/flag/cobra/退出码/发布） | [notes/p20-cli-tool.md](notes/p20-cli-tool.md) | `exercises/p20cli/`（含 cmd/ 可跑） | ✅ 7 tests 全绿 + 退出码 0/1/2 实证 + 预测环节（go run 吃码/长行截断/管道错误去向） |
+| P21 testing/synctest + fuzz：时间与输入的测试武器 | [notes/p21-testing-concurrency.md](notes/p21-testing-concurrency.md) | `exercises/p21test/`（含 cmd/retryrun） | ✅ 10 tests -race + FuzzParseArgs 60s 2853 万 execs；-race 节（DATA RACE 实拍/race×fuzz 同跑慢 6 倍实证）+ bubble 起点/语料重放实拍 |
+| P22 工具链深潜与文档工程（pprof/lint/generate/GODEBUG/go.work/doc 工程） | [notes/p22-toolchain-docs.md](notes/p22-toolchain-docs.md) | `exercises/p22tool/`（含 cmd/docstats） | ✅ 4 tests -race 全绿 + pprof top/goroutine 实拍 + schedtrace 读 GMP + dlv 会话节 |
+| P23 Linux 运行时：进程、信号、fd 与容器 | [notes/p23-linux-runtime.md](notes/p23-linux-runtime.md) | 实战即练习（httpkv + docker） | ✅ 优雅关停/容器内 SIGTERM/cgroup 实拍 + 预测环节（kill -9 可否优雅处理） |
+| P24 网络协议栈：从 ping 到 DNS 全链路 | [notes/p24-network-stack.md](notes/p24-network-stack.md) | 实战即练习（tcpdump 抓包） | ✅ DNS 报文逐字节/TTL 缓存账本/TCP 状态机实拍 + 预测环节（cache hit 上游不转发实证） |
 | P25 容器与云原生：镜像、限额、健康检查 | [notes/p25-containers-cloud.md](notes/p25-containers-cloud.md) | 实战即练习（labs/compose/） | ✅ 多阶段构建 351MB→26.6MB/GOMAXPROCS 取整实测/healthcheck 实拍 |
 | P26 部署实战：把毕业项目发上去 | [notes/p26-deploy.md](notes/p26-deploy.md) | `labs/compose/`（compose 收官） | ✅ 三服务编排真跑/服务名互通/健康条件依赖 |
 
