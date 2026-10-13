@@ -313,6 +313,19 @@ violations（含 results/LESSON 历史 em-dash 全文件清理）。
   "同上"展开、tcp-syn|tcp-fin 管道转义、长句拆分。验证：
   slop-lint 0×6、mirror 零漂移、gate --fast PASS、完整 gate
   PASS（p12pg start/stop 全流程）、pnpm run ci 全绿。
+- 批14：上线 GitHub 公开仓库 + Pages 在线文档。
+  vendored/ejdb 与 vendored/deepsearch 快照进仓（VENDORED.md
+  记上游 commit 8be48bb/b7157af 与许可；P4/P5/README/INDEX
+  路径引用全部改相对）；audit/ 台账本地化（.gitignore +
+  gate 条件跳过，远端 clone 时台账检查 SKIP）；vitepress
+  base=/golearn/、nav 仓库链接；Actions workflow（ci job:
+  lint/build/go test 双 module；deploy job: Pages 自动发布）。
+  正文列宽 688px 到 1100px（VPDoc scoped 规则需 has-sidebar
+  has-aside 双类同权重压过）。排障：github.com 直连被企业网
+  拦（api 通主站不通），git/gh 走系统代理 127.0.0.1:10808；
+  OAuth device flow 被风控拦一次，重试后 workflow scope 到位。
+  线上：Actions 首跑 ci+deploy 双绿，https://yumubi.github.io/
+  golearn/ 200 且 P21 章节真浏览器渲染通过。
 
 体系词汇随文解释（§10.2 第三层）落实：fd 0/1/2、signal、握手、
 镜像层、sidecar 型探针、namespace/cgroup 等首现均有一句话解释。
