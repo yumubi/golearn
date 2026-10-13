@@ -47,7 +47,22 @@ PID 1 是 ENTRYPOINT 那个进程。**PID 1 特殊**：内核不给它默认信�
 "容器里 Ctrl-C 没反应 / docker stop 卡 30 秒"的根源。
 
 `$?` 读的 8 位退出码（P20 讲过 0/1/2 惯例）：正常退出是 `exit(n)`，
-被信号杀死是 128+信号号（`kill -9` 后 `$?` = 137）。
+被信号杀死是 128+信号号。实证（sh wait 拿后台进程的退出码）：
+
+```sh
+$ sh -c '/tmp/httpkv & P=$!; sleep 1; kill -9 $P; wait $P; echo exit=$?'
+sh: line 1: 74043 Killed: 9  /tmp/httpkv
+exit=137                     ← 128 + 9（SIGKILL）
+```
+
+进程是从哪个二进制起的、什么版本编译的，现场可查（P22 的
+buildinfo 落地）：
+
+```sh
+$ go version -m /tmp/httpkv | head -2
+/tmp/httpkv: go1.26.4
+	path	golearn/exercises/p8fast/httpkv
+```
 
 ## 信号：SIGTERM 送达之后
 
@@ -89,6 +104,22 @@ $ lsof -ti :8090 | wc -l
 两条铁律：不捕获 SIGKILL/SIGSTOP（内核保留，容器强杀就是它）；
 信号只发通知，清理逻辑写在主流程里（`Shutdown`），不要塞 handler。
 
+对照组（真跑）：SIGKILL 下没有日志、没有 Shutdown：
+
+```sh
+$ nohup /tmp/httpkv > /tmp/hk.log 2>&1 &
+$ kill -9 $(lsof -ti :8090)
+$ grep -c shutting /tmp/hk.log      # ← 0：一行日志都没来得及打
+0
+$ lsof -ti :8090 | wc -l            # 端口释放，但是内核代劳
+0
+```
+
+`shut-log=0` 就是"默认处置直接终止"的实证：内核直接回收进程，
+Go runtime 连跑一行用户代码的机会都没有。容器强杀
+（`docker kill`）就是这个语义，P25 的优雅关停窗口靠
+`docker stop` 的 TERM 先行才存在。
+
 ## fd：一切 I/O 的把手
 
 Unix 的"一切皆文件"落到实处就是 fd 表：0=stdin、1=stdout、
@@ -114,6 +145,21 @@ $ lsof -p <pid> | grep -c TCP
 fd 泄漏是长进程的经典死法：每请求开文件不关，fd 表涨到
 `ulimit -n`（默认 256/1024），再 open 就是 EMFILE。Go 的
 `defer f.Close()` 和连接池都是防它的。
+
+真机全表（nohup 启动，真输出）：
+
+```text
+$ lsof -p $(lsof -ti :8090)
+COMMAND   PID USER   FD     TYPE  NODE NAME
+httpkv  71181 akka    0u     CHR   338  /dev/null      ← nohup 把 stdin 挂到 null
+httpkv  71181 akka    1w     REG  78103  /tmp/hk2.log   ← stdout 重定向
+httpkv  71181 akka    2w     REG  78103  /tmp/hk2.log   ← stderr（slog 默认目标）
+httpkv  71181 akka    3u    PIPE                    ← runtime 内部管道
+```
+
+fd 0/1/2 的去向完全由启动方式决定（nohup、`>log`、终端），
+进程自己决定 3 号以后开什么。看懂这张表 = 看懂容器日志驱动
+（P25）和 `docker exec` 的 I/O 接线。
 
 ## 容器：隔离的三件套
 
@@ -146,6 +192,20 @@ $ curl -s -X PUT -d '{"Value":"in-container","TTL":0}' localhost:18090/kv/k
 $ docker exec golearn-httpkv id
 uid=65534(nobody) gid=65534(nobody)   # ← USER nobody 生效，不跑 root
 ```
+
+翻车实录（第一次构建就踩的）：不设 `GOOS=linux`，产出的还是
+macOS 的 Mach-O，容器里跑起来：
+
+```text
+$ file /tmp/httpkv
+/tmp/httpkv: Mach-O 64-bit executable arm64      ← 宿主格式
+$ docker run --rm golearn-httpkv
+exec /usr/local/bin/httpkv: exec format error    ← 内核拒绝执行
+```
+
+`file` 命令一眼定性：ELF 是 Linux 的，Mach-O 是 macOS 的。
+`CGO_ENABLED=0` 保证不链系统库（glibc/musl 都不沾），二进制
+是纯静态的。
 
 `docker stop` 对 PID 1 发 SIGTERM，httpkv 的信号链在容器里照常
 工作：
@@ -234,6 +294,21 @@ kill -TERM $(lsof -ti :8090)       # 看 shutting down 日志 + 端口释放
 | fd 表 | `ls /proc/<pid>/fd` | `lsof -p <pid>` |
 | TCP 状态 | `ss -tan` | `netstat -an -p tcp` |
 | cgroup 限额 | `cat /sys/fs/cgroup/cpu.max` | 容器内才有 |
+
+### 进程观察速查（真跑输出）
+
+```sh
+$ ps -o pid,ppid,command -p $(lsof -ti :8090)
+  PID PPID COMMAND
+71181    1 /tmp/httpkv     ← PPID=1：nohup 孤儿化（原 shell 不等它）
+
+$ pgrep -l httpkv                # 按名找 PID
+71181 /tmp/httpkv
+```
+
+PPID=1 的两种来路：docker 的 ENTRYPOINT（设计使然），或父进程
+先退（孤儿被 init 收养）。看到"不该是 1 的进程 PPID=1"先查
+是不是守护化/孤儿，再查是不是被 supervisor 接管。
 
 ### Rust 对照总表
 

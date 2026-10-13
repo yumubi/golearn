@@ -140,6 +140,37 @@ shutting down）→ 超时才 SIGKILL。整栈的退出顺序也是编排器排�
 （依赖方先停）。对照 k8s：Pod 的 `terminationGracePeriodSeconds`
 同一语义。
 
+`config` 子命令渲染出编排器的"真实视图"（变量已展开、条件已
+解析，排 yaml 语法问题用它）：
+
+```sh
+$ docker compose config
+name: compose
+services:
+  dnsproxi:
+    depends_on:
+      httpkv:
+        condition: service_healthy    ← 你的意图被原样保留
+    environment:
+      DNS_LISTEN: :15353
+      DNS_UPSTREAM: upstream:15300
+```
+
+真机实证（labs/compose 起栈后逐条跑）：
+
+```sh
+$ docker compose up -d && sleep 2
+ Container compose-dnsproxi-1  Started
+$ docker compose ps --format "{{.Name}} {{.Status}}"
+compose-dnsproxi-1   Up 2 seconds
+compose-httpkv-1     Up 5 seconds (healthy)
+compose-upstream-1   Up 5 seconds
+
+$ docker stop compose-httpkv-1            # 或 compose down
+$ docker logs compose-httpkv-1 2>&1 | tail -1
+{"level":"INFO","msg":"shutting down"}    ← P23 的信号链在容器里兑现
+```
+
 ## 从 compose 到 k8s：映射表
 
 | compose | k8s | 差异 |

@@ -66,6 +66,16 @@ ENTRYPOINT ["/usr/local/bin/httpkv"]
 实测：`golang:1.26-alpine` 351MB，最终 `golearn-httpkv:ms` 26.6MB
 （alpine 10.2MB + 二进制 8.85MB）。`COPY --from=build` 是两个阶段
 之间唯一的桥，builder 里的 Go、模块缓存、源码全部留在阶段 1。
+`inspect` 一条命令看镜像元数据（真跑）：
+
+```sh
+$ docker inspect golearn-httpkv:ms \
+    --format '{{.Os}}/{{.Architecture}} layers={{len .RootFS.Layers}} user={{.Config.User}}'
+linux/arm64 layers=2 user=nobody
+```
+
+两层 = alpine 基础层 + COPY 二进制层；`USER nobody` 在镜像
+元数据里，运行时不可逃逸（除非显式 `--user` 覆盖）。
 
 三个实战细节（每个都真踩过）：**依赖先 COPY 再 COPY 源码**（依赖
 层缓存住，改源码不触发 `go mod download`）；**只 COPY 需要的包**
@@ -96,6 +106,39 @@ $ docker exec hk-lim cat /sys/fs/cgroup/cpu.max
 
 规律：**GOMAXPROCS = ceil(CPU 限额)，上限是 NumCPU**。内存限额
 （`--memory 64m` → `memory.max=67108864`）不影响 GOMAXPROCS。
+
+探针程序就一行（`labs/compose/` 素材的 `probe.go`，交叉编译后
+`docker cp` 进容器跑）：
+
+```go
+package main
+
+import (
+    "fmt"
+    "runtime"
+)
+
+func main() {
+    fmt.Println("GOMAXPROCS=", runtime.GOMAXPROCS(0), "NumCPU=", runtime.NumCPU())
+}
+```
+
+```sh
+$ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o probe probe.go
+$ docker cp probe hk-lim:/tmp/probe && docker exec hk-lim /tmp/probe
+GOMAXPROCS= 2 NumCPU= 10        ← 1.5 核限额那次
+```
+
+内存限额的实证（真跑）：`memory.max` 写进 cgroup，但
+GOMAXPROCS 仍是 10：
+
+```sh
+$ docker run -d --rm --name hk-mem --memory 64m golearn-httpkv:ms
+$ docker exec hk-mem cat /sys/fs/cgroup/memory.max
+67108864                        ← 64MiB
+$ docker exec hk-mem /tmp/probe
+GOMAXPROCS= 10 NumCPU= 10       ← 内存不影响调度器
+```
 
 为什么这联动重要：Go 的调度器按 GOMAXPROCS 开 P（逻辑处理器），
 每个 P 上跑的 goroutine 会占 CPU 时间片。限额 1.5 核却开 10 个 P
@@ -136,6 +179,19 @@ mux.HandleFunc("GET /kv/__probe", func(w http.ResponseWriter, r *http.Request) {
 探针设计三忌：别查下游（下游挂了你也被判死，雪崩）；别太频
 （探针流量也是流量）；`start_period` 给启动留宽限（JVM 类慢启动
 的 Go 服务一般不用）。
+
+探针端点代码（P22 的 mux 惯用法，P26 编排就用它）：
+
+```go
+mux.HandleFunc("GET /kv/__probe", func(w http.ResponseWriter, r *http.Request) {
+    writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+})
+```
+
+与 `nc -z` 的取舍：`nc -z` 只证"端口有 listener 在 accept"，
+不证业务能响应（死锁的 handler 照样探活）；打真实请求才覆盖
+"handler 链路通"。代价是探针流量进业务日志，`__probe` 前缀
+方便日志里过滤。
 
 ## 可观测性进容器：stdout 纪律的兑现
 
