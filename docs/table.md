@@ -1,5 +1,5 @@
 ---
-title: 课程表：26 章速查
+title: 课程表：28 章速查
 ---
 
 # 课程表
@@ -35,6 +35,8 @@ title: 课程表：26 章速查
 | P22 | 工具链深潜与文档工程（pprof/lint/generate/GODEBUG/go.work/doc 工程） | [notes](/p22-toolchain-docs) | `exercises/p22tool/`（含 cmd/docstats） | ✅ 4 tests -race + CLI 退出码 0/1/2 + pprof 五 profile 实采 |
 | P23 | Linux 运行时：进程/信号/fd/容器（httpkv 骨架） | [notes](/p23-linux-runtime) | 实战即练习（httpkv + docker） | ✅ 优雅关停/容器内 SIGTERM/cgroup 实拍 |
 | P24 | 网络协议栈：从 ping 到 DNS 全链路（dnsproxi 教具） | [notes](/p24-network-stack) | 实战即练习（tcpdump 抓包） | ✅ DNS 逐字节/TTL 账本/TCP 状态机实拍 |
+| P25 | 容器与云原生：镜像/限额/健康检查 | [notes](/p25-containers-cloud) | 实战即练习（labs/compose/） | ✅ 多阶段 351MB→26.6MB + GOMAXPROCS 取整实测 + healthcheck |
+| P26 | 部署实战：compose 编排收官 | [notes](/p26-deploy) | `labs/compose/` | ✅ 三服务编排真跑（dnsproxi+httpkv+upstream）+ 健康条件依赖 |
 
 ## 贯穿主线
 

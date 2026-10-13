@@ -1,0 +1,21 @@
+services:
+  httpkv:
+    image: golearn-httpkv:ms
+    ports: ["18090:8090"]
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 8090 || exit 1"]
+      interval: 3s
+      retries: 3
+    cpus: 1.5
+    mem_limit: 64m
+  upstream:
+    build: { context: /tmp/p26lab, dockerfile: upstream.Dockerfile }
+  dnsproxi:
+    image: golearn-dnsproxi
+    environment:
+      DNS_LISTEN: ":15353"
+      DNS_UPSTREAM: "upstream:15300"
+    ports: ["15353:15353/udp", "19153:9153"]
+    depends_on:
+      httpkv:
+        condition: service_healthy

@@ -12,7 +12,7 @@
 | ① 语法核心 | P1.5 → P2 → P2.5 → P3 → P14 | 半天到一天 | 能向别人复述每章 Take-away |
 | ② 服务搭建 | P8 → P12（或 P9）→ P6 LESSON.md | 1 天 | 能画出 dnsproxi 的请求路径 |
 | ③ 可观测性 | P13 → P15 → P16 → P17 → P18 | 1 天 | 能解释"为什么 req_id 不进 metrics label" |
-| ④ 按需查 | P1 进阶命令、P19 生态地图、P20 写 CLI 工具、P21 测试武器（synctest/fuzz）、P22 工具链深潜与文档工程、P23 Linux 运行时（进程/信号/fd/容器）、P24 网络协议栈（DNS 全链路）、P4/P5 精读法、P10/P11 | 用到才翻 | 无 |
+| ④ 按需查 | P1 进阶命令、P19 生态地图、P20 写 CLI 工具、P21 测试武器（synctest/fuzz）、P22 工具链深潜与文档工程、P23 Linux 运行时（进程/信号/fd/容器）、P24 网络协议栈（DNS 全链路）、P25 容器云原生（镜像/限额/健康检查）、P26 部署实战（compose 编排）、P4/P5 精读法、P10/P11 | 用到才翻 | 无 |
 
 每章打开方式（详见 README）：先读章头“这章学完你能干什么”和正文的主要
 问题（正文是讲义），卡壳才翻章末参考。练习：预测题先写答案再跑对答案，
@@ -51,6 +51,8 @@
 | P22 工具链深潜与文档工程（pprof/lint/generate/GODEBUG/go.work/doc 工程） | [notes/p22-toolchain-docs.md](notes/p22-toolchain-docs.md) | `exercises/p22tool/`（含 cmd/docstats） | ✅ 4 tests -race 全绿 + CLI 退出码 0/1/2 实证 + pprof 五 profile 实采 |
 | P23 Linux 运行时：进程、信号、fd 与容器 | [notes/p23-linux-runtime.md](notes/p23-linux-runtime.md) | 实战即练习（httpkv + docker） | ✅ 优雅关停/容器内 SIGTERM/cgroup 实拍（macOS 无 strace 部分为文字说明） |
 | P24 网络协议栈：从 ping 到 DNS 全链路 | [notes/p24-network-stack.md](notes/p24-network-stack.md) | 实战即练习（tcpdump 抓包） | ✅ DNS 报文逐字节/TTL 缓存账本/TCP 状态机实拍 |
+| P25 容器与云原生：镜像、限额、健康检查 | [notes/p25-containers-cloud.md](notes/p25-containers-cloud.md) | 实战即练习（labs/compose/） | ✅ 多阶段构建 351MB→26.6MB/GOMAXPROCS 取整实测/healthcheck 实拍 |
+| P26 部署实战：把毕业项目发上去 | [notes/p26-deploy.md](notes/p26-deploy.md) | `labs/compose/`（compose 收官） | ✅ 三服务编排真跑/服务名互通/健康条件依赖 |
 
 ## 用法
 

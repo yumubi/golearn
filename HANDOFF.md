@@ -239,3 +239,32 @@ violations（含 results/LESSON 历史 em-dash 全文件清理）。
   实证）+ 4 tests -race
 - 五处入口 + P1 章末指引 + docs 镜像。gate --fast PASS + pnpm ci 全绿。
 - 提交：e948159
+
+## 廖雪峰风重写执行记录
+
+全 24 章重写 + P23-P26 四章新增（体系线），按 HANDOFF-REWRITE.md
+分 7 批完成。每批验证：slop-lint 0 → mirror 逐字节 → gate（批7 为
+完整闸门）→ pnpm run ci → 提交。
+
+- 批1 `c75b569`：P2、P3、P1.5（样板批，试读通过后推进）
+- 批1补记 `e0fab3f`：P1.5 补遗
+- 批2 `ca2c59f`：P2.5、P14、P4、P5
+- 批3 `6cfd4b7`：P8、P9、P12、P11
+- 批4 `7db63f5`：P13、P15、P16、P17、P18
+- 批5 `fa53ee1`：P1、P19、P20、P21、P22。gate 两处对齐（提交信息
+  有旧值）：结构检查 `"## "` 小节 ≥4；占位语正则裸 `略$` 改
+  `（略）`（原正则误伤"策略"行尾）
+- 批6 `8a2428b`：P23（Linux 运行时，httpkv 骨架）、P24（网络协议栈，
+  dnsproxi 教具 + tcpdump 逐字节）。章数 24→26。macOS 无 strace/ss
+  沿批4 先例文字说明 + Linux 对照表
+- 批7（本次）：P25（容器云原生：多阶段构建 351MB→26.6MB 实测、
+  GOMAXPROCS 按 ceil(cgroup cpu.max) 取整联动 1.5核→2/4核→4、
+  healthcheck）、P26（compose 编排收官：dnsproxi+httpkv+Go fake
+  upstream 三服务真跑，服务名互通，健康条件依赖；实战文件存档
+  labs/compose/）。章数 26→28。完整闸门（含 99 变异 + PG 容器）
+  PASS。
+
+体系词汇随文解释（§10.2 第三层）落实：fd 0/1/2、signal、握手、
+镜像层、sidecar 型探针、namespace/cgroup 等首现均有一句话解释。
+实战命令全部真跑实拍；踩坑实录（Mach-O exec format error、容器内
+127.0.0.1、yaml lint 三轮）进入正文。

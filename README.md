@@ -25,7 +25,7 @@ flowchart LR
 | ① 语法核心 | P1.5 → P2 → P2.5 → P3 → P14 | Go 这门语言怎么写、怎么写得地道 | 必读，测试要真跑 |
 | ② 服务搭建 | P8 → P9 或 P12 → P6 LESSON | 一个真实后端怎么搭 | 必读；有 PG17 直读 P12 |
 | ③ 可观测性 | P13 → P15 → P16 → P17 → P18 | 上线后怎么看得见 | 整条弧连读，别拆散 |
-| ④ 按需参考 | P1 进阶命令、P19 生态地图、P20 写 CLI 工具、P21 测试武器（synctest/fuzz）、P22 工具链深潜与文档工程、P23 Linux 运行时（进程/信号/fd/容器）、P24 网络协议栈（DNS 全链路）、P4/P5（精读法）、P10（gRPC）、P11（goose） | 用到才翻 | 不排进日程 |
+| ④ 按需参考 | P1 进阶命令、P19 生态地图、P20 写 CLI 工具、P21 测试武器（synctest/fuzz）、P22 工具链深潜与文档工程、P23 Linux 运行时（进程/信号/fd/容器）、P24 网络协议栈（DNS 全链路）、P25 容器云原生（镜像/限额/健康检查）、P26 部署实战（compose 编排）、P4/P5（精读法）、P10（gRPC）、P11（goose） | 用到才翻 | 不排进日程 |
 
 - **快速路径（有 Rust/Java 底子）**：①②③ 一共 2-3 天。语法底子厚可把
   P1.5 当字典查（P2/P2.5 仍建议通读：惯用法不是语法能推出来的），跳过
@@ -80,6 +80,8 @@ cd /Users/akka/Dev/learning/go
 | P22 | 工具链深潜与文档工程（pprof/lint/generate/GODEBUG/go.work/doc 工程） | [notes/p22-toolchain-docs.md](notes/p22-toolchain-docs.md) | `exercises/p22tool/`（含 cmd/docstats） | ✅ 4 tests -race + CLI 退出码 0/1/2 + pprof 五 profile 实采 |
 | P23 | Linux 运行时：进程/信号/fd/容器（httpkv 骨架） | [notes/p23-linux-runtime.md](notes/p23-linux-runtime.md) | 实战即练习（httpkv + docker） | ✅ 优雅关停/容器内 SIGTERM/cgroup 实拍 |
 | P24 | 网络协议栈：从 ping 到 DNS 全链路（dnsproxi 教具） | [notes/p24-network-stack.md](notes/p24-network-stack.md) | 实战即练习（tcpdump 抓包） | ✅ DNS 逐字节/TTL 账本/TCP 状态机实拍 |
+| P25 | 容器与云原生：镜像/限额/健康检查 | [notes/p25-containers-cloud.md](notes/p25-containers-cloud.md) | 实战即练习（labs/compose/） | ✅ 多阶段 351MB→26.6MB/GOMAXPROCS 联动实测 |
+| P26 | 部署实战：compose 编排收官 | [notes/p26-deploy.md](notes/p26-deploy.md) | `labs/compose/` | ✅ 三服务编排真跑/健康条件依赖 |
 
 ## 网站版（VitePress，rust-for-frontend 同款体验）
 
