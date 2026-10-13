@@ -5,7 +5,11 @@ import { mermaidPlugin } from './theme/mermaid-plugin'
 // mermaid：markdown-it 插件把 ```mermaid fence 换成 <vitepress-mermaid> 组件
 //（见 theme/mermaid-plugin.ts + MermaidDiagram.vue；vitepress-plugin-mermaid
 // 会把 dayjs 塞进 optimizeDeps 导致 hydration 全站崩，弃用）。
+const repo = 'yumubi/golearn'
+
 export default defineConfig({
+  // GitHub Pages 项目页：yumubi.github.io/golearn/
+  base: '/golearn/',
   lang: 'zh-CN',
   title: 'golearn',
   description: 'Go for Backend：以练代学的速成课（面向 Rust/Java 后端）',
@@ -23,7 +27,7 @@ export default defineConfig({
     nav: [
       { text: '课程表', link: '/table' },
       { text: '毕业项目', link: '/dnsproxi' },
-      { text: '仓库', link: 'https://github.com/' },
+      { text: '仓库', link: `https://github.com/${repo}` },
     ],
     sidebar: [
       {

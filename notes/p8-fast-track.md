@@ -426,6 +426,8 @@ goroutine profile: total 7
 1 @ 0x1025cdfd8 0x102691fcc 0x1027174d8 0x10271f4a4 0x1027d8868 0x102644ae4
 #	0x102691fcb	internal/poll.(*FD).Read+0x20b			/Users/akka/Toolchain/go/current/src/internal/poll/fd_unix.go:164
 ```
+栈帧里的 GOROOT 路径是编译机上的（`/Users/.../Toolchain/go/...`），你跑出来的
+形态一样、路径换成你自己的 Go 安装位置，地址列也会不同。
 
 接入只要两行：`import _ "net/http/pprof"` 加一个 `go http.ListenAndServe("localhost:6060", nil)`。只绑本机，不能暴露公网。抓 CPU 画像用 `go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30`。P13 把它当第四根支柱。
 

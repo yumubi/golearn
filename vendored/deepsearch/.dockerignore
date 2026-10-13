@@ -1,0 +1,27 @@
+# Version control and CI
+.git
+.github
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Build output and runtime data
+/deepsearch
+/server
+bin/
+data/
+*.test
+*.out
+
+# Documentation and local tooling
+/README.md
+/README_ZH.md
+/AGENTS.md
+compose.yaml
+
+# Editors and OS files
+.idea/
+.vscode/
+.DS_Store

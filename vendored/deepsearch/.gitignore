@@ -1,0 +1,35 @@
+# ---> Go
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Build output
+/deepsearch
+/server
+bin/
+
+# IDE and editor
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Runtime data
+data/

@@ -57,7 +57,7 @@
 ## 用法
 
 ```sh
-cd /Users/akka/Dev/learning/go
+cd golearn
 # dnsproxi-go 是独立 module：
 cd dnsproxi-go && go test ./...
 ```
@@ -78,6 +78,6 @@ go test -race -timeout 30s ./exercises/p3conc/...
 
 ## 载体
 
-- `/Users/akka/oss/github.com/clarkqaq/ejdb`：嵌入式 JSON 库（P4）
-- `/Users/akka/oss/github.com/clarkqaq/deepsearch`：LLM 搜索服务（P5）
-- `/Users/akka/Dev/learning/rs/dnsproxi`：你自己的 Rust DNS 载体（P6 对照）
+- `vendored/ejdb/`：嵌入式 JSON 库（P4，快照自 forgejo.gulugulu.moe/clark/ejdb）
+- `vendored/deepsearch/`：LLM 搜索服务（P5，快照自 github.com/ClarkQAQ/deepsearch）
+- `dnsproxi-go/`：毕业项目本体（Rust 对照版见 P6 正文）

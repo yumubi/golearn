@@ -1,10 +1,10 @@
 # P4 · 项目精读 A：ejdb，读别人的 Go 存储引擎从哪下手？
 
 > 这章学完你能干什么：拿到一个没读过的 Go 存储引擎仓库，半小时内画出它的查询执行路径，说出接口抽象省了什么、丢了什么，并预言键编码的排序行为，包括负数会被排到哪里。
-> 载体：`/Users/akka/oss/github.com/clarkqaq/ejdb`，约 3200 行。它是 C 版 EJDB2 的 Go 移植，Go 注释里到处是 `Ported from jbi_*.c`。
+> 载体：`vendored/ejdb/`（快照自 https://forgejo.gulugulu.moe/clark/ejdb ，约 3200 行）。它是 C 版 EJDB2 的 Go 移植，Go 注释里到处是 `Ported from jbi_*.c`。
 > 读者：读过 P2（接口与错误）和 P3（锁与原子操作）。前置：P3。后续：P5 用同一套方法读服务型项目。
 >
-> 动手方式：这章不改上游仓库。先拷一份副本，所有实验在副本里做：`cp -r /Users/akka/oss/github.com/clarkqaq/ejdb /tmp/ejdb-lab`。读码用 `grep` 和 `sed -n`，运行用 `go run`。
+> 动手方式：这章不改快照本体。先拷一份副本，所有实验在副本里做：`cp -r vendored/ejdb /tmp/ejdb-lab`。读码用 `grep` 和 `sed -n`，运行用 `go run`。
 
 ## 体系背景：嵌入式数据库是一个目录加一个库
 

@@ -30,7 +30,8 @@ def rec(name, ok, detail=''):
 
 def changed(*exts):
     out = sh(f'git diff --name-only {BASE} && git ls-files --others --exclude-standard').stdout.split()
-    return sorted({f for f in out if f.endswith(exts) and os.path.exists(f) and 'node_modules' not in f})
+    return sorted({f for f in out if f.endswith(exts) and os.path.exists(f)
+                   and 'node_modules' not in f and not f.startswith(('vendored/', '.github/'))})
 
 
 # 1 全量 CI
@@ -136,10 +137,14 @@ rec('无未说明的新增 t.Skip', not bad, ', '.join(bad))
 
 # 11 审读台账：范围见 scripts/audit-scope.txt（slug:最少条数），每条必须有可复核的命令/出处
 scope = [l.split('#')[0].strip() for l in open('scripts/audit-scope.txt') if l.split('#')[0].strip()]
+have_audit = os.path.isdir('audit')
 for item in scope:
     slug, _, mn = item.partition(':')
     mn = int(mn or 20)
     f = f'audit/{slug}.md'
+    if not have_audit:
+        rec(f'台账 {f}', True, 'audit/ 不在发布范围（本地核对工具），跳过')
+        continue
     if not os.path.exists(f):
         rec(f'台账 {f}', False, '文件不存在')
         continue

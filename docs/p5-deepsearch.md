@@ -6,7 +6,7 @@ title: P5 · 项目精读 B：deepsearch，一个 Go 服务的骨架是怎么长
 
 
 > 这章学完你能干什么：拿到一个陌生 Go 服务仓库，能从目录读出分层，把它编出来、跑起来、发信号让它退出，并看懂它的依赖注入（DI）和优雅关停。还能用 20 行写出类型安全的泛型 DI，并说清它为什么会在两种写法下出错。
-> 载体：`/Users/akka/oss/github.com/clarkqaq/deepsearch`，约 3500 行（含测试）。读者：读过 P2（接口定义在使用方）和 P3（goroutine 与 recover）。
+> 载体：`vendored/deepsearch/`（快照自 https://github.com/ClarkQAQ/deepsearch ，MIT，约 3500 行含测试）。读者：读过 P2（接口定义在使用方）和 P3（goroutine 与 recover）。
 >
 > 动手方式：本章以"跟着做"为主。先编译并跑起来，再改一处配置看变化，最后读源码。例子程序放在你自己的空目录里，用 `go run main.go` 运行。
 
@@ -84,8 +84,7 @@ exit=1
 deepsearch 是一个搜索服务：REST API 加 MCP 端点，后端调用大模型。先看仓库根目录：
 
 ```sh
-$ cd /Users/akka/oss/github.com/clarkqaq/deepsearch
-$ ls
+$ cd vendored/deepsearch
 AGENTS.md  cmd  compose.yaml  Dockerfile  go.mod  go.sum  internal  LICENSE  main.go  pkg  README_ZH.md  README.md  scripts
 ```
 

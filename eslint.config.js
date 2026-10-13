@@ -8,6 +8,7 @@ export default antfu({
     'dnsproxi-go/**',
     '**/exercises/**',
     '**/labs/**',
+    'vendored/**',
     '**/*.css',
   ],
   rules: {

@@ -266,7 +266,7 @@ pkg@none` 移除依赖。Rust 的 `cargo publish` 是中心化注册表，Go
 ## 动手：练习 p22tool（30-45 分钟）
 
 ```sh
-cd /Users/akka/Dev/learning/go
+cd golearn
 go test -race -count=1 ./exercises/p22tool/     # 4 测试全绿
 go run ./exercises/p22tool/cmd/docstats ./exercises/p22tool   # 100% → 0
 go run ./exercises/p22tool/cmd/docstats ./exercises/p1tool    # 83% → 1

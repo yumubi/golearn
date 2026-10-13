@@ -1,4 +1,7 @@
 # golearn：Go for Backend 教程（以练代学）
+[![ci](https://github.com/yumubi/golearn/actions/workflows/ci.yml/badge.svg)](https://github.com/yumubi/golearn/actions/workflows/ci.yml)
+
+**在线阅读：https://yumubi.github.io/golearn/** （GitHub Pages，随 main 自动构建）
 
 > 面向「已经写过 Rust/Java/Kotlin 的后端」的 Go 速成课。
 > 配方仿 `rs/rust-for-frontend`（类比表 + 可运行示例 + 练习驱动 + capstone），
@@ -37,7 +40,7 @@ flowchart LR
 ## 每章怎么打开
 
 ```sh
-cd /Users/akka/Dev/learning/go
+cd golearn
 ```
 
 1. **正文当讲义读**：从章头“这章学完你能干什么”读起，正文按 2-4 个问题
@@ -99,7 +102,7 @@ pnpm docs:preview    # 本地预览 dist
 ## 全仓验证（任何时候一键回归）
 
 ```sh
-cd /Users/akka/Dev/learning/go && go vet ./... && go test -race -count=1 ./...
+cd golearn && go vet ./... && go test -race -count=1 ./...
 cd dnsproxi-go && go vet ./... && go test -race -count=1 ./...   # 独立 module
 ```
 
@@ -121,6 +124,8 @@ cd dnsproxi-go && go vet ./... && go test -race -count=1 ./...   # 独立 module
 
 ## 载体（外部项目）
 
-- `/Users/akka/oss/github.com/clarkqaq/ejdb`（P4 精读对象，嵌入式 JSON 库）
-- `/Users/akka/oss/github.com/clarkqaq/deepsearch`（P5 精读对象，LLM 搜索服务）
-- `/Users/akka/Dev/learning/rs/dnsproxi`（P6 对照体，你自己的 Rust DNS）
+- `vendored/ejdb/`（P4 精读对象，嵌入式 JSON 库；快照自 forgejo.gulugulu.moe/clark/ejdb）
+- `vendored/deepsearch/`（P5 精读对象，LLM 搜索服务；快照自 github.com/ClarkQAQ/deepsearch，MIT）
+- `dnsproxi-go/`（毕业项目本体，直接在本仓库里演进）
+
+P4/P5 的源码快照在 [vendored/VENDORED.md](vendored/VENDORED.md) 里有版本出处与许可说明。

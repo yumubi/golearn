@@ -1,0 +1,16 @@
+name: deepsearch
+
+services:
+  deepsearch:
+    build: .
+    image: ${DEEPSEARCH_IMAGE:-ghcr.io/clarkqaq/deepsearch:latest}
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${DEEPSEARCH_PORT:-8231}:${DEEPSEARCH_PORT:-8231}"
+    volumes:
+      - ./.env:/app/.env:ro
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s

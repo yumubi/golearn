@@ -210,7 +210,7 @@ PASS
 ## 动手：练习 p21test（30-45 分钟，纯标准库）
 
 ```sh
-cd /Users/akka/Dev/learning/go
+cd golearn
 go test -race ./exercises/p21test/
 go run ./exercises/p21test/cmd/retryrun -n 2 -base 100ms -- sh -c 'exit 1'
 ```

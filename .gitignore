@@ -17,3 +17,6 @@ logs
 temp
 **/.vitepress/cache/
 **/.vitepress/dist/
+# 审读台账是本机核对工具（含绝对路径），不随仓库发布
+audit/
+scripts/audit-scope.txt

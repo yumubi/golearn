@@ -12,7 +12,7 @@
 终点是这套东西真实跑起来（实拍在"动手"一节，五个测试 `-race` 全绿）：
 
 ```sh
-cd /Users/akka/Dev/learning/go
+cd golearn
 go run ./exercises/p10grpc/          # 终端 1：服务端 :9090
 go run ./exercises/p10grpc/client/   # 终端 2：客户端四连
 ```
