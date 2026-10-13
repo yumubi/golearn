@@ -286,6 +286,13 @@ violations（含 results/LESSON 历史 em-dash 全文件清理）。
   读 GMP）+ 新增 dlv 节（真机会话，ambiguous 断点坑）。预测题各
   +2（对应真实误区）。验证：slop-lint 0×2、mirror、gate --fast
   PASS、ci 全绿、audit MISSING 0（P21 18 条/P22 9 条）。
+- 批12 `cbe4c2d`（调研裁决延伸：预测环节补齐）：P20 补全新
+  预测环节（27 章唯一缺预测的实战章，4 道误区对应题：go run 吃
+  退出码实拍 exit=1 vs build exit=2、Scanner 长行静默截断、
+  2>/dev/null 错误去向、WalkDir 部分失败）；P23 +1（kill -9
+  可否优雅处理）；P24 +1（cache hit 上游不转发，fake upstream
+  计数实证 upstream got 1）。P13/P15 复查合格不动。验证：
+  slop-lint 0×3、mirror、gate --fast PASS、ci 全绿。
 
 体系词汇随文解释（§10.2 第三层）落实：fd 0/1/2、signal、握手、
 镜像层、sidecar 型探针、namespace/cgroup 等首现均有一句话解释。
