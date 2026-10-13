@@ -22,14 +22,24 @@ go run ./exercises/p10grpc/          # 终端 1：服务端 :9090
 go run ./exercises/p10grpc/client/   # 终端 2：客户端四连
 ```
 
-四个问题依次展开：
+正文四节依次回答：从 .proto 到能跑的服务有几步、四种流的签名
+怎么读、拦截器和 tower 差在哪、测试为什么走 bufconn。
 
-1. 从 `.proto` 到能跑的服务有几步？每步产出什么？
-2. 四种流的方法签名怎么读？为什么说签名就是说明书？
-3. 拦截器和 tower middleware 差在哪？
-4. 测试为什么要走 bufconn，而不是起一个真端口？
+## 体系背景：RPC 栈的三层叠
 
-## 问题 1：从 .proto 到能跑的服务有几步？
+gRPC 不是"又一个 HTTP 库"，它是一根三层叠起来的管子：
+**HTTP/2**（传输：一条 TCP 连接上多路复用 N 个并发请求，P8 的
+握手只发生一次）→ **protobuf**（编码：字段号 + 变长整数，比 JSON
+小而快，代价是不可 human-read）→ **stub**（生成代码：把"方法调用"
+翻译成"序列化加网络"的样板，Rust 的 trait 和 Go 的 interface 都是
+它的皮）。分层视角一句话：gRPC 把 HTTP/2 当运输队、protobuf 当
+集装箱、proto 文件当报关单。
+
+这解释了两个后文现象：四种"流"是免费送的（HTTP/2 的 stream 帧
+天生支持，gRPC 只是暴露成 API）；测试可以走内存（bufconn，第 4
+节）：分层管子的底层换了，上层无感知。
+
+## 从 .proto 到能跑的服务
 
 三步：接口先行、代码生成、服务端实现。每步的产出都看得见。
 
@@ -122,7 +132,7 @@ func (s *KVServer) Put(ctx context.Context, req *kvpb.PutRequest) (*kvpb.PutRepl
 4. **注册**：`kvpb.RegisterKVServer(srv, server.New())` ≈ tonic 的
    `.serve(lis)`。
 
-## 问题 2：四种流的签名怎么读？
+## 四种流的签名
 
 生成接口的四个方法签名，扫一眼就懂模式，签名本身就是说明书：
 
@@ -210,7 +220,7 @@ bs.CloseSend()
 返回的 conn 不立即建 TCP，第一次 RPC 才拨号。"连不上"的错误在第一次
 调用冒出来，和 `sql.Open` 一样的坑（P9 学过一次了，这里是第二次）。
 
-## 问题 3：拦截器和 tower middleware 差在哪？
+## 拦截器：函数洋葱
 
 ```go
 func LoggingUnaryInterceptor(
@@ -237,7 +247,7 @@ Go 拦截器是签名固定的函数洋葱**。表达力低一档（没有类型
 流式有对应物 `StreamInterceptor`（参数多一个 `stream grpc.ServerStream`）；
 链式用 `grpc.ChainUnaryInterceptor(a, b, c)`，顺序 = 声明顺序。
 
-## 问题 4：bufconn 为什么是真测试的正确姿势？
+## bufconn：内存里的真协议栈
 
 ```go
 lis := bufconn.Listen(1 << 20)               // 内存"网络"，不占端口

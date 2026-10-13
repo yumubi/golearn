@@ -264,6 +264,11 @@ violations（含 results/LESSON 历史 em-dash 全文件清理）。
   labs/compose/）。章数 26→28。完整闸门（含 99 变异 + PG 容器）
   PASS。
 
+- 批8（批后巡检补遗）：P10（gRPC）漏在批次表外（24 章清单笔误），
+  补齐：问题式骨架 → 名词小节（从 .proto 到能跑的服务/四种流的
+  签名/拦截器：函数洋葱/bufconn）+ 体系背景（RPC 三层叠：
+  HTTP/2/protobuf/stub）。
+
 体系词汇随文解释（§10.2 第三层）落实：fd 0/1/2、signal、握手、
 镜像层、sidecar 型探针、namespace/cgroup 等首现均有一句话解释。
 实战命令全部真跑实拍；踩坑实录（Mach-O exec format error、容器内
