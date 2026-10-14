@@ -43,6 +43,7 @@ title: 课程表：28 章速查
 | P33 | 泛型的边界 | [notes](/p33-generics-boundary) | `exercises/p33gen/` | ✅ 6 tests -race 干净 + 3 bench（排序三选手/Set/标记接口/编译错实拍） |
 | P34 | TCP 服务器与 DNS over TCP | [notes](/p34-tcp-server-dns-over-tcp) | `exercises/p34frame/` | ✅ 8 tests -race 干净 + 2 bench（帧三边界/丢帧语义/Pool 改造/4 字节前缀） |
 | P35 | 限流、熔断与容错 | [notes](/p35-ratelimit-breaker) | `dnsproxi-go/guard/` | ✅ 11 tests -race 干净 + 3 bench（令牌桶欠账/熔断三态/冒烟 breaker_open 5/5） |
+| P36 | 用户、鉴权与分层测试（webook 主线） | [notes](/p36-user-auth-layering) | `minifeed/` | ✅ 3 tests -race 干净（双 Store 同套用例/token 四连/httptest 全链路） |
 
 ## 贯穿主线
 
