@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"golearn/dnsproxi-go/cache"
+	"golearn/dnsproxi-go/tcp"
 	"golearn/dnsproxi-go/wire"
 )
 
@@ -36,7 +37,7 @@ type Config struct {
 	Admit    string // DNS_CACHE_ADMIT：off|tinylfu（你 D5）
 	Door     bool   // DNS_CACHE_DOORKEEPER，挡板开关（默认关，Caffeine 也没开）
 
-	// G5 主动老化（你 D6）：默认全关 = D1-D5 逐位原行为——TTL 到期只是
+	// G5 主动老化（你 D6）：默认全关 = D1-D5 逐位原行为：TTL 到期只是
 	// 让读路径当 miss，条目本身赖着不走。
 	ActiveTTL      bool // DNS_CACHE_ACTIVE_TTL=1，开后台回收
 	ExpireHZ       int  // DNS_CACHE_EXPIRE_HZ，1..500，默认 10
@@ -46,6 +47,11 @@ type Config struct {
 	ExpireLog      bool // DNS_CACHE_EXPIRE_LOG，每周期打 [expire]
 	HitPathPool    bool // DNS_HITPATH_POOL=1，命中路径走池化 buffer（labs 实验 4 B 形态）
 	WorkerPool     int  // DNS_WORKER_POOL=N，worker pool 形态（labs 实验 6）；0=goroutine-per-packet
+
+	// P34：DNS over TCP 与 UDP 截断。默认全关：TCPListen 空 = 不起 TCP 监听，
+	// UDPTruncLimit 0 = 应答不截断（UDP 路径行为逐位不变）。
+	TCPListen     string // DNS_TCP_LISTEN，如 :5353/tcp；空=完全不启动 TCP
+	UDPTruncLimit int    // DNS_UDP_TC_LIMIT，UDP 应答字节上限；0=不截断
 }
 
 // packet 是 worker pool 模式的队列元素。
@@ -74,11 +80,13 @@ func loadConfig() Config {
 		ExpireLog:      os.Getenv("DNS_CACHE_EXPIRE_LOG") == "1",
 		HitPathPool:    os.Getenv("DNS_HITPATH_POOL") == "1",
 		WorkerPool:     envInt("DNS_WORKER_POOL", 0),
+		TCPListen:      os.Getenv("DNS_TCP_LISTEN"),
+		UDPTruncLimit:  envInt("DNS_UDP_TC_LIMIT", 0),
 	}
 }
 
 // envIntClamp 越界回退默认（你 Rust 版 :846 注释：hz>1000 时 ticker 直接炸，
-// 且炸在后台任务里、横幅照常打——看起来和"刚打开还没触发"一模一样，最阴险）。
+// 且炸在后台任务里、横幅照常打，看起来和"刚打开还没触发"一模一样，最阴险）。
 func envIntClamp(k string, def, lo, hi int) int {
 	if v := os.Getenv(k); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= lo && n <= hi {
@@ -121,7 +129,7 @@ type Proxy struct {
 
 // Run 启动 UDP 监听循环，阻塞到 ctx 取消。
 //
-// 对照你 Rust 版的 tokio::spawn(accept 循环)：Go 没有 async 块——
+// 对照你 Rust 版的 tokio::spawn(accept 循环)：Go 没有 async 块，
 // 直接 for 循环 + 每 query 一个 goroutine。ctx 取消 = close 监听口
 // （ReadFromUDP 立刻返回错误）+ WaitGroup 等在飞的 query 排空。
 func (p *Proxy) Run(ctx context.Context) error {
@@ -133,6 +141,14 @@ func (p *Proxy) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", p.cfg.Listen, err)
 	}
+	var wg sync.WaitGroup
+
+	// P34：UDP 应答截断（默认关）。只包出站 WriteTo，收包路径原样。
+	var replyPC net.PacketConn = pc
+	if p.cfg.UDPTruncLimit > 0 {
+		replyPC = tcp.WrapTrunc(pc, p.cfg.UDPTruncLimit)
+	}
+
 	if p.cfg.CacheOn && p.cache == nil {
 		// Run 前没建就这里建（测试可能直接构造 Proxy{cfg:…}）。
 		p.cache = cache.NewCap(p.cfg.CacheMax, p.cfg.SampleK, p.cfg.Seed)
@@ -147,7 +163,24 @@ func (p *Proxy) Run(ctx context.Context) error {
 		}
 	}
 
-	var wg sync.WaitGroup
+	// P34：DNS over TCP（默认关）。TCPListen 空 = 完全不启动。
+	// 复用 handleQuery：streamConn 把 TCP 连接适配成 PacketConn，
+	// sinkhole/缓存/转发/指标全部走同一条业务路径，零复制。
+	// 放在 cache 建立之后：Serve 起的查询立刻能吃到完整缓存路径。
+	if p.cfg.TCPListen != "" {
+		ln, err := net.Listen("tcp", p.cfg.TCPListen)
+		if err != nil {
+			pc.Close()
+			return fmt.Errorf("tcp listen %s: %w", p.cfg.TCPListen, err)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := tcp.Serve(ctx, ln, p.handleQuery, tcp.ServerCfg{}); err != nil {
+				logger.Error("tcp serve failed", "err", err.Error())
+			}
+		}()
+	}
 
 	// G5 主动老化：cache_on && active_ttl 才起后台回收（对照 Rust :931 分支）。
 	if p.cfg.CacheOn && p.cfg.ActiveTTL {
@@ -180,9 +213,9 @@ func (p *Proxy) Run(ctx context.Context) error {
 		pc.Close()
 	}()
 
-	buf := make([]byte, 4096) // DNS over UDP 上限 4096（EDNS0）——两种读循环共用
+	buf := make([]byte, 4096) // DNS over UDP 上限 4096（EDNS0），两种读循环共用
 	if p.cfg.WorkerPool > 0 {
-		// labs 实验 6（P9）：worker pool 形态——固定 N 个 worker 吃 channel，
+		// labs 实验 6（P9）：worker pool 形态，固定 N 个 worker 吃 channel，
 		// 消掉 per-packet spawn + 上台下台（P8 trace：3 秒 48.5 万次上台、
 		// 每次只摊 ~13µs 有效功）。Rust 对照：task 池 ≈ 预建 mpsc 消费者。
 		qch := make(chan packet, p.cfg.WorkerPool)
@@ -197,7 +230,7 @@ func (p *Proxy) Run(ctx context.Context) error {
 								logger.Error("query panic", "panic", fmt.Sprint(r))
 							}
 						}()
-						p.handleQuery(pc, pkt.client, pkt.query)
+						p.handleQuery(replyPC, pkt.client, pkt.query)
 					}()
 				}
 			}()
@@ -234,7 +267,7 @@ func (p *Proxy) Run(ctx context.Context) error {
 					logger.Error("query panic", "panic", fmt.Sprint(r))
 				}
 			}()
-			p.handleQuery(pc, client, query)
+			p.handleQuery(replyPC, client, query)
 		}()
 	}
 }
@@ -269,7 +302,7 @@ func (p *Proxy) handleQuery(pc net.PacketConn, client net.Addr, query []byte) {
 	}
 
 	// G2 缓存命中：未过期的应答直接回，不问上游（对照 Rust :1056）。
-	// G4：频率要按【请求流】统计，命中也要数——increment 在查询入口，
+	// G4：频率要按【请求流】统计，命中也要数，increment 在查询入口，
 	// 不在 miss 分支（对照 Rust :1071 注释）。
 	if p.cfg.CacheOn {
 		if q, err := cache.Request(query); err == nil {
@@ -290,7 +323,7 @@ func (p *Proxy) handleQuery(pc net.PacketConn, client net.Addr, query []byte) {
 						}
 						logger.InfoContext(ctx, "cache hit", "qname", q.Name, "qtype", qtypeLabel(q.Type), "ttl_left", e.MinTTL-e.AgeSecs())
 					}
-					cache.BufPool.Put(bufp) // WriteTo 完成后才还——同 goroutine 顺序保证
+					cache.BufPool.Put(bufp) // WriteTo 完成后才还，同 goroutine 顺序保证
 					if resp != nil {
 						return
 					}
