@@ -79,6 +79,27 @@ func TestRequestCacheability(t *testing.T) {
 	if _, err := Request(q); err == nil {
 		t.Fatal("trailing bytes must not be cacheable")
 	}
+	// AD 位豁免（手册 24 节改造题 1）：dig 默认带 AD，必须命中缓存。
+	// RA/rcode 位仍拒：它们只属于应答，出现在查询里说明包不是纯净查询。
+	adq := mkQuery(2, "a.com", 1, false)
+	adq[3] |= 0x20 // AD 位
+	if _, err := Request(adq); err != nil {
+		t.Fatalf("AD-flagged query should be cacheable: %v", err)
+	}
+	raq := mkQuery(3, "a.com", 1, false)
+	raq[3] |= 0x80 // RA 位，非 AD，仍拒
+	if _, err := Request(raq); err == nil {
+		t.Fatal("RA-flagged query must not be cacheable")
+	}
+	// 带了 AD 的查询命中后，应答 AD 位由上游决定，不从查询带（回包字节原样）。
+	adResp := mkResp(2, "a.com", 1, 120, false)
+	plan, err := PlanResponse(adResp, adq)
+	if err != nil {
+		t.Fatalf("plan with AD query: %v", err)
+	}
+	if plan.Key.Name != "a.com" {
+		t.Fatalf("wrong key: %+v", plan.Key)
+	}
 }
 
 // TestPlanResponse 正常应答可入缓存；负应答/TC/问题不匹配都拒。

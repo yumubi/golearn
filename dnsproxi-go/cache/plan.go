@@ -109,8 +109,12 @@ func Records(buf []byte) ([]RR, error) {
 }
 
 // Request 判定该查询是否可缓存；可缓存时返回提取的问题。
-// 对照 Rust cache_request()：只缓存 RD=1、OPCODE=0、无 EDNS、单问题、
+// 对照 Rust cache_request()：RD=1、OPCODE=0、无 EDNS、单问题、
 // question 之后没有多余字节（no additional records）的查询。
+// AD 位（0x0020）豁免：stub resolver（dig 默认、systemd-resolved）普遍带
+// AD 查询，它只表达"希望上游校验"，不改问题的身份——手册 24 节改造题 1。
+// 应答侧不受影响：缓存里的应答 AD 位来自上游（PlanResponse 原样入存），
+// Reply 拷贝应答原字节，AD 的真伪由上游负责，不从查询里带。
 func Request(buf []byte) (*Question, error) {
 	q, err := ParseQuestion(buf)
 	if err != nil {
@@ -120,7 +124,9 @@ func Request(buf []byte) (*Question, error) {
 		return nil, fmt.Errorf("short")
 	}
 	flags1, flags2 := buf[2], buf[3]
-	if flags1 != 1 || flags2 != 0 { // RD=1 其余全 0（含 opcode/EDNS 位）
+	// flags1 低字节=0x01（RD=1，opcode/AA/TC=0）；flags2 允许 AD 位（0x20），
+	// 其余（RA/zero 位/rcode）必须全 0。
+	if flags1 != 1 || flags2&^0x20 != 0 {
 		return nil, fmt.Errorf("not plain query")
 	}
 	// ANCOUNT/NSCOUNT/ARCOUNT 全 0。

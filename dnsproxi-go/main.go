@@ -192,6 +192,7 @@ func (p *Proxy) Run(ctx context.Context) error {
 		return fmt.Errorf("listen %s: %w", p.cfg.Listen, err)
 	}
 	var wg sync.WaitGroup
+	var stopExpirer func() // 非 nil = ActiveTTL 起了 expirer，关停时先 close(done)
 
 	// P34：UDP 应答截断（默认关）。只包出站 WriteTo，收包路径原样。
 	var replyPC net.PacketConn = pc
@@ -250,11 +251,9 @@ func (p *Proxy) Run(ctx context.Context) error {
 		ecfg.Budget = time.Duration(p.cfg.ExpireBudgetUs) * time.Microsecond
 		ecfg.Exchange = p.cfg.ExpireLog
 		done := make(chan struct{})
-		var once sync.Once
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			defer once.Do(func() { close(done) })
 			for st := range p.cache.RunExpirer(done, ecfg) {
 				CacheEntries.Set(float64(p.cache.Len()))
 				if ecfg.Exchange {
@@ -263,8 +262,10 @@ func (p *Proxy) Run(ctx context.Context) error {
 				}
 			}
 		}()
-		// Run 返回时（读循环退出）关掉 expirer。
-		defer once.Do(func() { close(done) })
+		// 关停顺序：读循环退出路径先 close(done) 再 wg.Wait()。
+		// 不能把 close(done) 挂在 Run 的 defer 上：defer 要等 wg.Wait() 之后的
+		// return 才跑，而 expirer 在 wg 里等 done——互等死锁（手册改造题 2）。
+		stopExpirer = func() { close(done) }
 	}
 
 	go func() { // ctx 取消 → 关监听口，ReadFromUDP 立刻断
@@ -297,7 +298,10 @@ func (p *Proxy) Run(ctx context.Context) error {
 		for {
 			n, client, err := pc.ReadFromUDP(buf)
 			if err != nil {
-				close(qch) // 排空 worker
+				close(qch)              // 排空 worker
+				if stopExpirer != nil { // 先停 expirer（wg 成员）再等 wg：顺序不能反（死锁见 expirer 启动处注释）
+					stopExpirer()
+				}
 				wg.Wait()
 				if ctx.Err() != nil {
 					return nil
@@ -311,6 +315,9 @@ func (p *Proxy) Run(ctx context.Context) error {
 	for {
 		n, client, err := pc.ReadFromUDP(buf)
 		if err != nil {
+			if stopExpirer != nil { // 先停 expirer 再 wg.Wait()（顺序错 = 互等死锁）
+				stopExpirer()
+			}
 			wg.Wait()
 			if ctx.Err() != nil {
 				return nil // 优雅关停：不算错误
