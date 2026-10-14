@@ -130,7 +130,7 @@ def check(path, max_ratio):
         if mm:
             heads[mm.group(1)] = "\n".join(x for x in nf.read_text().splitlines() if x.startswith("#"))
     for n, l in enumerate(lines, 1):
-        for mm in re.finditer(r"\b(p\d+(?:_5)?)(?:[a-z-]*)?\s*§\s*([^\s，。；：)）、`/]+)", l):
+        for mm in re.finditer(r"\b(p\d+(?:_5)?)(?:[a-z-]*)?\s*§\s*([^\s，。；：()（）、`/]+)", l):
             k, sec = mm.group(1), mm.group(2)
             if k not in heads:
                 errs.append(f"{path}:{n} 引用 {k} §{sec}：notes/{k}-*.md 不存在（尚未写的章不能带 § 引用）")
