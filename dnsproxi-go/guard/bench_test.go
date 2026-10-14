@@ -27,7 +27,7 @@ func BenchmarkBreakerAllowClosed(b *testing.B) {
 func BenchmarkTokenBucketWaitN(b *testing.B) {
 	tb := NewTokenBucket(100_000, 100_000, RealClock) // 0.01ms/枚，等待可忽略
 	ctx := context.Background()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		tb.WaitN(ctx, 1)
 	}
 }

@@ -58,6 +58,7 @@
 | P32 内存与 GC | [notes/p32-memory-gc.md](notes/p32-memory-gc.md) | `exercises/p32gc/` | ✅ 4 tests -race 干净 + 3 bench（逃逸矩阵/语义垃圾/三级分配/pprof 四级） |
 | P33 泛型的边界 | [notes/p33-generics-boundary.md](notes/p33-generics-boundary.md) | `exercises/p33gen/` | ✅ 6 tests -race 干净 + 3 bench（排序三选手/Set/标记接口/编译错实拍） |
 | P34 TCP 服务器与 DNS over TCP | [notes/p34-tcp-server-dns-over-tcp.md](notes/p34-tcp-server-dns-over-tcp.md) | `exercises/p34frame/` | ✅ 8 tests -race 干净 + 2 bench（帧三边界/丢帧语义/Pool 改造/4 字节前缀） |
+| P35 限流、熔断与容错 | [notes/p35-ratelimit-breaker.md](notes/p35-ratelimit-breaker.md) | `dnsproxi-go/guard/` | ✅ 11 tests -race 干净 + 3 bench（令牌桶欠账/熔断三态/冒烟 breaker_open 5/5） |
 
 ## 用法
 

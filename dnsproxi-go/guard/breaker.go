@@ -76,7 +76,7 @@ func (r *ring) add(fail bool) {
 }
 
 func (r *ring) counts() (fails, total int) {
-	for i := 0; i < r.size; i++ {
+	for i := range r.size {
 		if r.bits[i] {
 			fails++
 		}

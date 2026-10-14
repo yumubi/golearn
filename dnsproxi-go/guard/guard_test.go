@@ -43,7 +43,7 @@ func (f *fakeClock) signal() chan struct{} { return f.done }
 func (s *guardSuite) testBucketAllowReject() {
 	c := newFakeClock(s.base)
 	b := NewTokenBucket(10, 5, c) // 10/s，容量 5
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if !b.Allow(1) {
 			s.failf("第 %d 个应放行", i+1)
 		}
@@ -65,7 +65,7 @@ func (s *guardSuite) testBucketRefillCap() {
 	c := newFakeClock(s.base)
 	b := NewTokenBucket(10, 5, c)
 	c.advance(time.Hour) // 补远超 cap：封顶 5
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if !b.Allow(1) {
 			s.failf("封顶后应有 5 枚")
 		}
@@ -125,7 +125,7 @@ func (s *guardSuite) testBreakerTrip() {
 
 func (s *guardSuite) testBreakerMinSamples() {
 	b := NewBreaker(BreakerConfig{MinSamples: 10, FailThreshold: 0.5}, newFakeClock(s.base))
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		b.MarkFailure()
 	}
 	if b.State() != "closed" {
@@ -182,7 +182,7 @@ func (s *guardSuite) testBreakerHalfOpenRetrip() {
 func (s *guardSuite) testBreakerWindowSlide() {
 	b := NewBreaker(BreakerConfig{MinSamples: 4, FailThreshold: 0.5, Window: 4, CoolOff: time.Second}, newFakeClock(s.base))
 	// 前 4 次全失败 → open
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		b.MarkFailure()
 	}
 	if b.State() != "open" {
@@ -197,11 +197,11 @@ func (s *guardSuite) testGuardConcurrent() {
 	tb := NewTokenBucket(1000, 1000, newFakeClock(s.base))
 	var allowed, rejected atomic.Int64
 	var wg sync.WaitGroup
-	for w := 0; w < 8; w++ {
+	for range 8 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := 0; i < 200; i++ {
+			for i := range 200 {
 				if tb.Allow(1) {
 					allowed.Add(1)
 				} else {
