@@ -53,6 +53,7 @@
 | P24 网络协议栈：从 ping 到 DNS 全链路 | [notes/p24-network-stack.md](notes/p24-network-stack.md) | 实战即练习（tcpdump 抓包） | ✅ DNS 报文逐字节/TTL 缓存账本/TCP 状态机实拍 + 预测环节（cache hit 上游不转发实证） |
 | P25 容器与云原生：镜像、限额、健康检查 | [notes/p25-containers-cloud.md](notes/p25-containers-cloud.md) | 实战即练习（labs/compose/） | ✅ 多阶段构建 351MB→26.6MB/GOMAXPROCS 取整实测/healthcheck 实拍 |
 | P26 部署实战：把毕业项目发上去 | [notes/p26-deploy.md](notes/p26-deploy.md) | `labs/compose/`（compose 收官） | ✅ 三服务编排真跑/服务名互通/健康条件依赖 |
+| P30 方法、接口与组合 | [notes/p30-methods-interfaces.md](notes/p30-methods-interfaces.md) | `exercises/p30/`（含 cmd/demo1、cmd/mw） | ✅ 10 tests -race 干净（方法集合矩阵/装箱 bench/cmd 实拍） |
 
 ## 用法
 

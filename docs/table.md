@@ -37,6 +37,7 @@ title: 课程表：28 章速查
 | P24 | 网络协议栈：从 ping 到 DNS 全链路（dnsproxi 教具） | [notes](/p24-network-stack) | 实战即练习（tcpdump 抓包） | ✅ DNS 逐字节/TTL 账本/TCP 状态机实拍 + 预测环节（cache hit 不转发） |
 | P25 | 容器与云原生：镜像/限额/健康检查 | [notes](/p25-containers-cloud) | 实战即练习（labs/compose/） | ✅ 多阶段 351MB→26.6MB + GOMAXPROCS 取整实测 + healthcheck |
 | P26 | 部署实战：compose 编排收官 | [notes](/p26-deploy) | `labs/compose/` | ✅ 三服务编排真跑（dnsproxi+httpkv+upstream）+ 健康条件依赖 |
+| P30 | 方法、接口与组合 | [notes](/p30-methods-interfaces) | `exercises/p30/`（含 cmd/demo1、cmd/mw） | ✅ 10 tests -race 干净（方法集合矩阵/装箱 bench/cmd 实拍） |
 
 ## 贯穿主线
 

@@ -83,6 +83,7 @@ export default defineConfig({
           { text: 'P24 网络协议栈', link: '/p24-network-stack' },
           { text: 'P25 容器云原生', link: '/p25-containers-cloud' },
           { text: 'P26 部署实战（compose）', link: '/p26-deploy' },
+          { text: 'P30 方法与接口', link: '/p30-methods-interfaces' },
           { text: 'P4 精读 ejdb', link: '/p4-ejdb' },
           { text: 'P5 精读 deepsearch', link: '/p5-deepsearch' },
           { text: 'P10 gRPC', link: '/p10-grpc' },
