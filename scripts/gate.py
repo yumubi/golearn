@@ -104,12 +104,18 @@ if not FAST:
 # 9 新章（P21 起）结构 + 入口同步
 for n in sorted(glob.glob('notes/p2[1-9]-*.md')):
     t = open(n).read()
-    need = {'这章学完你能干什么': 1, 'Take-away': 1, '章末参考': 1, '预测': 2, '观察': 1, '改造': 1, 'Rust': 6}
-    miss = [f'{k}≥{v}(实{t.count(k)})' for k, v in need.items() if t.count(k) < v]
-    if len(re.findall(r'^## ', t, re.M)) < 4:
-        miss.append('"## " 正文小节<4')
-    if t.count('```') < 16:
-        miss.append(f'代码块<8(实{t.count("```") // 2})')
+    if '速学版' in '\n'.join(t.splitlines()[:6]):
+        need = {'## 先跑一下': 1, '## 要点': 1, '## 三个坑': 1, '## 在项目里': 1, '## 练习': 1, '## 想深入': 1, '预测': 1, '观察': 1, '改造': 1}
+        miss = [f'{k}≥{v}(实{t.count(k)})' for k, v in need.items() if t.count(k) < v]
+        if t.count('```') < 4:
+            miss.append('代码块<2')
+    else:
+        need = {'这章学完你能干什么': 1, 'Take-away': 1, '章末参考': 1, '预测': 2, '观察': 1, '改造': 1, 'Rust': 6}
+        miss = [f'{k}≥{v}(实{t.count(k)})' for k, v in need.items() if t.count(k) < v]
+        if len(re.findall(r'^## ', t, re.M)) < 4:
+            miss.append('"## " 正文小节<4')
+        if t.count('```') < 16:
+            miss.append(f'代码块<8(实{t.count("```") // 2})')
     rec(f'{n} 结构', not miss, ', '.join(miss))
     slug = re.match(r'notes/(p\d+)', n).group(1).upper()
     entries = ['INDEX.md', 'README.md', 'docs/index.md', 'docs/table.md', 'docs/.vitepress/config.ts']
