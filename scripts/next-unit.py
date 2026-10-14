@@ -54,7 +54,7 @@ def main():
             print(f"NEXT {u['id']}  ({s})")
             print(f"  标题/路径: {u.get('title') or u['path']}")
             if u["kind"] == "pdf":
-                print(f"  页数 {u['pages']}  字数 {u['chars']}  低文字页 {len(u['low_text_pages'])}: {u['low_text_pages'][:30]}")
+                print(f"  页数 {u['pages']}  字数 {u['chars']}  低文字页 {len(u['low_text_pages'])}，已 OCR {len(u.get('ocr_pages', []))} 页")
                 print(f"  文本: work/text/{u['id']}.txt")
                 if u["pages"] > 30 or u["chars"] > 40000:
                     print("  体量大：按页段拆开读，digest 里分节，覆盖页写整体范围")

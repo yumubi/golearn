@@ -26,6 +26,9 @@ CODE_EXT = {".go", ".mod", ".proto", ".yaml", ".yml", ".md", ".sql", ".json", ".
 SENSITIVE = re.compile(r"(\.key$|\.pem$|\.priv$|kubeconfig|\.log$|\.p12$|\.crt$|id_rsa|\.env$|\.DS_Store$|go\.sum$)", re.I)
 MAX_FILE = 400 * 1024
 LOW_TEXT = 60
+OCR_BELOW = 200  # 文字层少于这个字数的页做 OCR
+OCR_BIN = WORK / "bin" / "ocr"
+OCR_DIR = WORK / "ocr"
 
 TAG_RE = re.compile(r"〔([^〕]+)〕")
 PDF_TAG = re.compile(r"((?:TB\w+)|(?:W\d+-\d+)|(?:WX-\w+))\s+p(\d+)(?:-(\d+))?")
@@ -111,11 +114,14 @@ def tag_error(tag, inv):
     return None
 
 
-def tag_text(tag):
-    """标签指向的原文文本（页范围 / 行范围 / 整个文件）。"""
+def tag_text(tag, ocr=True):
+    """标签指向的原文文本（页范围 / 行范围 / 整个文件）。ocr=False 时去掉 [OCR] 段（OCR 有识别错误，不能当引文依据）。"""
     if tag[0] == "pdf":
         pages = pdf_pages(tag[1])
-        return "\n".join(pages.get(i, "") for i in range(tag[2], tag[3] + 1))
+        parts = [pages.get(i, "") for i in range(tag[2], tag[3] + 1)]
+        if not ocr:
+            parts = [x.split("\n[OCR]\n")[0] for x in parts]
+        return "\n".join(parts)
     if tag[0] == "code":
         f = code_path(tag[1], tag[2])
         lines = f.read_text(errors="replace").splitlines()

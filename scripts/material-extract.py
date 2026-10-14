@@ -4,7 +4,8 @@
 
 产物（全在 work/，已被 .gitignore）：
   work/inventory.json      所有单元
-  work/text/<id>.txt       PDF 文字，每页前插 [[pN]]
+  work/text/<id>.txt       PDF 文字，每页前插 [[pN]]；文字少于 200 字的页追加 [OCR] 段（macOS Vision 识别）
+  work/ocr/                OCR 缓存（删掉会重跑）
   work/text/<id>.txt       代码/krm 单元：文件清单（路径 行数），不含内容
 读取 downloads/ 是只读的，不执行其中任何内容。
 """
@@ -78,24 +79,59 @@ def uniq(uid, seen):
     return uid
 
 
-def pdf_unit(uid, kind, path, force):
+def ensure_ocr_bin():
+    """用 macOS Vision 做中文 OCR。首次编译 scripts/ocr.swift 到 work/bin/ocr。"""
+    if M.OCR_BIN.exists():
+        return True
+    M.OCR_BIN.parent.mkdir(parents=True, exist_ok=True)
+    r = M.run(["swiftc", "-O", str(Path(__file__).with_name("ocr.swift")), "-o", str(M.OCR_BIN)])
+    if r.returncode != 0:
+        print("OCR 不可用（swiftc 编译失败），低文字页将不含 OCR:", r.stderr[:200])
+        return False
+    return True
+
+
+def ocr_page(uid, pdf, n):
+    """渲染第 n 页并 OCR，结果缓存在 work/ocr/<uid>-pN.txt。"""
+    cache = M.OCR_DIR / f"{uid}-p{n}.txt"
+    if cache.exists():
+        return cache.read_text()
+    M.OCR_DIR.mkdir(parents=True, exist_ok=True)
+    png = M.OCR_DIR / f"{uid}-p{n}"
+    M.run(["pdftoppm", "-png", "-r", "110", "-f", str(n), "-l", str(n), "-singlefile", str(pdf), str(png)])
+    img = Path(str(png) + ".png")
+    out = M.run([str(M.OCR_BIN), str(img)]).stdout if img.exists() else ""
+    if img.exists():
+        img.unlink()
+    cache.write_text(out)
+    return out
+
+
+def pdf_unit(uid, kind, path, force, use_ocr):
     info = M.run(["pdfinfo", str(path)]).stdout
     m = re.search(r"Pages:\s+(\d+)", info)
     pages = int(m.group(1)) if m else 0
     out = M.WORK / "text" / f"{uid}.txt"
-    if force or not out.exists():
-        raw = M.run(["pdftotext", "-layout", str(path), "-"]).stdout
-        pgs = raw.split("\f")
-        if pgs and not pgs[-1].strip():
-            pgs = pgs[:-1]
-        out.write_text("".join(f"[[p{i}]]\n{p}\n" for i, p in enumerate(pgs, 1)))
-    txt = out.read_text()
-    parts = re.split(r"\[\[p(\d+)\]\]\n", txt)
-    pg = {int(parts[i]): parts[i + 1] for i in range(1, len(parts) - 1, 2)}
-    low = [i for i in range(1, pages + 1) if len(re.sub(r"\s", "", pg.get(i, ""))) < M.LOW_TEXT]
-    chars = sum(len(re.sub(r"\s", "", v)) for v in pg.values())
+    raw = M.run(["pdftotext", "-layout", str(path), "-"]).stdout
+    pgs = raw.split("\f")
+    if pgs and not pgs[-1].strip():
+        pgs = pgs[:-1]
+    low, ocr_pages, chars, buf = [], [], 0, []
+    for i, p in enumerate(pgs, 1):
+        n = len(re.sub(r"\s", "", p))
+        if n < M.LOW_TEXT:
+            low.append(i)
+        text = p
+        if use_ocr and n < M.OCR_BELOW:
+            o = ocr_page(uid, path, i).strip()
+            if o:
+                text = p + "\n[OCR]\n" + o
+                ocr_pages.append(i)
+        chars += len(re.sub(r"\s", "", text))
+        buf.append(f"[[p{i}]]\n{text}\n")
+    out.write_text("".join(buf))
     return {"id": uid, "kind": "pdf", "path": str(path.relative_to(M.ROOT)), "title": title_of(path.name),
-            "pages": pages, "chars": chars, "low_text_pages": low, "status": "TODO"}
+            "pages": pages, "chars": chars, "low_text_pages": low, "ocr_pages": ocr_pages, "status": "TODO"}
 
 
 def list_files(root, rel_base):
@@ -133,6 +169,7 @@ def code_unit(uid, kind, root, rel_base, root_only=False):
 
 def main():
     force = "--force" in sys.argv
+    use_ocr = "--no-ocr" not in sys.argv and ensure_ocr_bin()
     if not M.DL.exists():
         print("SKIP: downloads 不存在")
         return
@@ -146,7 +183,7 @@ def main():
         if uid is None:
             print("无法识别的 TB 文件:", p.name)
             continue
-        units.append(pdf_unit(uniq(uid, seen), "pdf", p, force))
+        units.append(pdf_unit(uniq(uid, seen), "pdf", p, force, use_ocr))
 
     for p in sorted((M.DL / "文档").iterdir()):
         if p.suffix == ".pdf":
@@ -154,7 +191,7 @@ def main():
             if uid is None:
                 print("无法识别的周课文件:", p.name)
                 continue
-            units.append(pdf_unit(uniq(uid, seen), "pdf", p, force))
+            units.append(pdf_unit(uniq(uid, seen), "pdf", p, force, use_ocr))
         elif p.name.endswith(".qkdownloading"):
             uid = week_id(p.name)
             units.append({"id": uniq(uid or "W??", seen), "kind": "pdf", "path": str(p.relative_to(M.ROOT)),

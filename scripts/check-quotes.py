@@ -4,7 +4,7 @@
 
 检查：
   1. 所有 〔…〕 标签合法，指向真实位置（页码/文件/行号在范围内）。
-  2. 以标签开头的引用块（> 〔TB24 p5〕 “…”）：引用文字规范化后必须是出处文本的子串，
+  2. 以标签开头的引用块（> 〔TB24 p5〕 “…”）：引用文字规范化后必须是出处文本（不含 [OCR] 段）的子串，
      `…` 或 `...` 分隔的每一段分别核对；单块 <= 800 字。
   3. 紧跟在独占一行的标签 〔C:…〕 / 〔K:…〕 之后的代码块，必须是该文件对应行的子串
      （单独一行的 `...` / `// ...` / `…` 视为省略）。
@@ -95,7 +95,7 @@ def check(path, max_ratio):
                 if t is None or t[0] == "meta":
                     errs.append(f"{path}:{i + 1} 引用块标签必须指向材料: 〔{m.group(1)}〕")
                 elif not M.tag_error(t, inv):
-                    src = M.norm(M.tag_text(t))
+                    src = M.norm(M.tag_text(t, ocr=False))
                     if len(body) > 800:
                         errs.append(f"{path}:{i + 1} 引用块超过 800 字")
                     for seg in ELLIPSIS.split(body):
