@@ -62,6 +62,7 @@
 | P34 TCP 服务器与 DNS over TCP | [notes/p34-tcp-server-dns-over-tcp.md](notes/p34-tcp-server-dns-over-tcp.md) | `exercises/p34frame/` | ✅ 8 tests -race 干净 + 2 bench（帧三边界/丢帧语义/Pool 改造/4 字节前缀） |
 | P35 限流、熔断与容错 | [notes/p35-ratelimit-breaker.md](notes/p35-ratelimit-breaker.md) | `dnsproxi-go/guard/` | ✅ 11 tests -race 干净 + 3 bench（令牌桶欠账/熔断三态/冒烟 breaker_open 5/5） |
 | P36 用户、鉴权与分层测试（webook 主线） | [notes/p36-user-auth-layering.md](notes/p36-user-auth-layering.md) | `minifeed/` | ✅ 3 tests -race 干净（双 Store 同套用例/token 四连/httptest 全链路） |
+| P37 缓存、计数与榜单 | [notes/p37-cache-counter-rank.md](notes/p37-cache-counter-rank.md) | `minifeed/` | ✅ 6 tests -race 干净（post 分页/counter 并发 50 恰 50/rank 单飞/httptest 全链路） |
 
 ## 用法
 

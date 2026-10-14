@@ -90,6 +90,7 @@ export default defineConfig({
           { text: 'P34 TCP 服务器与 DNS over TCP', link: '/p34-tcp-server-dns-over-tcp' },
           { text: 'P35 限流、熔断与容错', link: '/p35-ratelimit-breaker' },
           { text: 'P36 用户、鉴权与分层测试', link: '/p36-user-auth-layering' },
+          { text: 'P37 缓存、计数与榜单', link: '/p37-cache-counter-rank' },
           { text: 'P4 精读 ejdb', link: '/p4-ejdb' },
           { text: 'P5 精读 deepsearch', link: '/p5-deepsearch' },
           { text: 'P10 gRPC', link: '/p10-grpc' },
