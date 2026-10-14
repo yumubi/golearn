@@ -1,8 +1,9 @@
 // Package p34frame 是 P34 章的练习包：TCP 2 字节前缀成帧与上限语义。
 //
-// 测试与 notes/p34-tcp-server-dns-over-tcp.md 一一对应：
-// 预测（TestZeroLenFrameBoundary/TestHalfPrefixEOF/TestPrefixOverrun）、
-// 观察（TestSplitWriteRoundTrip/TestPipelinedTwoFrames/TestDropWhenInFlightFull）、
+// 测试与 notes/p34-tcp-server-dns-over-tcp.md 一一对应，注释里给 Take-away
+// 预测题的答案（先自己答再对照）：预测（TestZeroLenFrameBoundary/
+// TestHalfPrefixEOF/TestPrefixOverrun）、观察（TestSplitWriteRoundTrip/
+// TestPipelinedTwoFrames/TestDropWhenInFlightFull）、
 // 改造（TestFrameEncodePool/TestPrefix4RoundTrip）。
 package p34frame
 
@@ -53,8 +54,9 @@ func DecodeFrame(r io.Reader) ([]byte, error) {
 	return body, nil
 }
 
-// TestZeroLenFrameBoundary 预测一：前缀 0 的帧返回什么。
-// io.ReadFull 对空 buf 不读直接 nil，返回 0 字节无错误（正文 §2 边界一）。
+// TestZeroLenFrameBoundary 的答案（Take-away 预测 1 前半）：前缀 0 的帧返回
+// 0 字节切片、nil 错误：io.ReadFull 对空 buf 不读直接返回 nil（正文 §2 边界一；
+// RFC 1035 没禁止空帧，业务层用 len<12 挡）。
 func TestZeroLenFrameBoundary(t *testing.T) {
 	out, err := DecodeFrame(bytes.NewReader([]byte{0x00, 0x00}))
 	if err != nil {
@@ -70,7 +72,9 @@ func TestZeroLenFrameBoundary(t *testing.T) {
 	}
 }
 
-// TestHalfPrefixEOF 预测二：半包与干净关闭的错误区分（正文 §2 边界二）。
+// TestHalfPrefixEOF 的答案（预测 1 的姊妹题）：半包与干净关闭共用一次 Read，
+// 语义由错误类型区分（正文 §2 边界二）。干净关闭在读前缀时报 io.EOF（连接结束）；
+// 前缀只到 1 字节、前缀 16 正文 3 字节都是短读，报 ErrUnexpectedEOF。
 func TestHalfPrefixEOF(t *testing.T) {
 	// 1 字节前缀 + 对端断开：协议错
 	_, err := DecodeFrame(bytes.NewReader([]byte{0x00}))
@@ -84,7 +88,8 @@ func TestHalfPrefixEOF(t *testing.T) {
 	}
 }
 
-// TestPrefixOverrun 预测三：前缀 16 正文 3 字节，卡到 EOF（正文 §2 边界三）。
+// TestPrefixOverrun 的答案（Take-away 预测 1 后半）：前缀 16 正文 3 字节后对端
+// 断开，io.ReadFull 卡在等剩余 13 字节直到 EOF，报 ErrUnexpectedEOF（正文 §2 边界三）。
 func TestPrefixOverrun(t *testing.T) {
 	_, err := DecodeFrame(bytes.NewReader([]byte{0x00, 0x10, 'a', 'b', 'c'}))
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
@@ -155,8 +160,9 @@ func (h *inFlightHandler) handle(query []byte) {
 	h.mu.Unlock()
 }
 
-// TestDropWhenInFlightFull 观察三：MaxInFlight 超限丢帧语义（正文 §3）。
-// 丢帧不是排队：dropped 增、seen 不增；恢复后新帧照常处理。
+// TestDropWhenInFlightFull 的答案（Take-away 预测 2）：在飞满后发来的帧被丢弃、
+// 连接不断，客户端 TCP 读侧只是等不到应答（无 EOF、无 RST），只能重发。
+// dropped 增、seen 不增；恢复后新帧照常处理。
 func TestDropWhenInFlightFull(t *testing.T) {
 	h := &inFlightHandler{max: 1, release: make(chan struct{})}
 
@@ -211,8 +217,10 @@ func EncodeFramePool(msg []byte) ([]byte, error) {
 	return out, nil
 }
 
-// TestFrameEncodePool 改造一：Pool 版与原版行为等价（正文 Take-away）。
-// 注意：Pool 版返回的 buf 会被复用，调用方用完之前不能归还，这里复制后断言。
+// TestFrameEncodePool 改造一（练习 5 的底座）：Pool 版与原版行为等价。
+// 正文 Take-away 改造一说 body 的 make 是"返回给调用方"的语义必需，本测试
+// 的"复制后断言"就是归还点难题的缩影：调用方用完之前不能归还，归还点跨函数，
+// sync.Pool 的简单用法接不住（练习 5 让你把归还点挪到"写入连接后"亲手试）。
 func TestFrameEncodePool(t *testing.T) {
 	msg := bytes.Repeat([]byte{0xAB}, 512)
 	p1, err := EncodeFramePool(msg)

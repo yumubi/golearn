@@ -1,6 +1,6 @@
 # P34 · TCP 服务器与 DNS over TCP
 
-> 这章学完你能干什么：说清 TCP 字节流为什么需要应用层定界，并用 dnsproxi-go/tcp/ 的 300 行真实代码走完一条"问题 → 实现 → 上限 → 回退 → 优化"的服务器链路：2 字节长度前缀成帧、streamConn 把连接适配成 PacketConn、每连接一 goroutine 加空闲超时、MaxConns/MaxInFlight 两级背压、UDP TC 截断回退，最后用 pprof 四步循环定位 Syscall 瓶颈。前置：P24（TCP 协议格式与粘包现象）、P31（goroutine 与 channel）。
+> 这章学完你能干什么：说清 TCP 字节流为什么需要应用层定界，并用 dnsproxi-go/tcp/ 的真实代码走完一条"问题 → 实现 → 上限 → 回退 → 优化"的服务器链路：2 字节长度前缀成帧、streamConn 把连接适配成 PacketConn、每连接一 goroutine 加空闲超时、MaxConns/MaxInFlight 两级背压、UDP TC 截断回退，最后用 pprof 四步循环定位 Syscall 瓶颈。前置：P24（DNS 报文与 TCP 抓包基础）、P31（goroutine 与 channel）。
 
 这章的写法与前三章不同：叙事骨架不是课件，是仓库里已提交的 dnsproxi-go/tcp/（frame.go 57 行、server.go 167 行、truncconn.go 70 行，6ddc4cb）。TB36/37/38 三讲是"怎么实现一个 TCP 服务器"的完整方法论，这里按这份代码真实遇到的问题重新排列，课件顺序不等于章节顺序。先跑一遍完整链路建立体感：
 
@@ -20,7 +20,7 @@ DNS over UDP 是天然一问一答：一次 `ReadFromUDP` 恰好一条报文，�
 
 课件代码包里有两个分隔符方案。一个是 `C:go_basic/socket` 的 MAGIC 魔数（〔C:go_basic/socket/server/tcp.go:54-120〕）：`bytes.Index` 找 `13,7,29,83,113` 五字节魔数，跨两次 Read 的半包用 `bytes.Buffer` 攒。另一个是 `C:dachang/my_rpc` 的同款（〔C:dachang/my_rpc/transport/server/tcp.go:37-52〕）。
 
-分隔符方案的根本缺陷：正文里可能出现分隔符字节，要么转义要么赌魔数不出现。长度前缀方案正文任意字节合法，代价是头 2-4 字节。DNS over TCP 由 RFC 1035 §4.2.2 定死：2 字节大端长度前缀，最大 65535。p24 §TCP 粘包 已列过三种解法清单，这里补"为什么 DNS 选前缀"：协议是 RFC 定的，DNS 报文纯二进制，分隔符得转义，得不偿失。
+分隔符方案的根本缺陷：正文里可能出现分隔符字节，要么转义要么赌魔数不出现。长度前缀方案正文任意字节合法，代价是头 2-4 字节。DNS over TCP 由 RFC 1035 §4.2.2 定死：2 字节大端长度前缀，最大 65535。三种解法清单（分隔符/定长/前缀）教材已给，这里补"为什么 DNS 选前缀"：协议是 RFC 定的，DNS 报文纯二进制，分隔符得转义，得不偿失。p24 抓的是 TCP 上的握手与 DNS 查询单包内容（§TCP 状态机、§逐字节读一次 DNS 查询），没碰定界问题：字节流怎么切帧，本章补齐。
 
 定了帧格式，下一个问题是 I/O 模型。三种经典模型：阻塞 I/O（内核把数据备好拷到用户空间才返回，一个线程只能陪一个连接）；非阻塞 I/O（未就绪立即返回 EAGAIN，调用方轮询，浪费 CPU）；I/O 多路复用（一个线程把一批 socket 交给 select/poll/epoll，内核就绪通知，一线程看住成百上千连接）。〔TB36 p8-12〕 C 网络服务的主流答案是多路复用加事件框架（libevent/libev/libuv 这层抽象就为此而生），代价是回调把连续逻辑撕碎。
 
@@ -29,7 +29,7 @@ Go 的答案与众不同：阻塞 I/O 的表象，多路复用的本质。`conn.
 Rust 对照：std::net 是阻塞 API，单线程陪一个连接，要 tokio 的 async/await 才有同款扩展性，且异步要显式标 `async fn`。Go 的"阻塞表象"是运行时帮你做了 tokio 做的事。Java NIO 直接暴露 Selector，Netty 的 event loop 是 libevent 式框架，到 21 的虚拟线程才追平 Go 的透明阻塞。
 
 ```go
-// frame.go L42-52（帧解码的前半：先读 2 字节前缀）
+// frame.go DecodeFrame 前半（先读 2 字节前缀）
 func DecodeFrame(r io.Reader) ([]byte, error) {
 	var prefix [2]byte
 	if _, err := io.ReadFull(r, prefix[:]); err != nil {
@@ -55,14 +55,14 @@ half prefix: err=tcp frame: read prefix: unexpected EOF
 prefix 16 > body 3: err=tcp frame: read 16-byte body: unexpected EOF
 ```
 
-**边界一：前缀 0（0 长度帧）**。`make([]byte, 0)` 加 `io.ReadFull` 对空 buf 不读直接 nil，DecodeFrame 返回 0 字节无错误。RFC 1035 没禁止空帧，帧层按协议放行，业务层挡：handleQuery 对长度不足 12 的输入静默丢（main.go:290-293，`QueriesTotal.WithLabelValues("OTHER", "short")` 计数）。分层的好处在这：帧层不必懂 DNS，业务层不必懂字节流。
+**边界一：前缀 0（0 长度帧）**。`make([]byte, 0)` 加 `io.ReadFull` 对空 buf 不读直接 nil，DecodeFrame 返回 0 字节无错误。RFC 1035 没禁止空帧，帧层按协议放行，业务层挡：handleQuery 对长度不足 12 的输入静默丢（main.go handleQuery 的 `if len(query) < 12` 分支，`QueriesTotal.WithLabelValues("OTHER", "short")` 计数）。分层的好处在这：帧层不必懂 DNS，业务层不必懂字节流。
 
 **边界二：半包（前缀只到一半）**。对端断开在读前缀时表现为 `io.EOF`：干净关闭，serveConn 拿到 EOF 静默退出循环；前缀只来 1 字节是协议错，`io.ReadFull` 报 `ErrUnexpectedEOF`。两个错误共用一个 Read，语义由错误类型区分，调用方不用自己数字节。
 
 **边界三：前缀大于内容**。前缀说 16 字节、正文只来 3 字节就对端闭嘴了：`io.ReadFull` 卡在等剩余 13 字节，直到 EOF 报 `ErrUnexpectedEOF`。这正是 fuzz 要堵的点：恶意客户端发个 65535 前缀就断开，服务端不能 panic 不能挂死，错误上抛、连接关闭、资源归还。〔TB37 p8〕 教材提醒的三点全部落实：字节序统一 BigEndian（`binary.BigEndian.PutUint16`）；`binary.Read/Write` 按参数宽度操作；未设 deadline 时 `io.ReadFull` 一般读满才返回，除非 EOF。
 
 ```go
-// frame.go L16-19（上限是前缀宽度的天然结果）
+// frame.go（上限是前缀宽度的天然结果：MaxMsgLen 定义 + ErrTooLarge）
 const MaxMsgLen = 0xFFFF
 var ErrTooLarge = errors.New("tcp frame: message exceeds 65535 bytes")
 ```
@@ -79,12 +79,19 @@ BenchmarkFrameEncode-10  43581062  54.33 ns/op  576 B/op  1 allocs/op
 BenchmarkFrameDecode-10  33846454  73.03 ns/op  562 B/op  3 allocs/op
 ```
 
-编码 1 次分配（帧缓冲），解码 3 次（前缀 buf、正文 buf、io.ReadFull 中间态），每帧两次堆分配：§6 优化的靶子立在这。
+编码 1 次分配（帧缓冲），解码 3 次：§6 优化的靶子立在这。3 次各是哪来的？`go build -gcflags=-m ./tcp/` 直接给答案：
+
+```text
+tcp/frame.go:41:6: moved to heap: prefix
+tcp/frame.go:51:13: make([]byte, n) escapes to heap
+```
+
+其一，`var prefix [2]byte` 写的是栈数组，但 `io.ReadFull(r, prefix[:])` 把它交给 `io.Reader` 接口：逃逸分析看不见接口方法体内 `buf` 的去向，只能按泄漏处理，prefix 被 moved to heap（`-m -m` 可见链条：`prefix[:] → io.buf → io.ReadAtLeast 参数 → 接口方法`）。这不是"忘了写栈上"，是接口调用的固有代价。其二，正文 `make([]byte, n)` 要返回给调用方，必然上堆。其三，benchmark 里 `bytes.NewReader(frame)` 每次迭代新建一个 Reader（逃逸分析：`&bytes.Reader{...} escapes to heap`）：这是测量装置的成本，不是 DecodeFrame 本身的，真实服务器里 serveConn 直接把 `net.Conn` 传进来，没有这一次。
 
 ## 3. 连接形态：每连接一 goroutine 与两个上限
 
 ```go
-// server.go L86-93（accept 循环的标准形态）
+// server.go Serve 的 accept 循环标准形态（wg.Add 到 serveConn 启动）
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -97,14 +104,14 @@ BenchmarkFrameDecode-10  33846454  73.03 ns/op  562 B/op  3 allocs/op
 		}()
 ```
 
-服务端骨架是教材同款三件套：`net.Listen` 绑端口、循环 `Accept()`、每连接 `go serveConn`。〔TB36 p12-13〕 端口被占报 `bind: address already in use`，backlog 满时 Dial 方阻塞（macOS somaxconn 默认 128）。与 C 不同的是没有 `while(1)` 里的状态机：每个连接一个 goroutine，写法就是顺序读循环。
+服务端骨架是教材同款三件套：`net.Listen` 绑端口、循环 `Accept()`、每连接 `go serveConn`。〔TB36 p12-13〕 端口被占报 `bind: address already in use`。backlog 行为平台相关：本机 `sysctl kern.ipc.somaxconn` 为 128，〔实测〕listen(0) 时连发 6 个 connect 全部成功（macOS 把溢出变成对端 SYN 重试等待 accept，不是立拒；Linux 下才可能超时/拒绝）。与 C 不同的是没有 `while(1)` 里的状态机：每个连接一个 goroutine，写法就是顺序读循环。
 
-goroutine 便宜（P3 实测 2KB 栈）不等于免费。两个必须答的问题：连接建了不查怎么办？连接太多怎么办？dnsproxi 的答案在 ServerCfg 的三个字段（server.go L23-33）：IdleTimeout（默认 30s）、MaxConns（默认 512）、MaxInFlight（默认 64）。
+goroutine 便宜（p3 §goroutine 有多便宜 实测 2KB 栈）不等于免费。两个必须答的问题：连接建了不查怎么办？连接太多怎么办？dnsproxi 的答案在 ServerCfg 的三个字段（IdleTimeout、MaxConns、MaxInFlight，注释各带默认值）：IdleTimeout（默认 30s）、MaxConns（默认 512）、MaxInFlight（默认 64）。
 
 **空闲超时**靠 SetReadDeadline，且是绝对时间不是时长：〔TB36 p16-18〕
 
 ```go
-// server.go L104-107（每读完一帧刷新，续命式租约）
+// server.go serveConn（每读完一帧刷新，续命式租约）
 	for {
 		_ = sc.conn.SetReadDeadline(time.Now().Add(idle))
 		query, err := DecodeFrame(sc.conn)
@@ -113,14 +120,14 @@ goroutine 便宜（P3 实测 2KB 栈）不等于免费。两个必须答的问�
 		}
 ```
 
-每次读帧前把 deadline 推到 now+30s；对端 30s 没发帧，Read 返回超时错误，连接关闭。〔C:go_basic/socket/server/tcp.go:32-51〕 的长连接同款（每轮 Read 前重设 2 分钟）。实验：连上不发数据，30.0s 后 recv 得 EOF（〔实测〕`python3 -c "import socket,time; s=socket.create_connection(('127.0.0.1',15353)); print(s.recv(1))"` 30.0s 后返回 b''）。
+每次读帧前把 deadline 推到 now+30s；对端 30s 没发帧，Read 返回超时错误，连接关闭。〔C:go_basic/socket/server/tcp.go:44〕 的长连接同款（每轮 Read 前重设 2 分钟）。实验：连上不发数据，30.0s 后 recv 得 EOF（〔实测〕`python3 -c "import socket,time; s=socket.create_connection(('127.0.0.1',15353)); print(s.recv(1))"` 30.0s 后返回 b''）。
 
-**MaxConns** 是全局上限：conns map 记活连接，accept 后查 `len(conns) >= cfg.MaxConns`，满员直接 `conn.Close()` 接受下一个（server.go L73-79）。防的是 SYN 洪水和"只建连不发查询"的占坑客户端。被拒的客户端读侧立刻 EOF，重试即可：不用排队，排队会把内存压力转移到服务端。
+**MaxConns** 是全局上限：conns map 记活连接，accept 后查 `len(conns) >= cfg.MaxConns`，满员直接 `conn.Close()` 接受下一个（server.go Serve 的 `if full` 分支）。防的是 SYN 洪水和"只建连不发查询"的占坑客户端。被拒的客户端读侧立刻 EOF，重试即可：不用排队，排队会把内存压力转移到服务端。
 
 **MaxInFlight** 是单连接在飞上限：
 
 ```go
-// server.go L110-119（超限丢帧，不断连接）
+// server.go serveConn（超限丢帧，不断连接）
 		// MaxInFlight：单连接在飞查询超限就丢帧（不断连接），防单连接打爆下游。
 		if inflight.Add(1) > maxInFlight {
 			inflight.Add(-1)
@@ -137,11 +144,11 @@ goroutine 便宜（P3 实测 2KB 栈）不等于免费。两个必须答的问�
 
 为什么每查询 `append` 一个副本？DecodeFrame 已返回独立 buf，副本是防御性兜底：对齐 UDP 路径"查询不可变"契约，防上游某天复用 buf。每帧多一次 512 字节拷贝（54ns 量级），买语义安全。
 
-读写的坑教材列全了，这里只点与帧层直接相关的两条。其一，部分读：`conn.Read(buf)` 有多少读多少立即返回，n 可能是 2 而不是 10（buf 10 收 "hi" 得 n=2），必须循环读满：`io.ReadFull` 就是这个循环的封装。〔TB36 p16-18〕 其二，并发写：一次 Write 写完整业务包是安全的（fdMutex 串行化单次系统调用），拆多次不保证连续性。〔TB36 p22-26〕 streamConn 的 WriteTo 正是"一次 Write 整帧"（server.go L135-148），多 goroutine 并发回包安全。
+读写的坑教材列全了，这里只点与帧层直接相关的两条。其一，部分读：`conn.Read(buf)` 有多少读多少立即返回，n 可能是 2 而不是 10（buf 10 收 "hi" 得 n=2），必须循环读满：`io.ReadFull` 就是这个循环的封装。〔TB36 p16-18〕 其二，并发写：一次 Write 写完整业务包是安全的（fdMutex 串行化单次系统调用），拆多次不保证连续性。〔TB36 p22-26〕 streamConn 的 WriteTo 正是"一次 Write 整帧"（整帧单次 `s.conn.Write(frame)`），多 goroutine 并发回包安全。
 
-ctx 取消怎么断开阻塞在 Read 的 goroutine？Serve 起一个只等 `<-ctx.Done()` 的 goroutine 关 listener（server.go L48-51），accept 断。取消路径顺手关所有在飞连接，DecodeFrame 立刻返回 EOF，wg.Wait 才不会卡 30s 空闲超时（server.go L58-65）。
+ctx 取消怎么断开阻塞在 Read 的 goroutine？Serve 起一个只等 `<-ctx.Done()` 的 goroutine 关 listener（server.go Serve 开头的匿名 goroutine），accept 断。取消路径顺手关所有在飞连接，DecodeFrame 立刻返回 EOF，wg.Wait 才不会卡 30s 空闲超时（accept 错误分支里的 conns 遍历关停 + wg.Wait）。
 
-TB09 的 HTTP 优雅退出同律（signal.Notify 加 srv.Shutdown）：机制不同（ctx vs signal），要点相同。退出先断阻塞点，再等 goroutine 排空。
+TB09 的 HTTP 优雅退出同律：signal.Notify 捕获信号、带超时的 srv.Shutdown 关 listener 与空闲连接再等活动连接（〔TB09 p9〕〔TB09 p16-17〕）；机制不同（ctx vs signal），要点相同：退出先断阻塞点，再等 goroutine 排空。
 
 每连接一 goroutine 在 Rust 里要显式 `tokio::spawn` 每连接一个 task，JoinHandle 的记账、task panic 的隔离都得自己写；Go 把 spawn 做进 Accept 循环的一行，代价是 panic 语义默认杀进程（P3 已讲），serveConn 入口的 defer recover 是纪律不是语言保证。
 
@@ -151,7 +158,7 @@ TB09 的 HTTP 优雅退出同律（signal.Notify 加 srv.Shutdown）：机制不
 TCP 服务器最难的不是帧，是不复制业务逻辑。dnsproxi 的 UDP 路径已有完整 handleQuery：解析、sinkhole、缓存、转发、指标，签名 `func(pc net.PacketConn, client net.Addr, query []byte)`。TCP 想复用，就要让一条 TCP 连接假装成一个 PacketConn：适配器模式：
 
 ```go
-// server.go L125-135（streamConn：WriteTo = 成帧写给这条连接）
+// server.go streamConn（WriteTo = 成帧写给这条连接）
 // WriteTo 实现 net.PacketConn：把应答加 2 字节前缀写给这条连接。
 // client 参数保留（handleQuery 的签名统一），调用方传的是连接的 RemoteAddr。
 func (s *streamConn) WriteTo(resp []byte, _ net.Addr) (int, error) {
@@ -169,14 +176,14 @@ func (s *streamConn) WriteTo(resp []byte, _ net.Addr) (int, error) {
 
 handleQuery 调 `pc.WriteTo(resp, client)` 时，UDP 形态这是单包发送，TCP 形态这是成帧写入：业务代码一行不改。〔TB37 p4-5〕 的 Frame/Packet 两层分工在这里换了形态。教材版 frame 层管定界、packet 层管业务语义。Packet 接口只有 Decode([]byte) error 与 Encode() 两个方法（〔TB37 p11〕），包级 Decode 按 commandID 分派各类型（〔TB37 p12-14〕）。
 
-dnsproxi 的帧层在 tcp 包、业务层整个是 handleQuery，分派靠 DNS 报文自身的 qtype 而非自定义 commandID。教材用接口（HandlePacket 接口加包级 Decode 分派），dnsproxi 直接传方法值 `p.handleQuery`（Handler 类型 server.go L21 注释明确"签名刻意与 handleQuery 一致，无需包装层"）。适配器模式的两种形态：定义接口 vs 对齐既有函数签名，后者少一个抽象层。
+dnsproxi 的帧层在 tcp 包、业务层整个是 handleQuery，分派靠 DNS 报文自身的 qtype 而非自定义 commandID。教材用接口（HandlePacket 接口加包级 Decode 分派），dnsproxi 直接传方法值 `p.handleQuery`（Handler 类型的注释明确"签名刻意与 handleQuery 一致，无需包装层"）。适配器模式的两种形态：定义接口 vs 对齐既有函数签名，后者少一个抽象层。TB09 的 bookstore 是同款思路的完整样本：Store 接口面向接口解耦、使用方只依赖抽象（〔TB09 p10〕），惯用函数原型"接受接口参数、返回具体类型"（NewBookStoreServer(addr, s store.Store)）（〔TB09 p13-14〕）。
 
-client 参数传什么？UDP 形态传对端地址（回包地址），TCP 形态语义上是"这条连接的远端"：serveConn 传 `sc.RemoteAddr()`（server.go L120）。这是真 bug 修复：最早版本传 LocalAddr，日志/指标里客户端地址全错。ReadFrom 在 TCP 形态永远不该被调（读循环在 serveConn），实现为零值报错（server.go L152-154），接口占位防误用。
+client 参数传什么？UDP 形态传对端地址（回包地址），TCP 形态语义上是"这条连接的远端"：serveConn 传 `sc.RemoteAddr()`（server.go 的 `h(sc, sc.RemoteAddr(), cq)` 调用点）。ReadFrom 在 TCP 形态永远不该被调（读循环在 serveConn），实现为零值报错，接口占位防误用。
 
 main.go 的接入只有两处，全部默认关：
 
 ```go
-// main.go L146-150（UDP 截断：只包出站 WriteTo）
+// main.go（UDP 截断：只包出站 WriteTo）
 	var replyPC net.PacketConn = pc
 	if p.cfg.UDPTruncLimit > 0 {
 		replyPC = tcp.WrapTrunc(pc, p.cfg.UDPTruncLimit)
@@ -184,7 +191,7 @@ main.go 的接入只有两处，全部默认关：
 ```
 
 ```go
-// main.go L166-183（TCP：TCPListen 空 = 完全不启动）
+// main.go（TCP：TCPListen 空 = 完全不启动）
 	if p.cfg.TCPListen != "" {
 		ln, err := net.Listen("tcp", p.cfg.TCPListen)
 		if err != nil {
@@ -201,7 +208,7 @@ main.go 的接入只有两处，全部默认关：
 	}
 ```
 
-两个细节值两行注释：TCPListen 由环境变量 `DNS_TCP_LISTEN` 注入（main.go L53），空串零值即不监听，不传配置行为逐位不变；TCP 启动块放在 cache 建立之后（NewCap 在 L154，Serve 在 L179）：Serve 起的查询立刻能吃到完整缓存路径，不用等后台初始化。对照 TB09 的 main 组装（factory.New 建存储、NewBookStoreServer 注入，〔TB09 p9〕）：组装职责相同，注入手段一个是工厂模式一个是方法值。TCP 与 UDP 共用 wg 等排空、共用 ctx 取消，退出路径只有一条。
+两个细节值两行注释：TCPListen 由环境变量 `DNS_TCP_LISTEN` 注入（cfg 字段注释行），空串零值即不监听，不传配置行为逐位不变；TCP 启动块放在 cache 建立之后（`cache.NewCap` 调用在前，`tcp.Serve` 在后）：Serve 起的查询立刻能吃到完整缓存路径，不用等后台初始化。对照 TB09 的 main 组装（factory.New 建存储、NewBookStoreServer 注入，〔TB09 p9〕）：组装职责相同，注入手段一个是工厂模式一个是方法值。TCP 与 UDP 共用 wg 等排空、共用 ctx 取消，退出路径只有一条。
 
 ## 5. 截断与回退：TC 位的最小正确实现
 
@@ -220,12 +227,12 @@ $ dig -p 15353 @127.0.0.1 example.com A | head -1
 ;; Truncated, retrying in TCP mode.
 ```
 
-第一条 `+ignore` 禁 dig 自行回退，收到 29 字节截断应答：TC=1、ANSWER=0；第二条走 TCP 拿全 33 条；第三条不加开关，dig 见 TC 自动打出 retrying 并走 TCP（TCP 与 UDP 同端口 :15353 时回退直达，分端口时 dig 回退到 UDP 口的 TCP 被拒，connection refused：部署时同端口才对 dig 透明）。
+第一条 `+ignore` 禁 dig 自行回退，收到 29 字节截断应答：TC=1、ANSWER=0；第二条走 TCP 拿全 33 条；第三条不加开关，dig 见 TC 自动打出 retrying 并走 TCP。回退成败取决于端口布局，〔实测〕分端口（UDP :15361 / TCP :15362）时回退失败：`;; Connection to 127.0.0.1#15361 for example.com failed: connection refused.`（dig 把回退目标钉死在 UDP 的同一端口号）；同端口（TCP+UDP 都 :15363）时回退直达完整 33 条：部署时同端口才对 dig 透明。
 
-截断实现在 truncconn.go 的 WriteTo（L33-62），三步：
+截断实现在 truncconn.go 的 TruncConn.WriteTo，三步：
 
 ```go
-// truncconn.go L41-60（保 question、切 RR、置 TC）
+// truncconn.go TruncConn.WriteTo（保 question、切 RR、置 TC）
 	// question 长度 = QNAME（变长，遇 0 结束）+ QTYPE(2) + QCLASS(2)。
 	qEnd := hdr + 4
 	for i := hdr; i < len(resp); i++ {
@@ -256,22 +263,17 @@ UDP 无连接 WriteTo 天然带地址，TruncConn 透传全部方法只改 Write
 
 ## 6. 优化循环：pprof 四步法看 TCP 服务器
 
-TB38 的方法论一句话：建立基准 → 性能剖析 → 代码优化 → 与基准比较，未达标循环。〔TB38 p2-3〕 教材用它把 tcp-server 从 18.5w req/s 提到 29.2w。第一步 Prometheus+Grafana 搭观测与压测（观测设施与 rate 面板 p13 已讲，不重复）。
+TB38 的方法论一句话：建立基准 → 性能剖析 → 代码优化 → 与基准比较，未达标循环。〔TB38 p2-3〕 教材用它把 tcp-server 从 18.5w req/s 提到 29.2w。第一步 Prometheus+Grafana 搭观测与压测（观测设施与 rate 面板 p13 §13.1 RED 已讲，不重复）。
 
 第二步 pprof 剖析：`_ "net/http/pprof"` 空导入加 6060 端口，`go tool pprof -http=:9090 http://host:6060/debug/pprof/profile` 采 CPU，采样原理是每 10ms SIGPROF 中断记全 goroutine 栈。第三步火焰图定位：Syscall 方框最大，向上追溯全是网络 read/write。根因是 `net.Conn` 直接当 `io.Reader` 用，每次 Read 哪怕 1 字节也是一次系统调用。
 
 第四步 bufio.Reader/Writer 包一层（每连接单 goroutine 无竞态，缓冲安全），Syscall 频率降、吞吐 18.5w → 27w。再一轮 allocs 剖析找到 packet.Decode 的 38MB 堆分配，sync.Pool 复用 Submit 对象，27w → 29.2w。〔TB38 p14-24〕
 
-这四步在 dnsproxi 的对应物：§2 的 bench 就是"建立基准"（54ns/1 alloc 编码、73ns/3 alloc 解码）；优化靶子也现成：DecodeFrame 每帧两次堆分配（前缀 buf 加正文 buf），前缀 buf 可用栈数组省掉一次；帧缓冲可进 sync.Pool（P32 已讲 Pool 语义，这里只是换了个用武之地）。pprof 服务器侧的接法与教材一致（`_ "net/http/pprof"` 加独立 goroutine 监听 6060），dnsproxi 未开：调试期接入，生产按需。
+这四步在 dnsproxi 的对应物：§2 的 bench 就是"建立基准"（54ns/1 alloc 编码、73ns/3 alloc 解码）；优化靶子也现成：DecodeFrame 每帧两次堆分配（前缀 buf 加正文 buf），前缀 buf 可用 Peek 绕接口省掉一次（§2 与 Take-away）；帧缓冲可进 sync.Pool（p32 已讲 Pool 语义，这里只是换了个用武之地）。pprof 服务器侧的接法与教材一致（`_ "net/http/pprof"` 加独立 goroutine 监听 6060），dnsproxi 未开：调试期接入，生产按需。
 
 为什么 TCP 服务器对 syscall 敏感而 UDP 不敏感？每连接一 goroutine 时，阻塞在 Read 上的 goroutine 数等于连接数，每次唤醒是一次 epoll 交互；加 bufio 后单帧内多次小读合并成一次系统调用。UDP 路径一问一答无缓冲可加（报文边界即读边界）。这也是 bufio 优化在 TB38 值 45% 而在 dnsproxi UDP 路径无意义的原因：优化手段的收益取决于 I/O 形态。
 
 对照：Java BufferedReader 同名同职责，Netty 的 PooledByteBufAllocator 是 sync.Pool 思想的工业级实现；Rust 无 GC，对象池只为复用缓冲不为减 GC 压力（bytes::Bytes 池化仍在）。四步循环本身语言无关，Go 的优势是 pprof 内置零依赖。
-
-同一套"接口先行"的手法在标准库 HTTP 侧也是主旋律。最小服务三行起步：http.HandleFunc 注册、ListenAndServe 启动，处理函数原型固定为 func(w http.ResponseWriter, r *http.Request)（〔TB09 p3-4〕）。ServeMux 按最长前缀匹配路由（〔TB09 p4〕）。
-
-复杂业务用 Store 接口解耦存储实现，使用方只依赖接口（〔TB09 p10〕）。横切逻辑用 middleware：接受 http.Handler 返回 http.Handler 的函数，嵌套包裹后串到业务 handler 之前（〔TB09 p14-16〕）。dnsproxi 的 Handler/WriteTo 与它们同构：面向接口的边界划在哪，业务就能在哪换形态（UDP 换 TCP 不动 handleQuery，就是这个边界的红利）。
-
 
 ## 小结
 
@@ -285,22 +287,27 @@ TB38 的方法论一句话：建立基准 → 性能剖析 → 代码优化 → 
 
 ## 在 dnsproxi 里看这一章
 
-本章主线就是 dnsproxi 的代码（工作副本 6ddc4cb，行号实读）：
+本章主线就是 dnsproxi 的代码（工作副本 6ddc4cb；定位到符号，`grep -n` 可复核行号）：
 
-- 帧层：frame.go 全文件（MaxMsgLen L16、EncodeFrame L27-36、DecodeFrame L42-70，EOF 族三分支 L52-62）。
-- 连接层：server.go（ServerCfg 三上限 L23-33、Serve 的 ctx 关监听 L48-51 与 MaxConns 满员关连 L73-79、serveConn 的 deadline 刷新 L104-107 与 inflight 丢帧 L110-113、streamConn 的 WriteTo L135-148 与 RemoteAddr L120）。
-- 截断层：truncconn.go（qEnd 扫描 L41-48、TC 置位与三计数清零 L57-60）。
-- 接入层：main.go（两环境变量 L51-54、WrapTrunc 只包出站 L146-150、TCP 块在 cache.NewCap（L154）之后 L166-183、handleQuery 的 short 分支 L290-293）。
-- 业务复用的证据：handleQuery（main.go L279 起）不知晓自己跑在 UDP 还是 TCP 上，QueriesTotal/InFlight 指标两形态共用。
+- 帧层：frame.go 全文件（MaxMsgLen、EncodeFrame、DecodeFrame，EOF 族三分支在 DecodeFrame 开头）。
+- 连接层：server.go（ServerCfg 三上限、Serve 的 ctx 关监听匿名 goroutine 与 MaxConns 满员 `if full` 分支、serveConn 的 deadline 刷新与 inflight 丢帧、streamConn 的 WriteTo 与 RemoteAddr）。
+- 截断层：truncconn.go（TruncConn.WriteTo 的 qEnd 扫描、TC 置位与三计数清零）。
+- 接入层：main.go（两环境变量字段、WrapTrunc 只包出站、TCP 块在 cache.NewCap 之后、handleQuery 的 `if len(query) < 12` short 分支）。
+- 业务复用的证据：handleQuery（main.go `func (p *Proxy) handleQuery` 起）不知晓自己跑在 UDP 还是 TCP 上，QueriesTotal/InFlight 指标两形态共用。
 
 ## Take-away
 
-- 预测：DecodeFrame 收到前缀 0 的帧返回什么？前缀 16 正文 3 字节后对端断开，错误是什么？（§2 实测：0 字节 nil 错误；ErrUnexpectedEOF。）
-- 预测：MaxInFlight=1、第 1 帧还在 handler 里时，第 2、3 帧的下场？（丢弃，连接不断，seen 计数不变。）
-- 观察：`nc` 直连 TCP 口发前缀 0xFFFF 后立刻断开，服务端日志与连接数怎么变？（无 panic，DecodeFrame 报 UnexpectedEOF，连接静默回收。）
-- 观察：同端口 TCP+UDP（DNS_TCP_LISTEN=:15353 + DNS_LISTEN=:15353）时 dig 默认模式自动回退全链路；分端口时回退在哪一步断？（§5：connection refused，dig 回退目标固定为 UDP 口。）
-- 改造：给 DecodeFrame 的前缀读换栈数组 `var prefix [2]byte` 已是零分配，正文 buf 换 sync.Pool，bench 对比 allocs/op。
-- 改造：2 字节前缀改 4 字节，MaxMsgLen、兼容性、编码 bench 三处各变什么？
+预测（答案在练习包测试注释里，先自己答）：
+- DecodeFrame 收到前缀 0 的帧返回什么？前缀 16 正文 3 字节后对端断开，错误是什么？
+- MaxInFlight=1、第 1 帧还在 handler 里时，第 2、3 帧的下场？
+
+观察：
+- `nc` 直连 TCP 口发前缀 0xFFFF 后立刻断开，服务端日志与连接数怎么变？
+- 同端口 TCP+UDP（DNS_TCP_LISTEN=:15353 + DNS_LISTEN=:15353）时 dig 默认模式自动回退全链路；分端口时回退在哪一步断？（§5 实测：connection refused，dig 回退目标固定为 UDP 口。）
+
+改造（§2 的 -gcflags=-m 已证明前缀数组因过接口而 moved to heap）：
+- 用 bufio.Reader 的 Peek(2)/Discard(2) 让前缀不过 io.Reader 接口，逃逸分析证明不逃逸后 bench 对比 allocs/op 与 ns/op；正文 buf 的 make 是"返回给调用方"的语义必需，想用 sync.Pool 省它得连归还点一起改（练习 5 验证为什么难）。
+- 2 字节前缀改 4 字节，MaxMsgLen、兼容性、编码 bench 三处各变什么？
 
 ## 章末参考
 
@@ -317,9 +324,11 @@ TB38 的方法论一句话：建立基准 → 性能剖析 → 代码优化 → 
 
 - 帧格式：`| len(2B, BigEndian) | msg |`，len 上限 0xFFFF；读用 io.ReadFull，EOF/ErrUnexpectedEOF 区分干净断开与协议错。
 - 超时三式：SetReadDeadline（绝对时间）、SetDeadline（读写一起）、ctx 关 listener（accept 阻塞的出口）。
-- 旧章交叉：p24 §TCP 粘包（三种定界清单）、§TCP 可靠性（握手挥手）、p17 §指标（rate 面板）、p32 §pprof（allocs 读法）、P3 §goroutine（2KB 栈实测）。
+- 旧章交叉：p24（§TCP 状态机：握手挥手抓包；§逐字节读一次 DNS 查询；无定界内容，本章补）、p13 §13.1 RED（rate 面板）、p32 §pprof 四级优化（allocs 读法）、p3 §goroutine 有多便宜（2KB 栈实测）。
 - 原材料单元：TB36（socket 模型与读写四三情形）、TB37（Frame/Packet 抽象与错误注入测试）、TB38（pprof 四步优化）。
-- 代码素材：C:go_basic/socket（MAGIC 分隔与 UDP 形态）、C:dachang/my_rpc（魔数与序列化 bench）、C:go_basic/http（ResponseWriter 铁律）、C:go_basic/encryption（AES-CBC 与 TLS 混合加密，本章链路的安全延伸）、C:go_basic/io（缓冲收益 158ms vs 7ms，p17 已引用）。
+- TB09 的 HTTP 侧速记：最小服务 `http.HandleFunc` + `http.ListenAndServe`，handler 原型固定 func(w, r)（〔TB09 p3-4〕）；ServeMux 最长前缀匹配（〔TB09 p4〕）；middleware 是接受 http.Handler 返回 http.Handler 的函数，嵌套包裹串到业务之前（〔TB09 p14-16〕），与 streamConn/Handler 的接口边界同构。
+- 安全延伸：C:go_basic/encryption（AES-CBC 与 TLS 混合加密，本章链路的安全延伸）。
+- 缓冲对照：C:go_basic/io 的 io_test.go 有 TestBufferedFileWriter，本次真跑 149ms vs 11ms。
 - 深读：RFC 1035 §4.2.1（UDP 截断与 TC）、§4.2.2（TCP 前缀）；Go 源码 net/fd_posix.go 的 deadline 与 internal/poll.FD 的 fdMutex。
 
 ## 练习：p34frame
@@ -331,7 +340,7 @@ $ go test -race -count=1 ./exercises/p34frame/
 ok  	golearn/exercises/p34frame	1.5s
 ```
 
-9 个测试各考一件事：
+8 个测试 + 2 个基准，各考一件事：
 
 - `TestZeroLenFrameBoundary`：§2 边界一，0 长度帧解码 0 字节无错误。
 - `TestHalfPrefixEOF`：§2 边界二，1 字节前缀报 ErrUnexpectedEOF，干净断开报 io.EOF。
@@ -353,4 +362,4 @@ ok  	golearn/exercises/p34frame	1.5s
 
 **改造**（两题各练一个 §6 的优化点）：
 5. 把 TestFrameEncodePool 的池归还点从"编码后立即归还"改成"写入连接后归还"，池还省得到吗？（提示：归还得等下游用完，生命周期跨函数的缓冲不适合 sync.Pool 的简单用法。）
-6. 给帧解码加总超时：DecodeFrame 拿到的 reader 若带 deadline，半包攻击者的"卡到 EOF"变成"卡到超时"，serveConn 要怎么把 IdleTimeout 传给帧层？（对照 server.go L104 的 deadline 刷新点。）
+6. 给帧解码加总超时：DecodeFrame 拿到的 reader 若带 deadline，半包攻击者的"卡到 EOF"变成"卡到超时"，serveConn 要怎么把 IdleTimeout 传给帧层？（对照 server.go serveConn 里每帧前的 SetReadDeadline 刷新点。）
