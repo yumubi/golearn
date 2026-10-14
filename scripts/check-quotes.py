@@ -124,6 +124,9 @@ def check(path, max_ratio):
     ratio = quote_chars / max(1, len(text))
     if ratio > max_ratio:
         errs.append(f"{path} 摘录占比 {ratio:.0%} 超过 {max_ratio:.0%}")
+    for n, l in enumerate(lines, 1):
+        if "downloads/" in l:
+            errs.append(f"{path}:{n} 正文不能写 downloads/ 路径（读者没有这个目录）；用 〔C:…〕/〔TBxx pN〕 标签指向材料")
     if chr(0x2014) in text:
         errs.append(f"{path} 含 em-dash (U+2014)")
     return errs
