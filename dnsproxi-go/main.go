@@ -15,9 +15,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"golearn/dnsproxi-go/cache"
@@ -544,7 +546,10 @@ func qtypeLabelN(query []byte, _ string, outcome string) {
 func main() {
 	cfg := loadConfig()
 	logger = newLogger(os.Stderr, logLevel())
-	ctx := context.Background()
+	// SIGTERM/SIGINT → ctx 取消 → Run 的读循环退出（优雅关停路径与
+	// DNS_CACHE_ACTIVE_TTL 修复共用：先停 expirer 再 wg.Wait()）。
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	p := &Proxy{cfg: cfg}
 	// P17：指标抓取口独立端口（:9153），业务 UDP :5353 不掺 HTTP。
 	go func() {
