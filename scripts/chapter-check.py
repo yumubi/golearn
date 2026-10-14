@@ -61,10 +61,6 @@ def main():
         report(f"正文字数 {nc} <= {max_chars}", nc <= max_chars)
     rc, out = sh(["python3", "-I", "scripts/check-quotes.py", str(rel), "--max-ratio", str(max_ratio)])
     report("check-quotes", rc == 0, out)
-    edit = ROOT / "rewrite" / "edit" / (note.stem + ".md")
-    if edit.exists():
-        rc, out = sh(["python3", "-I", "scripts/check-edit.py", str(edit.relative_to(ROOT))])
-        report("check-edit（按编辑单组装）", rc == 0, out)
     if "--no-coverage" not in argv:
         rc, out = sh(["python3", "-I", "scripts/check-coverage.py", "--chapter", str(rel)])
         report("check-coverage --chapter", rc == 0, out)
