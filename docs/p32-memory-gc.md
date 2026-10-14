@@ -147,7 +147,7 @@ dnsproxi 的命中路径就是本章 pool 一课的实战落点（行号工作�
 - 源码（本机 go1.26.4）：malloc.go mallocgc(L1067)/mallocgcTiny(L1202)/mallocgcSmallNoscan(L1358)；internal/runtime/gc/sizeclasses.go（68 档）；mgcmark.go gcAssistAlloc(L499)；mbarrier.go writeBarrier。
 - sweep/scavenge：mgcsweep.go bgsweep(L272)/sweepone(L359)；mgcscavenge.go bgscavenge(L649)。
 - 延伸：GC Handbook；memorymanagement.org；Green Tea GC（重排标记工作提升局部性）1.26 起默认开启〔1.26 修正〕：`grep -n GreenTeaGC $(go env GOROOT)/src/internal/buildcfg/exp.go` 输出 `88: GreenTeaGC: true,`。
-- 旧章交叉：p30 §接口装箱（interface 装箱分配）、p21 §bench hygiene（-benchmem 与 b.Loop）。
+- 旧章交叉：p30 §接口的运行时：eface、iface 与装箱（interface 装箱分配）；-benchmem 与 b.Loop 属 p8 §benchmark 与 pprof（p21 旧章无 bench 内容）。
 - 原材料单元：TBX10（GC 全景 17 讲）、C:dachang/micro_service#K11（pprof 四级优化实例）。
 
 ## 练习：p32gc

@@ -131,7 +131,7 @@ dnsproxi 是"该用与不该用"的正反样本（工作副本实读）：
 - 语法速查：`[T constraints.Integer]`（现行写法多用 `cmp.Ordered`）、`type Set[T comparable] map[T]struct{}`、`any` 是 `interface{}` 的别名（1.18 起）。
 - 编译错速查（1.26 实拍）：`interface method must have no type parameters`；`method must have no type parameters`；`cannot use type T outside a type constraint: interface contains type constraints`；`does not satisfy BaseEntity`。
 - 延伸：type parameters 提案 43651；Go FAQ generics；golang.org/x/exp/constraints 已转正为 cmp（1.21+）。
-- 旧章交叉：p28 §方法表达式（泛型收敛样板一提）、p21 §bench hygiene（b.Loop 与 -benchmem）。
+- 旧章交叉：方法表达式（`T.Get` 把方法当函数用）在 p30 §receiver 是第一个参数 有实义（p28 未写出，旧章无泛型收敛内容）；b.Loop 与 -benchmem 属 p8 §benchmark 与 pprof（p21 旧章无 bench 内容）。
 - 原材料单元：TBX05（泛型总览）、TBX04（三大局限与绕开）、C:go_basic/v24（Set 与 b.Loop）。
 - C:go_frame/data_structure 泛型容器合集：二分 K1/堆 K4/链表 K6/ring K8/快排 K9/Jaccard K10，索引 K2/K3/K7/K11；C:dachang/algorithm：AbstractHeap K1、优先队列 Item[T] K14。
 
