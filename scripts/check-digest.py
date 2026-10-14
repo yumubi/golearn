@@ -172,6 +172,12 @@ def validate(path, inv=None):
             if not (d.is_dir() and list(d.glob("*.go")) and (d / "out.txt").exists() and (d / "out.txt").stat().st_size > 0):
                 errs.append(f"{me.group(1) if me else '?'} 标了可运行: 是，但缺运行证据：需要目录 work/run/{Path(path).stem}/{me.group(1) if me else 'Ek'}/，"
                             "内含你实际运行的 .go 文件和非空的 out.txt（命令输出或编译错误）。没跑过就改成 `未验证`")
+            else:
+                o = (d / "out.txt").read_text(errors="replace")
+                if not o.startswith("$ "):
+                    errs.append(f"{me.group(1)} 的 out.txt 第一行必须是 `$ ` 开头的真实命令，其后才是原样输出")
+                if "已删" in o or "harness 未留" in o:
+                    errs.append(f"{me.group(1)} 的 out.txt 含「已删/harness 未留」：证据不可复现，请重做或改 `未验证`")
     for l in bullets(section(text, "与 Go 1.26 冲突或过期")):
         if l.strip() == "- 无":
             continue
