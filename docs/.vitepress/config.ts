@@ -85,6 +85,7 @@ export default defineConfig({
           { text: 'P26 部署实战（compose）', link: '/p26-deploy' },
           { text: 'P30 方法与接口', link: '/p30-methods-interfaces' },
           { text: 'P31 并发调度', link: '/p31-concurrency-scheduler' },
+          { text: 'P32 内存与 GC', link: '/p32-memory-gc' },
           { text: 'P4 精读 ejdb', link: '/p4-ejdb' },
           { text: 'P5 精读 deepsearch', link: '/p5-deepsearch' },
           { text: 'P10 gRPC', link: '/p10-grpc' },

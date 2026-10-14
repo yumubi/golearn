@@ -87,6 +87,7 @@ cd golearn
 | P26 | 部署实战：compose 编排收官 | [notes/p26-deploy.md](notes/p26-deploy.md) | `labs/compose/` | ✅ 三服务编排真跑/健康条件依赖 |
 | P30 | 方法、接口与组合 | [notes/p30-methods-interfaces.md](notes/p30-methods-interfaces.md) | `exercises/p30/`（含 cmd/demo1、cmd/mw） | ✅ 10 tests -race 干净（方法集合矩阵/装箱 bench/cmd 实拍） |
 | P31 | 并发调度：GMP 与 channel/select | [notes/p31-concurrency-scheduler.md](notes/p31-concurrency-scheduler.md) | `exercises/p31sched/` | ✅ 12 tests（11 -race 干净 + 1 skip-ok；脏写分布/锁矩阵/信号量批分布实测） |
+| P32 | 内存与 GC | [notes/p32-memory-gc.md](notes/p32-memory-gc.md) | `exercises/p32gc/` | ✅ 4 tests -race 干净 + 3 bench（逃逸矩阵/语义垃圾/三级分配/pprof 四级） |
 
 ## 网站版（VitePress，rust-for-frontend 同款体验）
 
