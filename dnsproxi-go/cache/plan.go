@@ -112,7 +112,7 @@ func Records(buf []byte) ([]RR, error) {
 // 对照 Rust cache_request()：RD=1、OPCODE=0、无 EDNS、单问题、
 // question 之后没有多余字节（no additional records）的查询。
 // AD 位（0x0020）豁免：stub resolver（dig 默认、systemd-resolved）普遍带
-// AD 查询，它只表达"希望上游校验"，不改问题的身份——手册 24 节改造题 1。
+// AD 查询，它只表达"希望上游校验"，不改问题的身份（手册 24 节改造题 1）。
 // 应答侧不受影响：缓存里的应答 AD 位来自上游（PlanResponse 原样入存），
 // Reply 拷贝应答原字节，AD 的真伪由上游负责，不从查询里带。
 func Request(buf []byte) (*Question, error) {

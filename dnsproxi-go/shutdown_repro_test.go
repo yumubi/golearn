@@ -13,7 +13,7 @@ import (
 // 路径：cancel → ctx.Done() → pc.Close() → 读循环 ReadFromUDP 报错退出 →
 // wg.Wait()。expirer goroutine 在 wg 里，它的 for-range 只有在 RunExpirer
 // 的内部 goroutine close(stats) 后才退出；而那个 goroutine 等的是 done
-// channel，close(done) 挂在 Run 的 defer——Run 还没返回，defer 没跑。
+// channel，close(done) 挂在 Run 的 defer 上（Run 还没返回，defer 没跑）。
 // wg.Wait() 等它退出，它等 Run 的 defer 执行：互等，永久卡死。
 //
 // 探法：起真实 Run（ActiveTTL=1），然后 cancel，用 sync.WaitGroup 外围等

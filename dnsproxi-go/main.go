@@ -264,7 +264,7 @@ func (p *Proxy) Run(ctx context.Context) error {
 		}()
 		// 关停顺序：读循环退出路径先 close(done) 再 wg.Wait()。
 		// 不能把 close(done) 挂在 Run 的 defer 上：defer 要等 wg.Wait() 之后的
-		// return 才跑，而 expirer 在 wg 里等 done——互等死锁（手册改造题 2）。
+		// return 才跑，而 expirer 在 wg 里等 done，互等死锁（手册改造题 2）。
 		stopExpirer = func() { close(done) }
 	}
 
