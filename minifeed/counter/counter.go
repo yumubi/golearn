@@ -17,7 +17,7 @@ type Counter interface {
 }
 
 // MemoryCounter：进程内 map 计数 + 定时刷库（模拟 W07-2 K25 的消费端凑批：
-// 单条请求只动内存，ticker 到点把脏数据一次落库——批量一次提交比逐条快一个量级）。
+// 单条请求只动内存，ticker 到点把脏数据一次落库；批量一次提交比逐条快一个量级）。
 type MemoryCounter struct {
 	mu      sync.Mutex
 	counts  map[string]int64 // key: biz:id

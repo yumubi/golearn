@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Scored 一条榜单项（Content 换 Abstract 不缓存全文——W09-1 K12 缓存字段纪律）。
+// Scored 一条榜单项（Content 换 Abstract 不缓存全文，W09-1 K12 缓存字段纪律）。
 type Scored struct {
 	PostID int64
 	Title  string
@@ -26,7 +26,7 @@ type rankCache struct {
 	at    int64 // 装填时间戳（UnixMilli）
 }
 
-// Rank 本地缓存榜单：读 Top 零锁，Refresh 单飞（进程内 TryLock，多副本才需要 SetNX——W09-2 K3）。
+// Rank 本地缓存榜单：读 Top 零锁，Refresh 单飞（进程内 TryLock，多副本才需要 SetNX，W09-2 K3）。
 type Rank struct {
 	src  Source
 	ttl  int64
