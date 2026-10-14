@@ -453,29 +453,52 @@ func TestMaxInFlight(t *testing.T) {
 	if _, err := c.conn.Write(append(append([]byte{}, f2...), f3...)); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(80 * time.Millisecond)
-	h.mu.Lock()
-	n := len(h.seen)
-	h.mu.Unlock()
-	if n != 1 {
-		t.Fatalf("want only 1 query accepted while in-flight full, got %d", n)
-	}
-	// 释放：handler 回包，在飞归零；新查询恢复。
-	close(release)
-	if _, err := c.RoundTrip(qmsg(4, "d")); err != nil {
-		t.Fatalf("conn broken after release: %v", err)
-	}
-	deadline := time.Now().Add(2 * time.Second)
+	// 等 handler 已收到帧 1（轮询到 n==1，不猜固定 sleep）；负载高时 handler
+	// 起步慢，80ms 假设会偶发翻车（P34 遗留 flake）。
+	seenDeadline := time.Now().Add(2 * time.Second)
 	for {
 		h.mu.Lock()
 		n := len(h.seen)
 		h.mu.Unlock()
-		if n == 2 {
+		if n == 1 {
+			break
+		}
+		if time.Now().After(seenDeadline) {
+			t.Fatalf("want 1 query accepted while in-flight full, got %d", n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// 轮到 1 后再给读循环一小段时间，确认帧 2、3 真被丢弃（语义：超限帧
+	// 不进 handler）。若被错误接收，n 会涨到 2 以上，这里必须抓到。
+	time.Sleep(100 * time.Millisecond)
+	h.mu.Lock()
+	if n := len(h.seen); n != 1 {
+		h.mu.Unlock()
+		t.Fatalf("want only 1 query accepted while in-flight full, got %d", n)
+	}
+	h.mu.Unlock()
+	// 释放：handler 回包，在飞归零；新查询恢复。
+	//
+	// f4 可能被合法丢弃：handler1 从 <-release 醒来、写完应答到 goroutine
+	// 退出扣减 in-flight 之间有窗口，serveConn 若在这个窗口读到 f4 会按
+	// 超限丢弃（语义正确）。所以 f4 按"可重发"处理：RoundTrip 成功只能
+	// 说明连接活着（回包可能是 handler1 的滞后应答），以 seen 增到 2 为准；
+	// 超时未到就重发，总预算 4 秒。这也是真实客户端的行为（查询超时重发）。
+	close(release)
+	deadline := time.Now().Add(4 * time.Second)
+	for {
+		if _, err := c.RoundTrip(qmsg(4, "d")); err != nil {
+			t.Fatalf("conn broken after release: %v", err)
+		}
+		h.mu.Lock()
+		n := len(h.seen)
+		h.mu.Unlock()
+		if n >= 2 {
 			break
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("want 2 queries handled after release, got %d", n)
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 }
