@@ -25,6 +25,8 @@ _spec = importlib.util.spec_from_file_location("_material", Path(__file__).with_
 M = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(M)
 
+TIERS = "讲提索"
+MAX_LECTURE = 45
 DISPO = M.WORK / "dispo.tsv"
 CHAPTERS = M.WORK / "chapters.md"
 
@@ -77,6 +79,7 @@ def main():
     dispo, errs = load_dispo()
     chs = declared_chapters()
     if a[0] == "--dispo":
+        tally = {}
         for k, (body, tag, lvl) in items.items():
             if k not in dispo:
                 errs.append(f"{k} 没有去向 〔{tag}〕 {body[:30]}")
@@ -92,12 +95,19 @@ def main():
                     errs.append(f"{k} DROP 需要理由")
             elif to not in chs:
                 errs.append(f"{k} 去向 {to} 未在 work/chapters.md 声明（`## {to} 标题`）")
+            elif why[:1] not in TIERS:
+                errs.append(f"{k} 的理由必须以 讲/提/索 之一开头（讲=正文展开，提=一句话带过，索=只进 MATERIALS 索引）")
+            else:
+                tally[to] = tally.get(to, 0) + (why[:1] == "讲")
+        for ch, n in sorted(tally.items()):
+            if n > MAX_LECTURE:
+                errs.append(f"{ch} 的 讲 条目 {n} 个，超过预算 {MAX_LECTURE}（一章 <= 450 行装不下）；多的降为 提 或 索")
     else:
         mode, path = a[0], a[1]
         ch = chapter_of(path)
         if ch is None:
             raise SystemExit("文件名需以 pNN 开头")
-        mine = {k for k, (to, _) in dispo.items() if to == ch}
+        mine = {k for k, (to, why) in dispo.items() if to == ch and why[:1] == "讲"}
         must = {k for k in mine if k in items and items[k][2] == "必读"}
         text = Path(path).read_text()
         if mode == "--outline":
