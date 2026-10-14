@@ -10,7 +10,8 @@
      （单独一行的 `...` / `// ...` / `…` 视为省略）。
   4. 首个引用块视为章头提示，可无标签；之后的引用块必须有标签。
   5. 摘录总字数占全文比例 <= --max-ratio（默认 0.30）。
-  6. 〔实测〕 所在行必须有反引号命令。
+  6. 〔实测〕 和 〔1.26 修正〕 所在行必须有反引号命令，且不能只是 go version / go env。
+  7. 引用块里不得有 40 字符以上的无空白连续串（PDF 抽取乱码特征）。
 downloads/ 不存在时 SKIP 退出 0。omp 不得修改本脚本。
 """
 import importlib.util
@@ -43,8 +44,12 @@ def check(path, max_ratio):
             e = M.tag_error(t, inv)
             if e:
                 errs.append(f"{path}:{i} {e}")
-            if t[0] == "meta" and tg.startswith("实测") and "`" not in l:
-                errs.append(f"{path}:{i} 〔实测〕 同一行要附反引号命令")
+            if t[0] == "meta" and tg.startswith(("实测", "1.26 修正")):
+                cmds = re.findall(r"`([^`]+)`", l)
+                if not cmds:
+                    errs.append(f"{path}:{i} 〔{tg}〕 同一行要附反引号命令")
+                elif all(re.fullmatch(r"go (version|env)\b.*", c.strip()) for c in cmds):
+                    errs.append(f"{path}:{i} 〔{tg}〕 的命令只是 go version/go env，证明不了结论，请换成真正跑出该结论的命令")
 
     # 引用块与代码块
     in_fence = False
@@ -104,6 +109,9 @@ def check(path, max_ratio):
                             errs.append(f"{path}:{i + 1} 引用与出处不符: 「{seg.strip()[:40]}…」不在 〔{m.group(1)}〕 里")
                             break
                     quote_chars += len(body)
+                    for run in re.findall(r"[^\s\u4e00-\u9fff，。；：、“”（）]{40,}", body):
+                        errs.append(f"{path}:{i + 1} 引用里有 {len(run)} 字符的连续串，像 PDF 抽取时被吃掉空白的乱码: {run[:30]!r}；代码请改用代码块并指向源文件")
+                        break
             elif first_quote:
                 pass
             else:
