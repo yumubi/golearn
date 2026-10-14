@@ -154,6 +154,10 @@ def validate(path, inv=None):
         if e:
             errs.append(f"{kid}: {e}")
             continue
+        if t[0] == "pdf" and t[3] - t[2] >= 5:
+            errs.append(f"{kid} 出处页范围过宽 p{t[2]}-{t[3]}（最多 5 页），请拆成几条或缩小范围")
+        if t[0] == "code" and t[3] and t[4] - t[3] > 300:
+            errs.append(f"{kid} 出处行范围过宽 {t[3]}-{t[4]}（最多 300 行）")
         if len(body) >= 30 and M.shingle_ratio(body, M.tag_text(t)) > 0.6:
             errs.append(f"{kid} 疑似抄原文（与出处文字重合超过 60%），请用自己的话")
 
@@ -162,11 +166,21 @@ def validate(path, inv=None):
             continue
         if not re.search(r"可运行:\s*(是|否|未验证)", l) or "过期:" not in l or not M.TAG_RE.search(l):
             errs.append(f"代码例子行需含 出处、`可运行: 是|否|未验证`、`过期:`: {l[:50]}")
+        if re.search(r"可运行:\s*是", l):
+            me = re.match(r"- (E\d+)", l)
+            d = M.WORK / "run" / Path(path).stem / (me.group(1) if me else "?")
+            if not (d.is_dir() and list(d.glob("*.go")) and (d / "out.txt").exists() and (d / "out.txt").stat().st_size > 0):
+                errs.append(f"{me.group(1) if me else '?'} 标了可运行: 是，但缺运行证据：需要目录 work/run/{Path(path).stem}/{me.group(1) if me else 'Ek'}/，"
+                            "内含你实际运行的 .go 文件和非空的 out.txt（命令输出或编译错误）。没跑过就改成 `未验证`")
     for l in bullets(section(text, "与 Go 1.26 冲突或过期")):
         if l.strip() == "- 无":
             continue
-        if "依据:" not in l and "待核" not in l:
-            errs.append(f"过期条目需 `依据:` 或 `待核`: {l[:50]}")
+        has_basis = "依据:" in l
+        if has_basis:
+            if not re.search(r"依据:.*`[^`]+`", l):
+                errs.append(f"`依据:` 后必须有反引号包起来的、你实际运行过的命令: {l[:50]}")
+        elif not l.startswith("- 待核:"):
+            errs.append(f"没有实测依据的条目必须以 `- 待核:` 开头，且只能写成待验证的疑问，不能当结论: {l[:50]}")
         for tg in M.TAG_RE.findall(l):
             t = M.parse_tag(tg)
             if t is None:
