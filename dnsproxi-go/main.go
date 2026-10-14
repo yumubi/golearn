@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"golearn/dnsproxi-go/cache"
+	"golearn/dnsproxi-go/guard"
 	"golearn/dnsproxi-go/tcp"
 	"golearn/dnsproxi-go/wire"
 )
@@ -52,6 +53,10 @@ type Config struct {
 	// UDPTruncLimit 0 = 应答不截断（UDP 路径行为逐位不变）。
 	TCPListen     string // DNS_TCP_LISTEN，如 :5353/tcp；空=完全不启动 TCP
 	UDPTruncLimit int    // DNS_UDP_TC_LIMIT，UDP 应答字节上限；0=不截断
+
+	// P35 guard（默认全关）：RateLimit 空串=不限流；BreakerThreshold 0=不熔断。
+	RateLimit        string // DNS_RATE_LIMIT，"rate"或"rate,burst"（枚/秒）；空=关
+	BreakerThreshold int    // DNS_BREAKER_THRESHOLD，失败率百分比（如 50）；0=关
 }
 
 // packet 是 worker pool 模式的队列元素。
@@ -82,6 +87,9 @@ func loadConfig() Config {
 		WorkerPool:     envInt("DNS_WORKER_POOL", 0),
 		TCPListen:      os.Getenv("DNS_TCP_LISTEN"),
 		UDPTruncLimit:  envInt("DNS_UDP_TC_LIMIT", 0),
+
+		RateLimit:        strings.TrimSpace(os.Getenv("DNS_RATE_LIMIT")),
+		BreakerThreshold: envInt("DNS_BREAKER_THRESHOLD", 0),
 	}
 }
 
@@ -125,6 +133,48 @@ func envOr(k, def string) string {
 type Proxy struct {
 	cfg   Config
 	cache *cache.Cache // CacheOn 时非 nil
+
+	// P35 guard（默认全关）：limiter 挡每查询入口，breaker 护上游转发。
+	// 零值 nil = 不限流不熔断，路径行为与 P34 逐位一致。
+	limiter *guard.TokenBucket
+	breaker *guard.Breaker
+}
+
+// initGuard 按配置建 guard 对象；未配置返回零值组合（均 nil）。
+func (p *Proxy) initGuard() {
+	if p.cfg.RateLimit != "" {
+		parts := strings.SplitN(p.cfg.RateLimit, ",", 2)
+		if rate, err := strconv.Atoi(strings.TrimSpace(parts[0])); err == nil {
+			burst := rate // 默认 burst=rate：1 秒的突发额度
+			if len(parts) == 2 {
+				if b, err2 := strconv.Atoi(strings.TrimSpace(parts[1])); err2 == nil {
+					burst = b
+				}
+			}
+			p.limiter = guard.NewTokenBucket(rate, burst, guard.RealClock)
+		}
+	}
+	if p.cfg.BreakerThreshold > 0 {
+		p.breaker = guard.NewBreaker(guard.BreakerConfig{
+			FailThreshold: float64(p.cfg.BreakerThreshold) / 100, // 百分比 → 比例
+			MinSamples:    20,
+			Window:        100,
+			CoolOff:       10 * time.Second,
+		}, guard.RealClock)
+	}
+}
+
+// markBreaker 回填上游调用结局。nil 安全：guard 关闭时零成本。
+// ok=false 视为一次失败（网络错/超时都算）；true 归还一次成功。
+func (p *Proxy) markBreaker(ok bool) {
+	if p.breaker == nil {
+		return
+	}
+	if ok {
+		p.breaker.MarkSuccess()
+	} else {
+		p.breaker.MarkFailure()
+	}
 }
 
 // Run 启动 UDP 监听循环，阻塞到 ctx 取消。
@@ -161,6 +211,15 @@ func (p *Proxy) Run(ctx context.Context) error {
 			}
 			p.cache.Sketch = cache.NewSketch(cap, p.cfg.Door, true, 8)
 		}
+	}
+
+	// P35 guard 建立放在 TCP 起服务之前：Serve 进来的查询立刻被 guard 罩住。
+	p.initGuard()
+	if p.limiter != nil {
+		logger.Info("guard limiter on", "cfg", p.cfg.RateLimit)
+	}
+	if p.breaker != nil {
+		logger.Info("guard breaker on", "threshold_pct", p.cfg.BreakerThreshold)
 	}
 
 	// P34：DNS over TCP（默认关）。TCPListen 空 = 完全不启动。
@@ -288,6 +347,13 @@ func (p *Proxy) handleQuery(pc net.PacketConn, client net.Addr, query []byte) {
 		return // 太短，连头都放不下，静默丢（和你 Rust 版一致）
 	}
 
+	// P35 限流入口：令牌不够直接丢（UDP 语义：不回包由客户端重试）。
+	// label 只记 outcome，不记客户端 IP：IP 高基数，会撑爆 Prometheus（P13 纪律）。
+	if p.limiter != nil && !p.limiter.Allow(1) {
+		QueriesTotal.WithLabelValues("OTHER", "rate_limited").Inc()
+		return
+	}
+
 	// sinkhole：question 的 qname 前缀命中 → 本地 NXDOMAIN，上游不见包。
 	if p.cfg.Sinkhole != "" {
 		if name, _, err := wire.ParseName(query, 12); err == nil &&
@@ -343,6 +409,25 @@ func (p *Proxy) handleQuery(pc net.PacketConn, client net.Addr, query []byte) {
 
 	upStart := time.Now()
 	upAddr, err := net.ResolveUDPAddr("udp", p.cfg.Upstream)
+	// P35 熔断门：open 态直接快速失败，不再碰上游（上游已病，重试只是加重）。
+	if p.breaker != nil {
+		if err := p.breaker.Allow(); err != nil {
+			qtypeLabelN(query, "", "breaker_open")
+			return
+		}
+	}
+	// defer 里回填成败：normal 路径每个 return 都要 Mark，漏一个窗口就失真。
+	// sent 标志区分"已发出去"与"门都没过"（后者不计样本）。
+	sent := false
+	defer func() {
+		if p.breaker == nil || !sent {
+			return
+		}
+		if r := recover(); r != nil {
+			p.breaker.MarkFailure()
+			panic(r)
+		}
+	}()
 	if err != nil {
 		logger.ErrorContext(ctx, "resolve upstream failed", "err", err.Error())
 		qtypeLabelN(query, "", "upstream_error")
@@ -356,11 +441,13 @@ func (p *Proxy) handleQuery(pc net.PacketConn, client net.Addr, query []byte) {
 		UpstreamErrorsTotal.WithLabelValues(upstreamErrReason(err)).Inc()
 		return
 	}
+	sent = true // 门已过、进入上游调用段：后续结局都要回填 breaker
 	defer up.Close()
 	if err := up.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		logger.ErrorContext(ctx, "set deadline failed", "err", err.Error())
 		qtypeLabelN(query, "", "upstream_error")
 		UpstreamErrorsTotal.WithLabelValues("network").Inc()
+		p.markBreaker(false) // deadline 设不进去视为上游调用失败
 		return
 	}
 
@@ -368,6 +455,7 @@ func (p *Proxy) handleQuery(pc net.PacketConn, client net.Addr, query []byte) {
 		logger.ErrorContext(ctx, "upstream write failed", "err", err.Error())
 		qtypeLabelN(query, "", "upstream_error")
 		UpstreamErrorsTotal.WithLabelValues(upstreamErrReason(err)).Inc()
+		p.markBreaker(false)
 		return
 	}
 	resp := make([]byte, 4096)
@@ -377,10 +465,12 @@ func (p *Proxy) handleQuery(pc net.PacketConn, client net.Addr, query []byte) {
 		logger.WarnContext(ctx, "upstream read failed", "err", err.Error())
 		qtypeLabelN(query, "", "upstream_error")
 		UpstreamErrorsTotal.WithLabelValues(upstreamErrReason(err)).Inc()
+		p.markBreaker(false)
 		return
 	}
 	UpstreamLatency.Observe(time.Since(upStart).Seconds())
 	qtypeLabelN(query, "", "forwarded")
+	p.markBreaker(true)
 	// G2/G3/G4 入缓存：可缓存应答 → Plan + PutFull（对照 Rust :1121）。
 	// 失败只是不缓存，不影响回包；逐出/拒绝记录带回来在锁外打日志
 	// （你 Rust 版 :1194 注释的同款理由）。
