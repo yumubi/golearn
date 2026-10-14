@@ -10,10 +10,7 @@ Go 的构建模型只有两层：**包**是编译单元（一个目录一个包�
 
 ## 一、包与可见性
 
-- 导入路径是 module path 加子目录；`import "fmt"` 里的 `fmt` 是路径，`fmt.Println` 里的 `fmt` 是包名，两者通常同名所以容易混。〔TB04 p6-7〕
-- 首字母大写才导出，没有 `public`/`private` 关键字。〔TB04 p7〕
-- `main` 包整个程序只能有一个，且不能被别的包导入。〔TB04 p5〕〔TB04 p7〕
-- 命名空间是路径，不是包名：两个包可以都叫 `util`，路径不同即可。
+导入路径是 module path 加子目录；`import "fmt"` 里的 `fmt` 是路径，`fmt.Println` 里的 `fmt` 是包名，两者通常同名所以容易混，命名空间是路径，两个包可以都叫 `util`。〔TB04 p6-7〕导出规则（首字母大写）见 01 的差异表；`main` 包整个程序只能有一个，且不能被别的包导入。〔TB04 p5〕〔TB04 p7〕
 
 ## 二、module 与依赖：为什么构建是可重现的
 
@@ -31,11 +28,10 @@ GOPATH 时代的缺陷是只拉最新主线版本、不锁定，不同人不同�
 go mod init example.com/app   # 建 module
 go mod tidy                   # 按源码增删依赖，是最常用的一条
 go get example.com/lib@v1.7.0 # 指定版本，升降级都用它
-go list -m -versions example.com/lib
 go install example.com/cmd/tool@latest   # 安装可执行文件
 ```
 
-注意 Go 1.17 起 `go get` 不再用来安装命令，改用 `go install ...@版本`。〔TBX02 p8〕仅删源码里的 `import` 不会清理 `go.mod`，要跑 `go mod tidy`。〔TB07 p8-9〕
+注意 Go 1.17 起 `go get` 安装命令已被弃用（1.18 起不再构建安装），改用 `go install ...@版本`。〔TBX02 p8〕仅删源码里的 `import` 不会清理 `go.mod`，要跑 `go mod tidy`。〔TB07 p8-9〕
 
 本地联调和私有仓库：未发布的 module 用 `replace` 指向本地路径，缺点是路径因人而异、`go.mod` 要提交；更好的方案是 Go 1.18 起的 `go.work` 工作区，配置不进仓库。〔TB35b p2-4〕私有 module 用 `GOPRIVATE` 绕开公共代理和校验。〔TB35b p5〕自己发布 module 时，单仓库单 module 最简单；一个 module 出问题，用新 patch 版本加 `retract` 作废，而不是删 tag 重发。〔TBX11 p1-4〕〔TBX11 p9-12〕
 
@@ -53,27 +49,61 @@ internal/          # 仅本项目可导入的包
 
 库项目去掉 `cmd/`，不放 `vendor/`。〔TB05 p8-12〕`golang-standards/project-layout` 不是官方标准，不能当权威。〔TB05 p13〕
 
-`internal/` 是 Go 1.4 引入的真实访问控制，由编译器强制。另一个 module 导入它会得到：
-
-```text
-use of internal package lib/internal/secret not allowed
-```
-
-〔TB05 p5〕〔TB05 p16〕所以对外要承诺稳定的放在普通包里，不想承诺的放进 `internal/`，这是库作者管理 API 边界的主要手段。
+`internal/` 是 Go 1.4 引入的真实访问控制，由编译器强制：另一个 module 导入它会得到 `use of internal package lib/internal/secret not allowed`。〔TB05 p5〕〔TB05 p16〕所以对外要承诺稳定的放在普通包里，不想承诺的放进 `internal/`，这是库作者管理 API 边界的主要手段。
 
 ## 四、启动次序：从包到 main
 
-整体次序：按导入顺序递归、深度优先初始化依赖包；每个包内先常量、再变量、最后 `init` 函数；一个包被多处依赖只初始化一次；最后才进 `main.main`。〔TB08 p5-8〕下面这个小项目 `main` 导入 `pkg1` 和空导入的 `pkg2`，两者都依赖 `pkg3`，实际输出：
+整体次序：按导入顺序递归、深度优先初始化依赖包；每个包内先常量、再变量、最后 `init` 函数；一个包被多处依赖只初始化一次；最后才进 `main.main`。〔TB08 p5-8〕下面是我在本机 go1.26.4 上建的三包小项目（module 名 `x`）：`main` 空导入 `pkg1` 和 `pkg2`，两者都导入 `pkg3`；每个包有一个初始化时打印的包级变量和一个 `init`。
+
+```go
+// pkg3/pkg3.go
+package pkg3
+
+import "fmt"
+
+func Trace(s string) int { fmt.Println(s); return 0 }
+
+var _ = Trace("pkg3 var")
+
+func init() { Trace("pkg3 init") }
+
+// pkg1/pkg1.go（pkg2/pkg2.go 完全同构，只把 pkg1 换成 pkg2）
+package pkg1
+
+import "x/pkg3"
+
+var _ = pkg3.Trace("pkg1 var")
+
+func init() { pkg3.Trace("pkg1 init") }
+
+// main.go
+package main
+
+import (
+	_ "x/pkg1"
+	_ "x/pkg2"
+	"x/pkg3"
+)
+
+var _ = pkg3.Trace("main var")
+
+func init() { pkg3.Trace("main init") }
+func main() { pkg3.Trace("main.main") }
+```
 
 ```text
 pkg3 var
 pkg3 init
+pkg1 var
 pkg1 init
-pkg2 init 3
+pkg2 var
+pkg2 init
 main var
 main init
 main.main
 ```
+
+`pkg3` 只初始化一次，且先于依赖它的两个包；`pkg1` 先于 `pkg2` 是因为 `main` 里的导入顺序；每个包内变量先于 `init`；最后才是 `main` 自己的变量、`init` 和 `main.main`。
 
 三条行为：`init` 排在包内其他元素之后；每个 `init` 只执行一次；多个 `init` 顺序执行。`init` 不能被显式调用。〔TB08 p4〕〔TB08 p14〕
 
@@ -86,15 +116,13 @@ main.main
 一个 `go` 命令覆盖构建、格式化、依赖、静态检查、测试、文档、剖析。〔TB02 p10〕交付前常用的一组：
 
 ```sh
-gofmt -l .                 # 列出没格式化的文件，风格不讨论
-go vet ./...               # 静态检查，能抓出很多低级错误
-go test -race -count=1 ./...   # 竞态检测，并发代码必跑
-go test -cover ./...
-go test -bench . -benchmem
-go tool pprof <profile>    # 剖析：CPU、内存、阻塞
+gofmt -l .                   # 列出没格式化的文件，风格不讨论
+go vet ./...                 # 静态检查，能抓出很多低级错误
+go test -race -count=1 ./... # 竞态检测，并发代码必跑
+go tool pprof <profile>      # 剖析：CPU、内存、阻塞
 ```
 
-pprof 的采集有两条路：在线服务 `import _ "net/http/pprof"` 再开一个监听端口；离线用 `go test -cpuprofile` 或 `-memprofile` 生成文件。展开见后面的运行时与稳定性章节。
+pprof 的采集有两条路：在线服务 `import _ "net/http/pprof"` 再开一个监听端口；离线用 `go test -cpuprofile` 或 `-memprofile` 生成文件。剖析的实操见 08 节，更完整的工具链进阶见旧长版 `notes/p22-toolchain-docs.md`。
 
 ## 常见坑
 
@@ -106,12 +134,11 @@ pprof 的采集有两条路：在线服务 `import _ "net/http/pprof"` 再开一
 ## 判断题（先答再看）
 
 1. `a` 依赖 `c@v1.1.0`，`b` 依赖 `c@v1.3.0`，你的项目同时用 `a` 和 `b`，实际构建用哪个版本的 `c`？
-2. 为什么 `internal` 目录不是约定而是编译器强制？这对库的演进有什么好处？
-3. `import _ "x"` 里的下划线在做什么，副作用发生在初始化的哪一步？
+2. `import _ "x"` 里的下划线在做什么，副作用发生在初始化的哪一步？
 
 ## 在项目里
 
-`dnsproxi-go/` 是单 module 单二进制的最小形状：`go.mod` 里 `module golearn/dnsproxi-go`，根目录 `main.go` 是 `main` 包，`cache/`、`wire/`、`tcp/` 是平铺的小包，没有 `internal/` 和 `cmd/`，因为它只有一个二进制且不打算被外部导入。回归命令：`cd dnsproxi-go && go vet ./... && go test -race -count=1 ./...`。
+`dnsproxi-go/` 是单 module 单二进制的最小形状：`go.mod` 里 `module golearn/dnsproxi-go`，根目录 `main.go` 是 `main` 包，`cache/`、`wire/`、`tcp/` 等是平铺的小包，没有 `internal/` 和 `cmd/`，因为它只有一个二进制且不打算被外部导入。`main` 里的启动流程见 01 节。回归命令：`cd dnsproxi-go && go vet ./... && go test -race -count=1 ./...`。
 
 ## 想深入去哪查
 

@@ -3,6 +3,8 @@
 > Go for Backend · 以练代学。类比锚点：Java/Rust（后端视角）。
 > 配方仿照 `rs/rust-for-frontend`；实测规矩沿用 `_rust_learning`。
 
+**新读者先看 [`guide/handbook/`](guide/handbook/README.md)：Go 后端速通手册，26 节，约 12 小时建立体系，之后靠项目补细节。** 下面的章节是细节库。
+
 ## 怎么用这份教程（新读者从这读）
 
 **按阶段读，不按编号读。** 编号是写作顺序，不是学习顺序：

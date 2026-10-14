@@ -77,8 +77,8 @@ GORM 的几个值得记的约定：`First`/`Take` 查不到返回 `gorm.ErrRecor
 
 两条工具的坑值得记：
 
-- sqlc 的注解 `-- name: Xxx :many` 紧邻长中文注释时，旧版本曾解析失败；在当前 sqlc 版本里复现不了，但生成器的解析器不是编译器，查询文件里的注释保留 ASCII 是便宜的防御。
-- goose 的迁移文件里，普通注释行中不要出现 `-- +goose`，会被当成真注解，报错信息是"注解解析失败"，不是"你的注释写错了"。
+- sqlc 的注解 `-- name: Xxx :many` 紧邻长中文注释时，早期版本曾解析失败，当前版本（旧章在 sqlc v1.31.1 复现过）已不复现；生成器的解析器不是编译器，查询文件里的注释保留 ASCII 是便宜的防御。来源是旧章复盘记录，见 `notes/p11-sqlc-goose.md` 的翻车记档（1），资料原话里没有这条。
+- goose 的迁移文件里，普通注释行中不要出现 `-- +goose`，会被当成真注解，报错是 `failed to parse annotation line`，不是"你的注释写错了"。来源是旧章复盘记录，见 `notes/p11-sqlc-goose.md` 的翻车记档（2），带完整复现命令。
 
 ## 常见坑
 
@@ -87,7 +87,7 @@ GORM 的几个值得记的约定：`First`/`Take` 查不到返回 `gorm.ErrRecor
 3. **事务里混用 `db` 和 `tx`**。
 4. **GORM `Updates(struct)` 想把字段改成零值**，没改上。
 5. **`DSN` 少了 `parseTime=True`**，时间字段扫不进 `time.Time`。
-6. **内存库的单写者限制**：sqlite 内存库要 `SetMaxOpenConns(1)`，否则并发测试里每个连接看到的是不同的库。
+6. **内存库按连接隔离**：sqlite 的 `:memory:` 库要 `SetMaxOpenConns(1)`，否则并发测试里每个连接看到的是不同的库。
 7. **`int(11)` 之类的显示宽度**在 MySQL 8.0.17 之后已废弃，教学 DDL 里的旧写法别照抄。〔C:go_basic/database/create_table.sql〕
 
 ## 判断题

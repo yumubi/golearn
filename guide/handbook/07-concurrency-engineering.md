@@ -18,11 +18,11 @@
 
 | 问题 | Java | Rust（tokio） | Go |
 |---|---|---|---|
-| 取消 | 中断位、`Future.cancel` | drop、`CancellationToken` | `context.Context`，显式传参，约定放在第一个参数 |
-| 取消能不能传播 | 手工 | `CancellationToken` 的子 token | `WithCancel`/`WithTimeout` 派生，父取消则子全部取消 |
-| 结构化并发 | `StructuredTaskScope`（较新） | `JoinSet`、`select!` | `errgroup`：任何一个失败则取消兄弟 |
+| 取消与传播 | 中断位、`Future.cancel`，传播靠手工 | drop、`CancellationToken` 的子 token | `context.Context` 显式传参，`WithCancel`/`WithTimeout` 派生，父取消则子全部取消 |
 | 线程池 | `ExecutorService` 内建 | 运行时自带 | 没有标准池，用 channel 加 goroutine 自己搭 |
 | 优雅关停 | `shutdown hook`、`Executor.shutdown` | 信号加 `select!` | `signal.NotifyContext` 加 `Server.Shutdown` |
+
+结构化并发（一个失败则取消兄弟）在 Go 里对应 `errgroup`，第四节细讲。
 
 ## 一、context：取消的统一机制
 
@@ -186,7 +186,7 @@ fmt.Println(err, <-errc)   // 3 ListenAndServe 随后返回 http.ErrServerClosed
 ## 常见坑
 
 1. pipeline 某一级的发送没有 `ctx.Done()` 分支，下游提前退出后上游永久卡住。
-2. 超时返回后，子 goroutine 仍往无缓冲结果 channel 发送，永久阻塞。〔实测〕用 `runtime.NumGoroutine()` 前后相减：50 次请求全部超时，无缓冲时泄漏 50 个 goroutine，结果 channel 给 1 个缓冲后泄漏 0。
+2. 超时返回后，子 goroutine 仍往无缓冲结果 channel 发送，永久阻塞（泄漏的成因与检测见 06 节第六节）。〔实测〕用 `runtime.NumGoroutine()` 前后相减，50 次请求全部超时：无缓冲泄漏 50 个 goroutine，给 1 个缓冲后泄漏 0。
 3. 忘记 `defer cancel()`，定时器泄漏。
 4. `errgroup` 里的任务不监听 `ctx`，一个失败后兄弟还在白跑。
 5. 关停时只关监听器，不等在途请求；或者等待没有总超时。
@@ -208,6 +208,7 @@ fmt.Println(err, <-errc)   // 3 ListenAndServe 随后返回 http.ErrServerClosed
 - **背压**：`dnsproxi-go/main.go` 的 `Run` 在 `WorkerPool` 形态下，读循环把包写入带缓冲的 `qch`，满了读循环阻塞，压力回到内核的接收缓冲区，这是"阻塞上游"的真实例子。读错误时先 `close(qch)` 让 worker 排空，再 `wg.Wait()`，与关停顺序一致。
 - **取消感知**：`Run(ctx)` 在 `ctx` 取消时关闭监听口，读循环因此返回，并按"取消就返回 nil、否则包装错误"区分优雅关停与异常退出。
 - **真实的缺口**：`dnsproxi-go/main.go` 的 `main` 现在传的是 `context.Background()`，没有接入信号，所以收到 SIGTERM 时进程直接被杀，`Run` 里写好的优雅关停分支实际用不上。把它改成 `signal.NotifyContext` 加超时兜底，是一道现成的改造题，对照上面第六节。
+- **接上信号之后会撞上的第二个缺口**：`Run` 在 `DNS_CACHE_ACTIVE_TTL=1` 时会让后台回收 goroutine 加入同一个 `WaitGroup`，而它要等 `done` 通道关闭才退出；`done` 却是在 `Run` 返回时才关闭的，读循环退出后 `Run` 先 `wg.Wait()`，于是互相等待。我在 HEAD 版本上实测：取消 ctx 后，关闭回收的配置 2 秒内返回，打开回收的配置 2 秒仍没有返回。修法是在 `wg.Wait()` 之前先关闭 `done`。这是 `WaitGroup` 与通道互等的典型形态，也是做第一道改造题时自然会撞上的。
 - **后台任务的退出**：`dnsproxi-go/cache/expire.go` 的 `RunExpirer` 接受 `done` 通道，主动老化 goroutine 因此可被停止；调用处用 `sync.Once` 保证只关闭一次。
 
 ## 想深入去哪查

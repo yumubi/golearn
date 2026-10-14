@@ -24,12 +24,12 @@ mux.HandleFunc("POST /books", func(w http.ResponseWriter, r *http.Request) {
 })
 ```
 
-〔实测〕go1.26.4 下 `GET /books/42` 返回 `200 book 42`；`POST /books/42` 自动返回 `405 Method Not Allowed`；没注册的路径返回 `404`。方法不匹配自动给 405，是新路由器的一个实用细节。老课程里用 gorilla/mux 做的 `Methods("POST")` 和 `mux.Vars` 现在可以不引入。〔TB09 p13-14〕〔C:go_basic/http/server/main.go:2〕
+〔实测〕go1.26.4 下 `GET /books/42` 返回 `200 book 42`；`POST /books/42` 自动返回 `405 Method Not Allowed`；没注册的路径返回 `404`。方法不匹配自动给 405，是新路由器的一个实用细节。老课程里用 gorilla/mux 做的 `Methods("POST")` 和 `mux.Vars` 现在可以不引入。〔TB09 p13-14〕〔C:go_basic/http/server/main.go:176-185〕
 
 ### 请求生命周期里的几条铁律
 
-1. **响应顺序**：先 `w.Header().Add`，再 `WriteHeader(status)`，最后 `Write(body)`。`WriteHeader` 只能调一次，`Write` 之前没调就隐式是 200，之后再改 Header 无效。〔C:go_basic/http/server/main.go:2〕
-2. **客户端必须关 `resp.Body`**，否则连接不复用，造成协程和内存泄漏，便捷方法 `http.Get` 也一样。〔C:go_basic/http/client/main.go:24-25〕
+1. **响应顺序**：先 `w.Header().Add`，再 `WriteHeader(status)`，最后 `Write(body)`。`WriteHeader` 只能调一次，`Write` 之前没调就隐式是 200，之后再改 Header 无效。〔C:go_basic/http/server/main.go:32-37〕
+2. **客户端必须关 `resp.Body`**，否则连接不复用，造成协程和内存泄漏，便捷方法 `http.Get` 也一样。〔C:go_basic/http/client/main.go:25〕
 3. **用 `r.Context()` 感知取消**：客户端断开或服务端超时，`r.Context().Done()` 会触发，长耗时逻辑要监听它。
 4. **middleware 本质**：接受 `http.Handler` 返回 `http.Handler` 的函数，嵌套包裹后串在业务 handler 之前，避免每个 handler 重复写日志、校验。〔TB09 p14-16〕
 
@@ -58,7 +58,7 @@ srv := &http.Server{
 
 ## 二、gRPC：契约先行
 
-选型口诀是"遇事不决选 gRPC"：基于 HTTP/2，支持双向流、流控、压缩，跨语言，社区强。〔W10-1 p26〕**契约先行**指先写 `.proto`（IDL，平台无关），再用编译器生成各语言的客户端和服务端代码，Protobuf 比 JSON 的序列化更快、体积更小。〔W10-1 p27-28〕
+选型口诀是"遇事不决选 gRPC"：基于 HTTP/2，支持双向流、流控、压缩，跨语言，社区强。〔W10-1 p26〕**契约先行**指先写 `.proto`（IDL，平台无关），再用编译器生成各语言的客户端和服务端代码，Protobuf 序列化更快、体积更小。〔W10-1 p27-29〕
 
 ### 四种流写在 service 定义里
 
@@ -78,7 +78,7 @@ service student{
 }
 ```
 
-`stream` 写在请求前、响应前、还是两边，决定四种形态：一元、服务端流、客户端流、双向流。流的生命周期不对称：**客户端创建的流最终要 `CloseSend`/`CloseAndRecv`，服务端不用关**，类比 HTTP 里客户端关 body、服务端不关 request。〔C:go_basic/grpc/client/main.go:44-107〕
+`stream` 写在请求前、响应前、还是两边，决定四种形态：一元、服务端流、客户端流、双向流。流的生命周期不对称：**客户端创建的流最终要 `CloseSend`/`CloseAndRecv`，服务端不用关**，类比 HTTP 里客户端关 body、服务端不关 request。〔C:go_basic/grpc/client/main.go:119〕〔C:go_basic/grpc/client/main.go:155〕
 
 ### 拦截器链
 
@@ -86,11 +86,11 @@ service student{
 
 ### 几条实践
 
-1. **一个 `*grpc.ClientConn` 可以被多个 client 共用**（多路复用），不要每次调用都新建。`grpc.NewClient` 是惰性连接，调用级超时用 `context.WithTimeout`。〔C:go_basic/grpc/client/main.go:44-107〕
+1. **一个 `*grpc.ClientConn` 可以被多个 client 共用**（多路复用），不要每次调用都新建。`grpc.NewClient` 是惰性连接，调用级超时用 `context.WithTimeout`。〔C:go_basic/grpc/client/main.go:43-69〕
 2. **负载均衡默认是 `pick_first`**：永远选 resolver 解析出的第一个节点，要做均衡必须在 service config 里指定 `round_robin` 等。〔W13-2 p4〕〔W13-2 p5〕
 3. **重试靠 service config 的 `retryPolicy`** 加负载均衡：调用不通就重试，LB 保证不再选坏节点；`retryableStatusCodes` 通常只填 `UNAVAILABLE`。〔W13-2 p29〕
-4. **生成代码的命令已变**：课程里的 `--go_out=plugins=grpc` 是旧写法，现行是独立的 `protoc-gen-go-grpc` 插件和 `--go-grpc_out`。〔C:go_basic/protoc/service/rec.proto:6-13〕
-5. **`go_package` 必须带 `.` 或 `/`**，分号前是输出路径，分号后是包名。〔W10-1 p33-35〕
+4. **生成代码的命令已变**：课程里的 `--go_out=plugins=grpc` 是旧写法，现行是独立的 `protoc-gen-go-grpc` 插件和 `--go-grpc_out`。〔C:go_basic/grpc/idl/service/student_service.proto:46-47〕
+5. **`go_package` 必须带 `.` 或 `/`**，分号前是输出路径，分号后是包名。〔W10-1 p34〕〔C:go_basic/grpc/idl/model/student.proto:5〕
 
 ### HTTP 还是 gRPC
 
@@ -101,16 +101,15 @@ service student{
 | 性能与流 | 够用 | 二进制、HTTP/2、四种流 |
 | 契约 | 靠文档或 OpenAPI | `.proto` 是契约本身 |
 
-HTTP 微服务运维简单、适合异构；RPC 微服务性能和契约更强，但运维组件多。REST 是一种风格，微服务是一种架构，两者没有必然关系。〔W10-1 p11〕〔W10-1 p12〕经验判断：对外和前端用 HTTP，内部服务之间用 gRPC，两者共用同一套中间件思路。
+REST 是一种风格，微服务是一种架构，两者没有必然关系。〔W10-1 p11〕〔W10-1 p12〕作者的经验判断（资料没有这句）：对外和前端用 HTTP，内部服务之间用 gRPC，两者共用同一套中间件思路。
 
 ## 常见坑
 
-1. 只给 `http.Server` 设一个超时，其它方向的慢连接把连接池耗尽。
-2. `http.Get` 后忘记 `defer resp.Body.Close()`。
-3. `Shutdown` 返回 `http.ErrServerClosed` 被当成错误。
-4. gRPC 客户端每次调用新建连接。
-5. 用旧的 `plugins=grpc` 命令，新版本工具链不认。
-6. 在 proto 里改字段编号或复用已删除的编号，导致线上新旧版本互相读错数据。〔W10-1 p33-35〕
+HTTP 侧的坑（超时只设一个、忘关 `resp.Body`、把 `http.ErrServerClosed` 当错误）已在上面的铁律里讲过，这里只列 gRPC 侧的：
+
+1. gRPC 客户端每次调用新建连接。
+2. 用旧的 `plugins=grpc` 命令，新版本工具链不认。
+3. 在 proto 里改字段编号或复用已删除的编号，导致线上新旧版本互相读错数据。〔W10-1 p35〕
 
 ## 判断题
 

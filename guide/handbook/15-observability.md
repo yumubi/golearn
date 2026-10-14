@@ -15,7 +15,6 @@
 | 问题 | Java | Rust | Go |
 |---|---|---|---|
 | 日志 API | SLF4J + Logback | `tracing` / `log` | 标准库 `log/slog`（1.21 起），可换 zap |
-| 请求级上下文怎么带 | MDC（线程本地） | `tracing` span 的上下文 | 显式 `ctx` 参数，没有线程本地变量 |
 | 指标 | Micrometer | `metrics` / `prometheus` crate | `prometheus/client_golang`，OpenTelemetry 也行 |
 | 链路 | OpenTelemetry agent 字节码注入 | `tracing-opentelemetry` | 手动或中间件、插件接入，没有 agent |
 
@@ -47,7 +46,11 @@ func (h ctxHandler) WithGroup(n string) slog.Handler      { return ctxHandler{h.
 
 〔实测〕用 `log.InfoContext(ctx, "cache hit", ...)` 输出 `"req_id":"r-42"`；`log.With("svc","dns").InfoContext(ctx, ...)` 依然带 `req_id`；没有 `ctx` 的 `log.Info` 不带。**`WithAttrs` 和 `WithGroup` 必须转发并重新包装**，否则 `With` 之后注入就丢了，这是自定义 handler 最常见的坑。调用日志时要用 `InfoContext`（带 ctx 的方法），才会走到注入逻辑。
 
-日志在大规模下要集中检索，ELK 是常见方案：Filebeat 收集，Logstash 解析和转换，Elasticsearch 存储检索，Kibana 展示。〔W18-1 p4〕〔W18-1 p6〕结构化日志（JSON）让解析几乎不用写 grok。Kibana 专注日志和 ES，Grafana 通用多数据源、告警更成熟，通常指标放 Grafana、日志放 Kibana。〔W18-1 p14〕日志文件用 lumberjack 之类的库做切片。〔W18-1 p21〕
+日志在大规模下要集中检索，ELK 是常见方案。Logstash 收集、解析和转换，Elasticsearch 存储检索，Kibana 展示。〔W18-1 p4〕〔W18-1 p6〕
+
+Filebeat 是常见的轻量采集器。Kibana 的数据源向导会提示安装它，默认直传 ES。课程要的是经过 Logstash，所以两者不同。〔W18-1 p19〕
+
+结构化日志（JSON）让解析几乎不用写 grok。Kibana 专注日志和 ES，Grafana 通用多数据源、告警更成熟，通常指标放 Grafana、日志放 Kibana。〔W18-1 p14〕日志文件用 lumberjack 之类的库做切片。〔W18-1 p21〕
 
 ## 二、指标：四类型和一条生死纪律
 
@@ -57,7 +60,7 @@ func (h ctxHandler) WithGroup(n string) slog.Handler      { return ctxHandler{h.
 
 Histogram 的桶要按"各区间数据个数同量级"来设，响应时间常用非等间距。〔W08-1 p22〕看分位数有三个视角：绝对值（99 线慢不慢）、增长率（发版前后对比）、相对值（平均线和 99 线的差距，反映长尾）。〔W08-1 p29〕
 
-**生死纪律：label 基数必须有限。** 每个不同的 label 值是一条独立时间序列，永不回收：
+**生死纪律：label 基数必须有限。** 每个不同的 label 值是一条独立时间序列，进程内不会自动回收：
 
 ```go
 bad.WithLabelValues(fmt.Sprintf("10.0.%d.%d", i/256, i%256)).Inc() // 每个 IP 一条序列
@@ -96,9 +99,9 @@ func traceMW(next http.Handler) http.Handler {
 
 〔实测〕请求头带 `X-Trace-Id: t-abc` 时，后续用 `InfoContext(r.Context(), ...)` 的日志自动带 `"req_id":"t-abc"`，这就是三根支柱靠同一个 ID 接上的最小演示。
 
-用 `context.WithValue` 传的数据**不会跨进程**，跨 RPC 必须放到 metadata 或 header。gRPC 的 metadata key 必须匹配 `[0-9a-z-_.]+`，大写不合法，HTTP header 则没有这条限制。〔C:dachang/trace/open_trace/rpc_tracer/client/grpc_client.go:55-56〕
+用 `context.WithValue` 传的数据**不会跨进程**，跨 RPC 必须放到 metadata 或 header。gRPC 的 metadata key 必须匹配 `[0-9a-z-_.]+`，大写不合法，HTTP header 则没有这条限制。〔C:dachang/trace/open_trace/rpc_tracer/client/grpc_client.go:58〕
 
-Span 里的三类数据：Tag 侧重查询，Log 记录时间点事件，Baggage 随 trace 传播给所有子孙 span。〔C:dachang/trace/open_trace/local_tracer.go:42-57〕引用关系有两种：`ChildOf`（父依赖子的结果）和 `FollowsFrom`（父不依赖子的结果，例如异步上报）。〔C:dachang/trace/open_trace/local_tracer.go:62-78〕
+Span 里的三类数据：Tag 侧重查询，Log 记录时间点事件，Baggage 随 trace 传播给所有子孙 span。〔C:dachang/trace/open_trace/local_tracer.go:49-56〕引用关系有两种：`ChildOf`（父依赖子的结果）和 `FollowsFrom`（父不依赖子的结果，例如异步上报）。〔C:dachang/trace/open_trace/local_tracer.go:68-77〕
 
 `context.Context` 的使用纪律：作为方法第一个参数；公共方法都带；**不要放进结构体字段**，除非结构体本身就表达一个上下文。〔W08-2 p11〕父 `ctx` 取消，所有子 `ctx` 都取消，控制从上到下；`Value` 查找则是子先查自己再查祖先，从下到上。〔W08-2 p9〕
 
@@ -117,7 +120,7 @@ Span 里的三类数据：Tag 侧重查询，Log 记录时间点事件，Baggage
 1. 把 `req_id`、user id、原始 URL 放进指标 label，Prometheus 内存暴涨。
 2. 自定义 `slog.Handler` 的 `WithAttrs`/`WithGroup` 没转发，`With` 之后注入丢失。
 3. 用不带 ctx 的 `log.Info`，日志里没有请求 ID。
-4. `span` 创建后忘记 `End`，数据不上报。〔C:dachang/trace/open_trace/local_tracer.go:39-40〕
+4. `span` 创建后忘记 `End`，数据不上报。〔C:dachang/trace/open_trace/local_tracer.go:43〕
 5. 把敏感信息写进日志，或把 `error` 原样返回给前端。
 6. 抓取间隔过短，高并发下抓取本身成为负担。〔W08-1 p11〕
 7. Provider 不 `Shutdown`，退出时最后一批 span 丢失。〔W08-2 p4〕

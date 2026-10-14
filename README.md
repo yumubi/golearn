@@ -3,6 +3,8 @@
 
 **在线阅读：https://yumubi.github.io/golearn/** （GitHub Pages，随 main 自动构建）
 
+**新读者先看 [`guide/handbook/`](guide/handbook/README.md)：Go 后端速通手册，26 节，约 12 小时建立体系，之后靠项目补细节。** 下面的章节是细节库。
+
 > 面向「已经写过 Rust/Java/Kotlin 的后端」的 Go 速成课。
 > 配方仿 `rs/rust-for-frontend`（类比表 + 可运行示例 + 练习驱动 + capstone），
 > 交付形态是本地仓库：**每章 = 一份教程 notes + 一个练习包，`go test` 全绿 = 学会**。

@@ -16,7 +16,7 @@
 
 ## 一、信号与优雅关停
 
-`SIGTERM` 和 `SIGINT` 的默认处置是直接终止进程，**Go 代码一行都不会执行**。优雅关停必须先捕获信号，把它转成 context 的取消：
+`SIGTERM` 和 `SIGINT` 的默认处置是直接终止进程，**Go 代码一行都不会执行**（这是普通进程的行为；容器内 PID 1 的信号行为本机未验证）。优雅关停必须先捕获信号，把它转成 context 的取消：
 
 ```go
 ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -46,7 +46,7 @@ err := srv.Shutdown(sctx) // 停接新连接，等在途请求收尾
 
 ## 三、cgroup：限额与 Go 运行时
 
-容器的 `--cpus 1.5` 在 cgroup 里是 `cpu.max = 150000 100000`。关键联动：**Go 1.25 起，runtime 默认读这个文件来设置 `GOMAXPROCS`**，并周期性更新。限额低于机器核数时，不会再开出一堆 P 去抢配额、造成节流和延迟毛刺。我核对了本机 Go 1.26.4 的文档：`go doc runtime.GOMAXPROCS` 写明默认值来自逻辑 CPU 数、亲和性掩码和 Linux 上的 cgroup 配额。
+容器的 `--cpus 1.5` 在 cgroup 里是 `cpu.max = 150000 100000`。关键联动：**Go 1.25 起，runtime 默认读这个文件来设置 `GOMAXPROCS`**，并周期性更新。限额低于机器核数时，不会再开出一堆 P 去抢配额、造成节流和延迟毛刺。另外有个下限：默认值不会低于 2（机器本身少于 2 核除外），所以 `--cpus 0.5` 得到的也是 2。我核对了本机 Go 1.26.4 的文档：`go doc runtime.GOMAXPROCS` 写明默认值来自逻辑 CPU 数、亲和性掩码和 Linux 上的 cgroup 配额。
 
 一个很容易漏掉的细节：**这个行为只在 `go.mod` 的 `go` 行是 1.25 及以上时默认开启**。`containermaxprocs` 和 `updatemaxprocs` 这两个 GODEBUG 项，在语言版本 1.24 及以下默认是关的。升级了工具链但 `go.mod` 还写 1.24，容器里仍然会用宿主核数。（依据：本机 `go doc runtime.GOMAXPROCS` 与 `$GOROOT/doc/godebug.md`）
 

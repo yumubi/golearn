@@ -18,11 +18,9 @@ Go 迟迟不加泛型，不是没想到：Russ Cox 2009 年就指出三条路各
 
 最后落地的方案经历十多年打磨，2020 年 6 月 Wadler 等人的《Featherweight Go》给出形式化证明，才有了共识。〔TBX05 p6-8〕理解了这一点，就明白 Go 泛型为什么克制：它必须同时守住"简单"和"向后兼容 Go1"。〔TBX05 p4-5〕
 
-## 一、语法速览
+## 一、语法速览：只看和你已知语言不同的
 
-三个概念：**类型参数**是方括号里的类型占位符；**约束**规定类型实参必须满足什么；**具化**是把类型参数替换成实参。〔TBX05 p9-11〕
-
-约束是接口，扩展后除了方法集合，还能写**类型集合**，用 `|` 并列，`~` 表示"底层类型是它"：
+三个概念：**类型参数**是方括号里的类型占位符，**约束**规定类型实参必须满足什么，**具化**是把类型参数替换成实参。〔TBX05 p9-11〕和 Java 的 `<T extends X>`、Rust 的 `T: Trait` 对应，差别在约束的写法：约束就是接口，扩展后除方法集合外还能写**类型集合**，用 `|` 并列，`~` 表示"底层类型是它"。
 
 ```go
 type Number interface {
@@ -39,30 +37,16 @@ func Sum[T Number](xs ...T) T {
 	return s
 }
 
-func Max[T cmp.Ordered](a, b T) T { if a > b { return a }; return b }
-```
-
-```go
 fmt.Println(Sum(1, 2, 3), Sum(1.5, 2.5), Sum(MyInt(1), MyInt(2))) // 6 4 3
-fmt.Println(Max("a", "b"), Max(3, 2))                             // b 3
 ```
 
 类型实参通常能由编译器推断，不必写 `Sum[int](...)`。`MyInt` 能用，正是因为约束里写了 `~int`，没有波浪线就不行。〔TBX05 p11-12〕不满足约束时报错清楚：
 
 ```text
-string does not satisfy Number (string missing in ~int | ~int64)
+string does not satisfy Number (string missing in ~int | ~int64 | ~float64)
 ```
 
-泛型类型同理：
-
-```go
-type Set[T comparable] map[T]struct{}
-
-func (s Set[T]) Add(v T)      { s[v] = struct{}{} }
-func (s Set[T]) Has(v T) bool { _, ok := s[v]; return ok }
-```
-
-类型参数在类型名后的方括号里声明，方法里可以直接用，但**方法自己不能再带类型参数**，下面会看到。〔TBX05 p14-15〕
+泛型类型同理，`type Set[T comparable] map[T]struct{}`；方法里可以直接用 `T`，但**方法自己不能再带类型参数**，下面会看到。〔TBX05 p14-15〕
 
 ## 二、三个绕不开的限制和对应的绕法
 
@@ -161,11 +145,11 @@ BenchmarkSortSlice    8176885 ns/op   802882 B/op   3 allocs/op
 3. 你要写一个只接受 `Column` 和 `Aggregate` 两种输入的接口，怎么用 Go 表达？
 4. `ReadAll[R io.Reader]` 比 `ReadAll(r io.Reader)` 好在哪里，差在哪里？
 
-练习包 `exercises/p33gen/` 里有排序三选手基准、`Set`、标记接口和编译错实拍，可以直接跑。
+练习包 `exercises/p33gen/` 里有排序基准（`SortInts`、`SlicesSort`、`Specialized`，文中的 `sort.Slice` 对照要自己加一个）、`Set`、标记接口和编译错实拍，可以直接跑。
 
 ## 在项目里
 
-这里没有现成的泛型声明：`dnsproxi-go` 自己没有声明过类型参数，只在 `cache/evict.go` 里用到内建的 `min`。值得想一想的反例是 `cache/cache.go` 的 `Cache`：`m map[Key]*Entry`、`slot map[Key]int`、`access map[Key]uint64` 三张表做同一类事，是"同一算法跑在不同值类型上"的候选，但三张表的更新需要在一个函数里联动，抽成泛型的收益有限，所以保持具体类型是合理取舍。
+这里没有现成的泛型声明：`dnsproxi-go` 没有声明过类型参数，只在 `cache/evict.go` 里用到内建的 `min`。`cache/cache.go` 的三张表（`m`、`slot`、`access`）是"同一算法跑在不同值类型上"的候选，但它们的更新要在一个函数里联动，抽成泛型收益有限，保持具体类型是合理取舍。
 
 ## 想深入去哪查
 

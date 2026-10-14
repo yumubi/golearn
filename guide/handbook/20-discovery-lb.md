@@ -38,7 +38,7 @@ etcd 是 Go 写的、基于 Raft 的强一致键值库，部署简单。用它�
 
 第 3 点解释了为什么必须用租约：进程被强杀时没机会删除 key，不用租约的话 etcd 上的节点会一直残留。〔W12-2 p10-11〕etcd 默认约 TTL 的三分之一续一次，SDK 不暴露重试与判定的定制，大多数框架直接用它。〔W12-2 p12〕
 
-key 的设计可以很简单：`/service/grpc/<service_name>/<endpoint>`，只存 key 不存 value；服务端心跳用 `KeepAliveOnce`，遇到 `ErrLeaseNotFound` 就重新注册。〔C:dachang/etcd/service_registration_center/common.go:12-51〕
+key 的设计可以很简单：`/service/grpc/<service_name>/<endpoint>`，只存 key 不存 value；服务端心跳用 `KeepAliveOnce`，遇到 `ErrLeaseNotFound` 就重新注册。〔C:dachang/etcd/service_registration_center/common.go:12-21〕〔C:dachang/etcd/service_registration_center/server/service_hub.go:54-84〕
 
 三个实现细节：
 
@@ -46,7 +46,7 @@ key 的设计可以很简单：`/service/grpc/<service_name>/<endpoint>`，只�
 - **先监听，再注册**：确保端口已经打开才对外宣告，否则别人拿到地址连不上。〔W12-2 p14-15〕
 - **K8s 环境**：注册 IP 必须是外部能通信的，Pod 重启 IP 会漂移，更推荐直接用 Service 的 DNS，不用注册中心。〔W12-2 p18〕
 
-gRPC 这一侧的关键认知：**gRPC 的核心抽象是 Resolver（解析定位信息），它不知道也不关心你用不用注册中心**。默认走域名解析，并定时刷新缓存。〔W12-2 p4-6〕客户端接入 etcd 只需要注册一个 Resolver，用类似 `etcd:///service/user` 的目标地址拨号，数据同步由 SDK 处理。〔W12-2 p13〕
+gRPC 这一侧的关键认知：**gRPC 的核心抽象是 Resolver（解析定位信息），它不知道也不关心你用不用注册中心**。默认走域名解析，资料说它会定时刷新缓存。〔W12-2 p4-6〕**资料说法与实现有出入**：我读 `grpc v1.84.0` 的 `internal/resolver/dns/dns_resolver.go`，DNS resolver 只在被调用 `ResolveNow`（例如连接失败）时重新解析，两次解析之间至少隔 `MinResolutionInterval`（30 秒），并不是严格定时。客户端接入 etcd 只需要注册一个 Resolver，用类似 `etcd:///service/user` 的目标地址拨号，数据同步由 SDK 处理。〔W12-2 p13〕
 
 ## 三、CAP 与注册中心选型
 
@@ -54,10 +54,8 @@ CAP：一致性（任意节点读到相同数据）、可用性（每个请求�
 
 注册中心的面试标准答案是 **AP**：对服务发现来说，"返回稍旧的节点列表"好过"拿不到列表"，客户端有失败重试兜底。〔W12-2 p31〕主流产品的取向：
 
-- ZooKeeper：树形结构，客户端 Watch 事件后主动拉取，CP；大集群里 TCP 连接数和主从写入会成瓶颈。〔W12-2 p32-33〕
-- Eureka：对等集群，AP，扩展性好，缺点是发现慢、多语言客户端差。〔W12-2 p34〕
-- Nacos：同时支持 CP 和 AP，中文社区好，部署运维较难。〔W12-2 p35〕
-- etcd：Raft 强一致，Go 生态友好，大规模下表现好。〔W12-2 p36〕
+- ZooKeeper：树形结构，Watch 后主动拉取，CP，大集群里 TCP 连接数和主从写入会成瓶颈；Eureka：对等集群，AP，扩展性好，缺点是发现慢、多语言客户端差；Nacos：同时支持 CP 和 AP，中文社区好，部署运维较难。〔W12-2 p32-33〕〔W12-2 p34〕〔W12-2 p35〕
+- etcd：Raft 强一致，Go 生态友好，大规模下表现好；网络不稳定时不合适。网络分区时少数派一侧不可用，按 CAP 属 CP 取向（资料 p30 把它称为"AC 模型"，说法不严谨，以 CP 为准）。〔W12-2 p30〕〔W12-2 p36〕
 
 资料的务实结论：小规模熟悉哪个用哪个，大规模优先 etcd（或 AP 方案），现实里常常是写文档罗列优缺点，再看团队偏好。〔W12-2 p37〕
 
@@ -103,13 +101,13 @@ func (s *SWRR) Pick() string {
 	total := 0
 	var best *node
 	for _, n := range s.nodes {
-		total += n.weight
-		n.current += n.weight // 1. 每个节点当前权重加上自己的权重
+		total += n.weight // 1. 累加总权重
+		n.current += n.weight // 2. 每个节点当前权重加上自己的权重
 		if best == nil || n.current > best.current {
-			best = n // 2. 选当前权重最大的
+			best = n // 3. 选当前权重最大的
 		}
 	}
-	best.current -= total // 3. 选中者减去总权重
+	best.current -= total // 4. 选中者减去总权重
 	return best.name
 }
 ```
@@ -125,10 +123,7 @@ func (s *SWRR) Pick() string {
 
 ### 选型与权重的几条经验
 
-- **遇事不决用轮询，出问题再说**。〔W13-1 p28〕选指标时要想四个问题：是否考虑服务器能力、用什么指标表达负载、请求资源是否不同（大商家大买家会偶发打爆实例）、能否自组合设计。
-- **动态调整权重必须设上下限**，否则权重可能变成 0 永不被选，或变到最大一直被选。结合调用结果调整（错误降权、成功加权）是常见做法。〔W13-1 p29〕
-- **客户端负载均衡有局限**：它只知道自己的连接数和响应时间，看不到其他客户端的情况。〔W13-1 p30〕
-- **哈希均衡加本地缓存**：保证同一个业务 key 总是命中同一个节点，缓存命中率高，也避免每个节点都缓存一份造成内存翻倍。〔W13-2 p34〕
+遇事不决用轮询，出问题再说；选指标前先想四个问题：是否考虑服务器能力、用什么指标表达负载、请求资源是否不同（大商家大买家会偶发打爆实例）、能否自组合设计。〔W13-1 p28〕动态调整权重必须设上下限，否则权重可能变成 0 永不被选，或变到最大一直被选；结合调用结果调整（错误降权、成功加权）是常见做法。〔W13-1 p29〕客户端负载均衡只知道自己的连接数和响应时间，看不到其他客户端的情况；〔W13-1 p30〕哈希均衡加本地缓存可以让同一个业务 key 总是命中同一节点，缓存命中率高，也避免每个节点都缓存一份造成内存翻倍。〔W13-2 p34〕
 
 ## 六、在 gRPC 里怎么接入
 
@@ -141,7 +136,7 @@ grpc.WithDefaultServiceConfig(`{"loadBalancingConfig":[{"round_robin":{}}]}`)
 JSON 是手写字符串，写错只有运行时才发现，要仔细（这一行用仓库已有的 `grpc v1.84.0` 编译检查过）。〔W13-2 p5〕
 
 - **自定义只需两个接口**：`PickerBuilder`（`Build` 返回 `Picker`）和 `Picker`（`Pick` 返回选中的连接）。顶层的 `Balancer` 要管连接池状态，逼不得已才用。〔W13-2 p11-12〕
-- **内置算法**：`roundrobin`、`weightedroundrobin`（不是服务端配权重，而是客户端根据 QPS 和错误率自己算权重）。其余除非有特殊需求，没必要用。〔W13-2 p9-10〕Kratos 把算法封装成 Selector，支持 P2C（随机挑两个，取负载低的）、随机、加权轮询。〔W13-2 p21-24〕
+- **内置算法**：`roundrobin`、`weightedroundrobin`（不是服务端配权重，而是客户端根据 QPS 和错误率自己算权重）。其余除非有特殊需求，没必要用。〔W13-2 p9-10〕补充一点资料省略的实现细节：`grpc-go` 里的 `weightedroundrobin` 依赖服务端通过 ORCA 上报的负载数据来算权重（`balancer/weightedroundrobin` 引用 `orca` 包），服务端不上报就用不上。Kratos 把算法封装成 Selector，支持 P2C（随机挑两个，取负载低的）、随机、加权轮询。〔W13-2 p21-24〕
 - **failover = 重试加负载均衡**：调用不通就重试，重试再过一遍负载均衡，负载均衡避免再选到坏节点。最简单的做法是 `round_robin` 加 `retryPolicy`（最大尝试次数、初始与最大退避、退避倍数、可重试状态码）。〔W13-2 p29-30〕
 - **注册模式**：自定义 Picker 通过 `balancer.Register` 注册到包级变量，作者不太喜欢这种全局注册；Go 里常见的"匿名导入触发 `init` 注册"就是这种。〔W13-2 p7-8〕〔W13-2 p16〕
 

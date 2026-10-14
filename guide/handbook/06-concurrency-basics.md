@@ -30,7 +30,7 @@ Go 的并发有两层，要分清各自的位置：
 
 `go f()` 创建一个 goroutine，初始栈 2KB，由 Go 运行时在用户态调度，切换不陷入内核。〔TB31 p6〕它的规模化能力来自三点：栈小且可增长、用户态切换、`go` 关键字加 channel 内建。
 
-规模化之后账就不一样了：2KB 乘一百万是 2GB；栈只增不缩，增长后即使不再需要，空间也要等 goroutine 退出才释放。〔TB35 p2〕每连接一个 goroutine 的默认写法在常规规模下完全合适，进入百万级才需要池化。
+规模化之后账就不一样了：2KB 乘一百万是 2GB；栈增长后不会立刻缩回：收缩只发生在 GC 扫描栈时，且仅当使用量不足四分之一才减半，闲置的大栈可能长期占着内存。原材料写的是"不会收缩，直到 goroutine 退出"，那是过度简化，`runtime/stack.go` 的 `shrinkstack` 可证。〔TB35 p2〕每连接一个 goroutine 的默认写法在常规规模下完全合适，进入百万级才需要池化。
 
 必须记住的生命周期规则：〔TB31 p7-8〕
 
@@ -128,7 +128,7 @@ for a != nil || b != nil {
 		fmt.Println("b", v)
 	}
 }
-// 实测输出：a 5 然后 b 7，循环正常结束
+// 实测输出：a 5 与 b 7 各一行（先后随机），循环正常结束
 ```
 
 ## 五、sync 家族怎么选
@@ -145,7 +145,7 @@ BenchmarkChanSem   94.78 ns/op   // 容量 1 的 channel 当锁
 
 数字随机器浮动，量级是结论：`atomic` 最快，`Mutex` 其次，channel 最重。原材料在另一台机器上只比较 `Mutex` 与 channel 信号量，结论同样是 channel 慢三倍多。〔TB34 p2-4〕所以：数据对象要转移所有权，用 channel；只是保护内部状态，用 `Mutex`。〔TB34 p4〕
 
-**RWMutex 只在擅长的场景才占便宜**：并发量不大时 `Mutex` 更快；写锁在大并发下最差；读多写少且有一定并发量时才有优势。〔TB34 p8-10〕行为矩阵：读锁可重入，写锁不可重入（重入即死锁），有写锁在排队时新的读锁也会阻塞，防止写饿死。〔C:go_basic/concurrence/rwlock.go:33-67〕
+**RWMutex 只在擅长的场景才占便宜**：并发量不大时 `Mutex` 更快；写锁在大并发下最差；读多写少且有一定并发量时才有优势。〔TB34 p8-10〕行为矩阵：无写者排队时同一 goroutine 重复 `RLock` 能成功，但官方文档明确禁止递归读锁（见 `go doc sync.RWMutex`）；写锁不可重入（重入即死锁）；有写锁在排队时新的读锁也会阻塞，防止写饿死，所以递归读锁在写者出现时会死锁。〔C:go_basic/concurrence/rwlock.go:33-67〕
 
 **Cond** 只用于"等待某个条件成立"，用法固定：加锁，`for !cond { c.Wait() }`，解锁。`Wait` 挂起前释放锁、返回前重新加锁。能用 channel 的 `close` 广播时不必用它。〔TB34 p10-14〕
 
@@ -199,7 +199,7 @@ for i := 0; i < 100; i++ {
 
 - **带缓冲 channel 做背压**：`dnsproxi-go/main.go` 的 `Run` 在 `WorkerPool` 形态下，读循环把包塞进带缓冲的 `qch`，worker 取出处理，队列满了读循环自然阻塞，这就是计数信号量与队列的组合。
 - **select 加 default**：`dnsproxi-go/cache/expire.go` 的 `RunExpirer` 外层 `select` 同时等 `done` 与 `Ticker`，内层往统计 channel 发送时用 `default`，消费者不在就丢，让老化不被观测拖慢。
-- **关闭广播**：同一个 `Run` 里 `done` 通道由 `sync.Once` 保证只关闭一次，所有相关 goroutine 因 `<-done` 同时退出。
+- **关闭广播**：同一个 `Run` 里 `done` 通道由 `sync.Once` 保证只关闭一次，老化 goroutine 因 `<-done` 退出。
 - **atomic**：`dnsproxi-go/tcp/server.go` 的 `serveConn` 用 `atomic.Int64` 记录单连接在飞查询数，只同步一个整数，不需要锁。
 
 ## 想深入去哪查

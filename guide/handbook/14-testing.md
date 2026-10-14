@@ -39,11 +39,9 @@ go test -cover ./...     # 覆盖率
 
 ## 二、可测性来自设计：自底向上抽接口
 
-课程里的做法值得完整记住：初始化链是 DB 和 Redis，到 DAO 和 Cache，到 Repository，到 Service，到 Handler，再到路由。层层组装就是标准的依赖注入：A 依赖 B，就在初始化时传入已构建好的 B。〔W04-3 p4〕
+初始化链是 DB 和 Redis，到 DAO 和 Cache，到 Repository，到 Service，到 Handler，再到路由，层层组装就是标准的依赖注入（细节见 10 节）。〔W04-3 p4〕改造顺序**自底向上**：最底层的缓存和 DAO 不依赖别人，先抽接口，再往上。〔W04-3 p28-30〕面向接口的收益只有扩展性，但它是可测性的前提：有了接口，测试里才能注入替身。〔W04-3 p27〕
 
-改造顺序**自底向上**：最底层的缓存和 DAO 不依赖别人，先抽接口，再往上。〔W04-3 p28-30〕面向接口的收益只有一个，扩展性，它不提高性能也不提高可靠性，但它是可测性的前提：有了接口，测试里才能注入替身。〔W04-3 p27〕
-
-抽象的度要克制：只留接口、不写多余实现，只考虑有限的几种变化，不想太长远。〔W04-3 p35〕"变化点"的经验是：非主流第三方（短信、对象存储）考虑可替换，MySQL、Redis 这种主流依赖不必为替换而抽象。〔W04-3 p36〕
+抽象的度要克制：只考虑有限的几种变化，不想太长远。非主流第三方（短信、对象存储）考虑可替换，MySQL、Redis 这种主流依赖不必为替换而抽象。〔W04-3 p35〕〔W04-3 p36〕
 
 ## 三、表驱动：Go 测试的基本句型
 
@@ -88,9 +86,7 @@ type fakeStore struct {
 func (f fakeStore) Get(ctx context.Context, id string) (User, error) { return f.get(ctx, id) }
 ```
 
-**mock** 是带期望的替身：断言某个方法被以什么参数、调用了几次、什么顺序。课程用的是 `uber-go/mock`（官方的 `golang/mock` 已停止维护），`mockgen` 三个参数：`-source` 接口所在文件、`-destination` 生成路径、`-package` 生成包名，通常用 `Makefile` 封装。〔W04-4 p25-27〕
-
-使用铁律：先 `EXPECT()`，再写同名方法与参数条件，再 `Return()`；**设计了几个模拟调用，就要全部用上，且次序对得上**，多了、少了、乱了都会失败。mock 报错时就查：多了没、少了没、漏了没、条件对不对。〔W04-4 p28〕
+**mock** 是带期望的替身：断言某个方法被以什么参数、调用了几次、什么顺序。课程用的是 `uber-go/mock`（官方的 `golang/mock` 已停止维护），用 `mockgen` 从接口生成。〔W04-4 p25-27〕使用铁律：先 `EXPECT()`，再写同名方法与参数条件，再 `Return()`；**设计了几个模拟调用，就要全部用上，且次序对得上**，多了、少了、乱了都会失败。〔W04-4 p28〕
 
 选择原则：
 
@@ -108,7 +104,7 @@ func (f fakeStore) Get(ctx context.Context, id string) (User, error) { return f.
 | Service | 业务逻辑 | mock 的 Repository | 每个分支一个用例，如用户不存在与密码错误返回同一个错误〔W04-4 p45-49〕 |
 | Repository | 缓存加库 | mock 的 DAO 和 Cache | 缓存未命中要模拟三次调用：`Get` 未命中、DAO 查询、`Set` 回写〔W04-4 p52-55〕 |
 | Cache | Redis 封装 | mock 的 `redis.Cmdable` | 对第三方接口用反射模式生成 mock〔W04-4 p61-63〕 |
-| DAO | SQL | `sqlmock` 或真库 | 增删改关注 `lastInsertId` 和 `rowsAffected`，冲突用 MySQL 错误码 1062 模拟〔W04-4 p66-67〕 |
+| DAO | SQL | `sqlmock` 或真库 | 增删改关注 `lastInsertId` 和 `rowsAffected`，冲突用 MySQL 错误码 1062 模拟〔W04-4 p66-71〕 |
 
 Handler 测试的核心，是把 Go 1.22 的路由、`httptest` 和 fake 拼起来：
 
@@ -118,7 +114,7 @@ h.ServeHTTP(rec, httptest.NewRequest("GET", "/greet/2", nil))
 // rec.Code == 404，rec.Body.String() == "no such user\n"
 ```
 
-〔实测〕该用例在 go1.26.4 上通过。`ServeHTTP` 等价于服务器真的收到了一个网络请求，但没有端口、没有网络，所以快且稳定。〔W04-4 p21-23〕
+〔实测〕该用例在 go1.26.4 上通过。`ServeHTTP` 等价于服务器真的收到了一个网络请求，但没有端口、没有网络，所以快且稳定。〔W04-4 p29〕
 
 一个小细节：数据库只存到毫秒，断言时间字段前要先把期望值截断到毫秒再重建，否则含纳秒的 `time.Time` 永远不等。〔W04-4 p58〕
 

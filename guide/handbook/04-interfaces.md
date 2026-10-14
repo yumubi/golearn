@@ -1,6 +1,6 @@
 # 04 接口与组合：Go 用来代替继承的全套工具
 
-> 详细程度：深入 · 约 30 分钟 · 样章，供确认风格与密度
+> 详细程度：深入 · 约 30 分钟
 > 材料：TB24 到 TB30 · 旧长版：`notes/p2-lang-core.md`、`notes/p30-methods-interfaces.md`
 > 前置：你写过 Java/Kotlin/Rust/TS 中任意一门的面向对象或 trait 代码
 
@@ -26,7 +26,7 @@ Go 没有类，也没有继承。它把"面向对象"拆成三个互相独立的
 
 ## 一、方法就是首参数为 receiver 的函数
 
-`t.Get()` 只是 `Get(t)` 的另一种写法，编译器自动完成转换。这条本质一旦看穿，后面"值还是指针"的所有问题都变成函数传参问题：值接收者拿到副本，指针接收者拿到地址。〔TB24 p6-8〕
+`t.Get()` 只是 `Get(t)` 的另一种写法，编译器自动完成转换。看穿这一点，"值还是指针"就变成函数传参问题：值接收者拿到副本，指针接收者拿到地址。〔TB24 p6-8〕
 
 ```go
 type T struct{ n int }
@@ -49,15 +49,11 @@ fmt.Println(get(t), t.n) // 3 3
 2. **方法要改原实例**：指针接收者。
 3. 以上都不是：默认值接收者，缩小外部修改内部状态的"接触面"；类型很大、拷贝贵时换指针接收者。
 
-同一类型不要混用两种接收者。混用意味着有人拿值类型会"少了一半方法"，且很难一眼看出来。
+同一类型不要混用两种接收者，否则拿值类型的人会"少了一半方法"，且很难一眼看出来。
 
 ## 三、方法集合：接口满足的唯一判据
 
-这是整节里最值得背下来的一条规则。〔TB25 p7-10〕
-
-- 值类型 `T` 的方法集合：只有值接收者声明的方法。
-- 指针类型 `*T` 的方法集合：值接收者的方法加上指针接收者的方法。
-- 类型 `T` 的方法集合是接口方法集合的超集或相等，就实现了接口。
+这是整节最值得背下来的规则。〔TB25 p7-10〕值类型 `T` 的方法集合只有值接收者的方法；指针类型 `*T` 的方法集合是两种接收者的方法之和；方法集合是接口方法集合的超集或相等，就实现了接口。
 
 ```go
 type Iface interface{ M1(); M2() }
@@ -79,7 +75,7 @@ Impl does not implement Iface (method M2 has pointer receiver)
 
 ## 四、接口由使用方定义，小接口
 
-隐式满足带来一个设计上的反转：**接口应该写在用它的地方**，而不是写在实现它的地方。〔TB28 p8〕〔TB30 p9〕
+隐式满足带来一个设计上的反转：**接口应该写在用它的地方**，而不是写在实现它的地方。教材用下面的 `Save` 例子讲的是同一件事：函数只声明自己用到的能力。〔TB30 p6-8〕
 
 ```go
 // 反例：依赖具体文件，难测试，签名锁死
@@ -96,7 +92,7 @@ func Save(w io.Writer, data []byte) error {
 
 小接口为什么好，给一个可数的理由：方法越少，能满足它的类型越多，抽象程度越高；极限是空接口，万物皆可装，但信息量为零。〔TB28 p10-13〕落地三步：先不管大小抽象出接口；按使用场合把大接口拆成小接口；再看能否拆到单方法。标准库的 `io.Reader` 也是后期才抽出来的，越偏业务的抽象越难一次抽对。〔TB28 p13-15〕
 
-配套的创建原则：**接受接口，返回结构体**。`log.New(out io.Writer, ...) *Logger` 就是范本：参数放宽，返回值给调用方具体能力。
+配套的创建原则：**接受接口，返回结构体**。〔TB30 p10〕`log.New(out io.Writer, ...) *Logger` 就是范本：参数放宽，返回值给调用方具体能力。
 
 ## 五、接口值在内存里是什么
 
@@ -149,38 +145,27 @@ fmt.Println(c.Hello(), "|", c.Who()) // hi base | child
 - 外层结构体嵌入 `T1` 和 `*T2`：`S` 的方法集合是 `T1` 的加 `*T2` 的；`*S` 的方法集合是 `*T1` 的加 `*T2` 的。
 - `type S T` 是新类型，**不继承** `T` 的任何方法，方法集合为空；`type S = T` 是别名，与 `T` 完全相同。
 
-另一个妙用：测试里伪造依赖时，在结构体里嵌入接口，只覆写测试用到的方法，其余方法未实现也能通过编译。注意没覆写的方法被调用时会 nil 解引用 panic。〔TB26 p13-15〕
+测试里伪造依赖时，可以在结构体里嵌入接口，只覆写用到的方法，其余方法不实现也能编译；未覆写的方法被调用时会 nil 解引用 panic。〔TB26 p13-15〕
 
 ## 七、水平组合三式：包装器、适配器、中间件
 
 嵌入是"器官"，接口参数是"关节"。水平组合的基本形态只有一种：函数参数写接口类型。〔TB30 p9-16〕三个衍生模式，复杂度递增：
 
 1. **包装器**：`func Wrap(x I) I`，输入输出同接口，所以能链式叠加。标准库 `io.LimitReader(r, n)` 就是。
-2. **适配器**：把"满足某签名的普通函数"变成"实现某接口的值"。`http.HandlerFunc` 是函数类型加一个调用自己的方法，是 Go 里这类写法的范本。
-3. **中间件**：包装器加适配器。`func(http.Handler) http.Handler`，内部用 `http.HandlerFunc` 把匿名函数转型。
+2. **适配器**：把"满足某签名的普通函数"变成"实现某接口的值"。`http.HandlerFunc` 是函数类型加一个调用自己的方法，是范本。
+3. **中间件**：包装器加适配器。签名是 `func(http.Handler) http.Handler`，内部用 `http.HandlerFunc` 把匿名函数转型：函数体里先做自己的事（打日志、验签），再调用 `next.ServeHTTP(w, r)`。
 
-```go
-func logMW(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println("log:", r.URL.Path)
-		next.ServeHTTP(w, r)
-	})
-}
-```
-
-执行顺序：最外层先跑，`logMW(authMW(h))` 先日志后鉴权。Java 对应 Servlet Filter，Rust 对应 tower 的 Layer。后面讲分层、日志、限流、熔断时，几乎都会用这三个词。
+最外层先跑，`logMW(authMW(h))` 先日志后鉴权。Java 对应 Servlet Filter，Rust 对应 tower 的 Layer。后面的分层、日志、限流、熔断都会用到这三个词。
 
 ## 八、空接口与 any
 
-Rob Pike 的说法：空接口不提供任何信息。传 `any` 等于告诉编译器别检查了，错误推迟到运行时。标准库里合理使用的只有两类：容器算法（`sort`、`container/heap`）和格式化日志（`fmt`、`log`）。〔TB30 p16-17〕
-
-Go 1.18 起 `any` 是 `interface{}` 的别名，泛型能做的事优先用泛型，空接口留给真正动态的场景。
+Rob Pike 的说法：空接口不提供任何信息，传 `any` 等于告诉编译器别检查了，错误推迟到运行时。标准库里合理使用的只有容器算法（`sort`、`container/heap`）和格式化日志（`fmt`、`log`）。〔TB30 p16-17〕Go 1.18 起 `any` 是 `interface{}` 的别名，泛型能做的优先用泛型。
 
 ## 判断题（先答再看）
 
 1. 为什么 `var _ Iface = &Impl{}` 过而 `Impl{}` 不过，但 `Impl{}.M2()` 在变量可寻址时能调用？
 2. `type S T` 和 `type S = T` 的方法集合差别是什么？
-3. `c.Hello()` 为什么打印 `hi base`，如果你期待 `hi child`，该怎么改设计？
+3. `c.Hello()` 为什么打印 `hi base`？想要 `hi child` 该怎么改设计？
 4. 一个函数返回 `error`，里面有 `var p *MyErr` 并 `return p`，调用方 `err != nil` 为什么是 true？
 
 练习包 `exercises/p30/` 里可以直接跑对答案：`TestMethodSetMatrix`（方法集合矩阵）、`TestTypeAliasMethodSet`、`TestEmbedNotInherit`、`TestNilErrorTrap`、`TestCapReaderChain`（包装器链）、`TestMiddlewareCompose`（中间件）。
