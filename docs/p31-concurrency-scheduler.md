@@ -15,7 +15,7 @@ title: P31 · 并发调度：GMP 与 channel/select
 
 Go 的答案是 goroutine 加 channel：初始栈 2 KB、用户态调度、`go` 关键字创建、语言内建通信原语。〔TB31 p6〕 goroutine 有多便宜 P3 已实测（10 万个只占 200 MB 栈、11 条线程），这章不重复。
 
-模型选择上 CSP（Communicating Sequential Processes）是主流推荐：并发程序是一组用输入输出原语连接起来的 Process 集合，Go 里 Process 对应 goroutine，channel 是连接件。〔TB31 p9-10〕 局部性能敏感区退回 sync 低级原语，这也是 §6 的主线。spawn 模式先用起来（goroutine 的返回值会被忽略，退出状态只能靠 channel 传回）：`func spawn(f func() error) <-chan error { c := make(chan error, 1); go func() { c <- f() }(); return c }`。
+模型选择上 CSP（Communicating Sequential Processes）是主流推荐：并发程序是一组用输入输出原语连接起来的 Process 集合，Go 里 Process 对应 goroutine，channel 是连接件。〔TB31 p9-10〕 局部性能敏感区退回 sync 低级原语，这也是"sync 家族与基准"一节的主线。spawn 模式先用起来（goroutine 的返回值会被忽略，退出状态只能靠 channel 传回）：`func spawn(f func() error) <-chan error { c := make(chan error, 1); go func() { c <- f() }(); return c }`。
 
 ## GMP 演进：从全局锁到信号抢占
 
@@ -103,12 +103,11 @@ const forcePreemptNS = 10 * 1000 * 1000 // 10ms
 	}
 ```
 
-preemptM 向目标线程发 `sigPreempt = _SIGURG` 信号（signal_unix.go:74），信号处理器 doSigPreempt 在异步安全点往 G 的执行流里注入 asyncPreempt 调用。你写的 `for {}` 没有任何让出点，照样在 10ms 后被信号打断，这就是 §2 实测里 main 能活下来的原因。
+preemptM 向目标线程发 `sigPreempt = _SIGURG` 信号（signal_unix.go:74），信号处理器 doSigPreempt 在异步安全点往 G 的执行流里注入 asyncPreempt 调用。你写的 `for {}` 没有任何让出点，照样在 10ms 后被信号打断，这就是"GMP 演进"一节实测里 main 能活下来的原因。
 
 ### 两种阻塞，两种待遇
 
 channel 阻塞和网络 I/O：G 进等待队列，M 立刻找 P 的下一个 G，P 无 G 可跑则 M 解绑挂起；I/O 完成后 G 标记 runnable 进某 P 的队列。阻塞的只是 G。〔TB32 p10〕
-
 系统调用：G 和 M 一起挂起，M 先解绑 P；空闲 M 接手 P，没有就创建新 M。syscall 返回后 G 尝试拿回 P，拿不到就标记 runnable 排队，原 M 继续闲置。〔TB32 p11〕 这就是慢系统调用涨线程的根源。
 
 〔实测〕 8 个 goroutine 各做 5000 次 `os.Stat` 系统调用（GOMAXPROCS=4），`GODEBUG=schedtrace=250 go run syscallsched.go`：
@@ -206,8 +205,8 @@ len(ch) 只在两个特定场景可用："多发送单接收"时接收方 `len>0
 
 ### 超时与心跳
 
-超时用 `case <-time.After(30 * time.Second)`，心跳用 `time.NewTicker` 的 `.C` 字段。纪律：长驻服务里 timer/ticker 要 Stop 回收。time.After 在 Go 1.23 起未被引用的 timer 可被 GC 回收，P3 §select 已讲版本史。〔TB33 p27-28〕
-dachang 课件把超时控制归纳成四档：双 channel 截止、time.After、WithCancel、WithTimeout；其中 WithTimeout 加 defer cancel 是标准答案。展开见 notes/p3 §select 与 MATERIALS 索引 C:dachang/concurrence#K5。
+超时用 `case <-time.After(30 * time.Second)`，心跳用 `time.NewTicker` 的 `.C` 字段。纪律：长驻服务里 timer/ticker 要 Stop 回收。time.After 在 Go 1.23 起未被引用的 timer 可被 GC 回收，P3 §select 已讲版本史。dachang 课件把超时控制归纳成四档：双 channel 截止、time.After、WithCancel、WithTimeout；其中 WithTimeout 加 defer cancel 是标准答案。〔TB33 p27-28〕
+展开见 notes/p3 §select 与 MATERIALS 索引 C:dachang/concurrence#K5。
 
 ### nil channel：摘掉 select 的坏分支
 
@@ -269,18 +268,12 @@ BenchmarkRWMutexWriteParallel-10    	51479498	        52.16 ns/op
 
 四个结论，每个都能从上面的数字直接换算。并发量小时 Mutex 最好：TB34 用 cpu=2 数据得出，本机单核 2.28 对读锁 4.15 同向。RWMutex 读锁适合读多写少，并行读 27.51 比并行 Mutex 67.62 快。RWMutex 写锁在大并发下最差。〔TB34 p8-10〕
 
-原子读 0.40 ns 是读锁 4.15 ns 的 10 分之 1。"原子读约为读锁 200 倍"在 1.17 时代成立，本机倍数小得多，方向一致。〔TB34 p16-18〕
-
-atomic 的本质是硬件级不可中断指令，x86_64 的 XCHGQ 就是 SwapInt64 的底。它比 OS/运行时同步原语更原始，是 Mutex 与 channel 的实现基础。〔TB34 p14-16〕
-
+原子读 0.40 ns 是读锁 4.15 ns 的 10 分之 1。"原子读约为读锁 200 倍"在 1.17 时代成立，本机倍数小得多，方向一致。〔TB34 p16-18〕 atomic 的本质是硬件级不可中断指令，x86_64 的 XCHGQ 就是 SwapInt64 的底。它比 OS/运行时同步原语更原始，是 Mutex 与 channel 的实现基础。〔TB34 p14-16〕
 手写 Once 双检查锁的本机复测是 1.150 对 std 0.2800 ns/op。std 热路径用 atomic.Load 免锁，快 3 倍。bench 对照法见 MATERIALS 索引 C:dachang/concurrence#K1。
 
 ### Cond 与选型口诀
 
-sync.Cond 是等待条件成立的 goroutine 容器。调用 Wait 前必须 Lock：Wait 内部先释放锁再挂起，唤醒后重新加锁；唤醒后要重判条件（for !ready 循环），Broadcast 唤醒全部。适用面比 Mutex 窄得多，channel 加 sync 已覆盖 99.9% 场景。〔TB34 p10-14〕
-
-channel 等价物：`ch<-struct{}{}` 对应 Signal，`close(ch)` 对应 Broadcast，但 close 只能一次，反复广播必须 Cond（P3 §锁与原子操作讲过选型，这里补原理）。
-
+sync.Cond 是等待条件成立的 goroutine 容器。调用 Wait 前必须 Lock：Wait 内部先释放锁再挂起，唤醒后重新加锁；唤醒后要重判条件（for !ready 循环），Broadcast 唤醒全部。适用面比 Mutex 窄得多，channel 加 sync 已覆盖 99.9% 场景。〔TB34 p10-14〕 channel 等价物：`ch<-struct{}{}` 对应 Signal，`close(ch)` 对应 Broadcast，但 close 只能一次，反复广播必须 Cond（P3 §锁与原子操作讲过选型，这里补原理）。
 选型口诀照录：读多写少用 RWMutex、等待条件成立用 Cond、不确定就用 Mutex、极致性能单变量用 atomic。〔TB34 p18-19〕
 
 ## workerpool 与功能选项
@@ -309,14 +302,14 @@ New 的参数要加选项又不破坏旧调用，用 Option 模式：`type Optio
 
 ## 实测五点：脏写、锁矩阵、map 崩溃、context
 
-最后四个现场，来自课件仓库 downloads/代码课件/go_basic/concurrence/，全部本机复跑。
+最后四个现场，来自课件包 go_basic 并发部分，全部本机复跑。〔C:go_basic/concurrence/atomic.go:11-19〕〔C:go_basic/concurrence/rwlock.go:33-67〕
 
 ### n++ 为什么不安全
 
 n++ 是取、加、写三步，中断可发生在任意两步之间：
 
 ```go
-// downloads/代码课件/go_basic/concurrence/atomic.go:11-19（节选）
+// atomic.go Inc 函数（节选）〔C:go_basic/concurrence/atomic.go:11-19〕
 func Inc() {
 	n++ // 取 n，加 1，存回 n，三步非原子
 }
@@ -337,7 +330,7 @@ n++ 结果: 943
 
 ### RWMutex 行为矩阵
 
-源码锚点 downloads/代码课件/go_basic/concurrence/rwlock.go:33-67：读锁可重入（同 goroutine 连续 RLock 不死锁）、写锁不可重入（重入死锁）、有写锁等待时新读锁也阻塞（防写饿死）。
+源码锚点 rwlock.go 33-67 行〔C:go_basic/concurrence/rwlock.go:33-67〕：读锁可重入（同 goroutine 连续 RLock 不死锁）、写锁不可重入（重入死锁）、有写锁等待时新读锁也阻塞（防写饿死）。
 
 〔实测〕 `go test ./exercises/p31sched/ -run TestRWMutexMatrix -race -count=1` PASS：先 RLock 两次再 RUnlock 两次正常；RLock 持有期间起 goroutine Lock，20ms 后再起 goroutine RLock，新读锁拿不到（select default 探测确认阻塞），原 RUnlock 后两条才依次通过。〔C:go_basic/concurrence/rwlock.go:33-67〕
 
@@ -354,7 +347,6 @@ internal/runtime/maps.fatal({0x10095c6b2?, 0x0?})
 ```
 
 〔实测〕 两个 goroutine 各写 1 万个 key，`go run main.go` 退出码 1，先打印 fatal error: concurrent map writes。套一层 `defer recover()` 再跑，同样 fatal。recover 只捕 panic；fatal 是运行时直接 abort。修复用 sync.Map 或 RWMutex 包 map。〔C:go_basic/concurrence/collection_safety.go:6-11〕
-
 Rust 对照：Rc/RefCell 违规是编译错，Go 把这类错误留到运行时且给的是最重的一档。
 
 ### 子 ctx 的寿命不超父
@@ -373,7 +365,7 @@ WithValue 的自定义 key 纪律（StringKey 类型避免碰撞、只用于跨 
 
 ### 协程泄露的现场
 
-超时 ctx 等 5ms 的 rpc、1ms 就返回，rpc goroutine 仍阻塞在无缓冲 channel 上，每请求泄一个；NumGoroutine 打印与 pprof goroutine profile 抓现行。这是 §4 信号惯用法用错方向的现场，完整链路见 MATERIALS 索引 C:dachang/concurrence#K7，P36 泄露专题会展开。
+超时 ctx 等 5ms 的 rpc、1ms 就返回，rpc goroutine 仍阻塞在无缓冲 channel 上，每请求泄一个；NumGoroutine 打印与 pprof goroutine profile 抓现行。这是"channel 惯用法群"一节信号惯用法用错方向的现场，完整链路见 MATERIALS 索引 C:dachang/concurrence#K7，P36 泄露专题会展开。
 
 ## 小结
 
@@ -385,6 +377,14 @@ WithValue 的自定义 key 纪律（StringKey 类型避免碰撞、只用于跨 
 4. 四个 channel 惯用法：信号（1 对 1）、广播（close 起跑枪声）、替代锁（后台 goroutine 独占）、计数信号量（容量限流）。
 5. select 三式（default 事务、超时、心跳）加 nil channel 摘坏分支；sync 家族禁止复制，选型照口诀，本机基准 Mutex 2.28 对 chan 21.0 ns/op。
 6. map 并发写是 fatal 不可 recover；子 ctx 寿命取父子较短者。
+
+## 在 dnsproxi 里看这一章
+
+dnsproxi-go/main.go 是本章三个惯用法的生产形态（行号 go1.26.4 工作副本实读）：
+
+- `Proxy.Run`（main.go:127）：per-packet 形态每查询 `wg.Add(1); go …` spawn 一个 goroutine（main.go:230），命中"goroutine 不是免费的"边界后，`WorkerPool>0` 分支换成固定 worker 吃 `qch` 缓冲 channel（main.go:188-193），`qch <- packet` 满时读循环阻塞，这就是"计数信号量：容量即并发上限"的背压版（main.go:216）。
+- ctx 取消关监听是"信号传递 1 对 1"的极简款：一个只等 `<-ctx.Done()` 就 `pc.Close()` 的 goroutine（main.go:179-181），让阻塞在 `ReadFromUDP` 的读循环立刻醒来收尾。
+- 老化循环 `for st := range p.cache.RunExpirer(done, ecfg)`（main.go:166）配 cache/expire.go:110-118 的双 select：`done` 收停机信号、`t.C` 收心跳，stats 发送套 `default` 防消费方拖慢，正是"select 三式"里 default 防阻塞与超时两式合用。
 
 ## Take-away
 
@@ -431,10 +431,10 @@ ok  	golearn/exercises/p31sched	2.5s
 
 12 个测试各考一件事：
 
-- `TestSignalOneToOne`/`TestBroadcastClose`/`TestCounterByChannel`/`TestCountingSemaphore`：§4 四惯用法，spawn 1 对 1、close 起跑枪声、后台 goroutine 独占、容量 3 限 9 job 批次分布。
-- `TestNilChannelSelect`/`TestDegenerateZeroStorm`：§5 置 nil 防零值风暴与退化对照。
-- `TestWorkerPool`/`TestFunctionalOptions`：§7 自包含池（active 信号量+for-select+哨兵错误）与 WithBlock(false) 池满返回 ErrNoIdleWorkerInPool。
-- `TestLostUpdateDistribution`/`TestAtomicCounter`/`TestRWMutexMatrix`/`TestChildCtxInheritsDeadline`：§8 脏写分布对 atomic 恒 1000、锁矩阵、子 ctx 寿命。
+- `TestSignalOneToOne`/`TestBroadcastClose`/`TestCounterByChannel`/`TestCountingSemaphore`：channel 惯用法群一节的四惯用法，spawn 1 对 1、close 起跑枪声、后台 goroutine 独占、容量 3 限 9 job 批次分布。
+- `TestNilChannelSelect`/`TestDegenerateZeroStorm`：select 三式与 nil channel 一节的置 nil 防零值风暴与退化对照。
+- `TestWorkerPool`/`TestFunctionalOptions`：workerpool 与功能选项一节的池（active 信号量+for-select+哨兵错误）与 WithBlock(false) 池满返回 ErrNoIdleWorkerInPool。
+- `TestLostUpdateDistribution`/`TestAtomicCounter`/`TestRWMutexMatrix`/`TestChildCtxInheritsDeadline`：实测五点一节的脏写分布对 atomic 恒 1000、锁矩阵、子 ctx 寿命。
 
 **预测**（先写答案再跑，猜错的地方才是认知边界；四个问题都对应一个可跑的预测）：
 1. TestCountingSemaphore：9 个 50ms job 配容量 3 的信号量，批次数是 2、3 还是 4？批次里会不会出现 1 个的尾巴？
