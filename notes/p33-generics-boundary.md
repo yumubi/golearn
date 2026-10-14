@@ -69,7 +69,7 @@ type C1 interface {
 
 影响面：客户端类应用（Redis/Kafka 客户端、HTTP、ORM）最想要的 `Get[T any](url string) (T, error)` 方法级泛型 API 全部无法编译。〔TBX04 p4-5〕 Rust 侧同类需求用 trait 关联类型或泛型方法表达，不受此限。绕开一 Builder 模式：HttpClient 配置载体加 `GetBuilder[T any]` 链式设置 Path、Do 返回 T，把理想 API `client.Get[User]("/user/123")` 变成过程式链（Rust 的 builder 惯用法同构）。〔TBX04 p9-10〕
 
-**局限二：泛型约束不能当类型用**。见上节 `interface contains type constraints` 实拍；推论是无法用约束表达"接口只接受有限几种类型"，interface{} 参数仍将广泛存在于中间件设计。〔TBX04 p7-8〕 绕开二标记接口：Go 不能用空接口当标记（所有类型都实现它），必须至少声明一个私有方法限定实现者集合：
+**局限二：泛型约束不能当类型用**。报错 `interface contains type constraints` 见"语法核心"一节实拍；推论是无法用约束表达"接口只接受有限几种类型"，interface{} 参数仍将广泛存在于中间件设计。〔TBX04 p7-8〕 绕开二标记接口：Go 不能用空接口当标记（所有类型都实现它），必须至少声明一个私有方法限定实现者集合：
 
 ```go
 type Selectable interface{ aggr() }
@@ -109,6 +109,14 @@ func (Aggregate) aggr() {}
 - 三大局限（方法不能带类型参数、约束不能当类型、约束只能是接口）1.26 未放开，报错原文背下来省调试时间。〔TBX04 p2-9〕
 - 适用判断一条主线：容器抽象与算法收敛用泛型，单方法调用维持 interface。〔TBX05 p16-17〕
 
+## 在 dnsproxi 里看这一章
+
+dnsproxi 是"该用与不该用"的正反样本（工作副本实读）：
+
+- 现成例子只有一处借用泛型标准库的边角：cache/evict.go:32 的 `k = min(k, n)`（1.21 内建泛型 min），以及全库依赖 `wire`/`slices` 等泛型化标准库，但自身没有声明过一个类型参数。
+- 该泛型而没泛型的点：cache.Cache 的三张表 `m map[Key]*Entry`、`slot map[Key]int`、`access map[Key]uint64`（cache/cache.go:54-58）加 `removeSlot` 的 swap_remove 三表联动（cache/evict.go:55-65），是"同一算法跑在不同值类型上"的教科书场景，值得抽 `indexTable[K comparable, V any]`；没抽的代价是三个 delete 加一次 slot 修正手写在同一函数里。
+- 不该泛型的点也现成：`handleQuery` 对 query 的全部操作是 `wire.ParseName`/`ParseQuestion` 两个具体函数调用（main.go:262 起），按 ReadAll 反例维持具体类型，套 `[Q any]` 纯属噪音。
+
 ## Take-away
 
 预测：`Set[int64]` 与 `Set[int32]` 是否共享代码？观察：`go build -gcflags="-m"` 下泛型函数具化有没有额外输出？改造：把 agg_test.go 的 Selectable 标记接口换成 interface{} 加类型断言，对比编译期检查的损失。
@@ -133,11 +141,11 @@ ok  	golearn/exercises/p33gen	1.3s
 
 6 个测试各考一件事：
 
-- `TestSet`：§3 泛型容器五操作（1.24 Set 样例同构）。
-- `TestAbstractHeap`：§3 泛型堆接 container/heap（orderBy 决定序）。
-- `TestBinarySearch`：§5 泛型二分（多类型约束同一实现）。
-- `TestGetterSetterConstraint`：§4 局限三绕开（Getter/Setter 接口）。
-- `TestConstraintNotType`：§4 局限二对照（约束可作约束不可作类型）。
-- `TestSelect`：§4 局限二绕开（Selectable 标记接口拼 SQL 列）。
-- 基准 `BenchmarkSortInts`/`BenchmarkSlicesSort`/`BenchmarkSpecialized`：§2 三选手，本机 1.26 已无差。
-- 编译错复现：正文 §3/§4 四个报错都有对应注释掉的源码行，解开注释跑 `go build` 看原文。
+- `TestSet`：语法核心一节的泛型容器五操作（1.24 Set 样例同构）。
+- `TestAbstractHeap`：语法核心一节的泛型堆接 container/heap（orderBy 决定序）。
+- `TestBinarySearch`：适用判断一节的泛型二分（多类型约束同一实现）。
+- `TestGetterSetterConstraint`：三大局限一节的局限三绕开（Getter/Setter 接口）。
+- `TestConstraintNotType`：三大局限一节的局限二对照（约束可作约束不可作类型）。
+- `TestSelect`：三大局限一节的局限二绕开（Selectable 标记接口拼 SQL 列）。
+- 基准 `BenchmarkSortInts`/`BenchmarkSlicesSort`/`BenchmarkSpecialized`：性能一节的三选手，本机 1.26 已无差。
+- 编译错复现：正文语法核心与三大局限两节的四个报错都有对应注释掉的源码行，解开注释跑 `go build` 看原文。
