@@ -21,7 +21,7 @@ $ go build -gcflags="-m" escape.go
 
 onStack 里的局部 `point` 没有出现在输出里（不逃逸）；onHeap 返回 `&p`，编译器报 `moved to heap: p`；`make([]int, 10240)` 的大对象直接 `escapes to heap`。程序照常输出 `3 &{1 2}`。逃逸分析加 GC 极大解放心智，但一切抽象皆有成本，GC 把成本选在运行期。〔TBX10 p3-4〕
 
-GC 不是免费的。网友实测：内存缓存上亿 kv 时 GC 消耗的 CPU 可达 90%+，简单粗暴地缓存对象会让 GC 成为 CPU 杀手〔TBX10 p4-5〕；正确分析这类问题，得先理解 GC 的实现机制。本章顺序：分配器（§2）、三色标记与写屏障（§3）、垃圾的两副面孔（§4）、pprof 优化实例（§5）。
+GC 不是免费的。网友实测：内存缓存上亿 kv 时 GC 消耗的 CPU 可达 90%+，简单粗暴地缓存对象会让 GC 成为 CPU 杀手〔TBX10 p4-5〕；正确分析这类问题，得先理解 GC 的实现机制。本章顺序：分配器、三色标记与写屏障、垃圾的两副面孔、pprof 四级优化。
 
 三个参与者协作完成内存管理：mutator 是应用本身，不停修改堆上对象图的指向；allocator 是分配器，维护分配数据结构、多线程场景下降锁冲突；collector 是回收器，扫描存活对象，没扫到的就是垃圾。编译器把 newobject 调用翻译给 allocator，allocator 先问本地缓存，不够再向 OS 要；collector 扫完后用 madvise 把闲置内存归还 OS。〔TBX10 p5-6〕
 
@@ -52,7 +52,7 @@ BenchmarkMakeCap-10       7024 ns/op   81921 B/op   1 allocs/op
 BenchmarkPool-10          2748 ns/op      24 B/op   1 allocs/op
 ```
 
-零容量 append 万次要 19 次分配（每次扩容翻倍复制），一次定容只要 1 次，sync.Pool 复用连这次分配也省了，只剩填数。这是 §5 pprof 实例的骨架。
+零容量 append 万次要 19 次分配（每次扩容翻倍复制），一次定容只要 1 次，sync.Pool 复用连这次分配也省了，只剩填数。这是"pprof 四级优化"一节的骨架。
 
 Rust 对照：默认走系统 malloc，可插拔 jemalloc/mimalloc，多级缓存思想相同；Java 的 TLAB 是 tcmalloc 思想在 JVM 内的实现。
 
@@ -75,11 +75,11 @@ gc 5 @0.001s 7%: 0.015+0.059+0.008 ms clock, ..., 71->73->73 MB, 72 MB goal, ...
 HeapAlloc=100MB NumGC=5 PauseTotalNs=945081
 ```
 
-`71->73->73 MB, 72 MB goal`：GC 结束时存活 73MB，goal 72MB 约是存活堆的两倍，这就是 GOGC=100 的语义（下次堆翻倍再触发）。GOGC=200 时 gctrace 可见 goal 从 8MB 到 79MB 的翻倍链（8→24→71→79）。官方宣称 stw 亚毫秒，实测：高分配压力 2 秒里 debug.ReadGCStats 采 PauseQuantiles，GC 7830 次，min 16us、q50 24us、max 225us（M4，go1.26.4）。〔TBX10 p14-15〕 亚毫秒在本机成立，但高压系统仍应以 pprof pauseNs 采进监控，别当恒真。
+`71->73->73 MB, 72 MB goal`：GC 结束时存活 73MB，goal 72MB 约是存活堆的两倍，这就是 GOGC=100 的语义（下次堆翻倍再触发）。GOGC=200 时 gctrace 可见 goal 从 8MB 到 79MB 的翻倍链（8→24→71→79）。官方宣称 stw 亚毫秒。〔TBX10 p14-15〕 实测：4 个 goroutine 疯狂分配 1MB 块压 2 秒后 `debug.ReadGCStats` 采 PauseQuantiles（两轮）：GC 12786 次，min 22us、q50 34us、max 156us；12616 次，21/37/150us。〔实测〕 复现：goroutine 循环 `_ = make([]byte, 1<<20)`，结束调 `debug.ReadGCStats`（PauseQuantiles 设 5 档）。亚毫秒在本机成立，但高压系统仍应以 pprof pauseNs 采进监控，别当恒真。
 
 观察：同一程序加 `GOGC=200` 再跑，对比 goal 链从"约 2 倍存活堆"变成"约 3 倍"；gctrace 行末 `10 P` 是 GOMAXPROCS。
 
-分配太快后台 worker 来不及标记时，应用 goroutine 会被拉去协助标记（mark assist），火焰图可见协助调用栈，直接吃掉响应延迟；内部是记账还账系统。〔TBX10 p20-21〕 优化方向只有降分配数量，这正是 §5 的主题。
+分配太快后台 worker 来不及标记时，应用 goroutine 会被拉去协助标记（mark assist），火焰图可见协助调用栈，直接吃掉响应延迟；内部是记账还账系统。〔TBX10 p20-21〕 优化方向只有降分配数量，这正是"pprof 四级优化"一节的主题。
 
 Java 对照：G1 用 SATB（类 Yuasa 删除屏障），CMS 用增量更新（类 Dijkstra 插入屏障），ZGC 走读屏障加染色指针；Go 明确拒绝读屏障。
 
@@ -100,7 +100,7 @@ t = t[:1]
 回收是两个专用 goroutine 的活：sweep.g 清扫死对象合并空闲页，scvg.g 向 OS 归还内存（dlv 里见 GC sweep wait / GC scavenge wait）。〔TBX10 p30-32〕
 标记一结束 sweep.g 被唤醒，循环 sweepone：把 gcmarkbits 位图替换 allocBits 完成代际交替，按槽位去向归类 span；随后 scvg 线性执行 bgscavenge 到 madvise 归还 OS。源码锚点（go1.26.4）：mgcsweep.go bgsweep(L272)、sweepone(L359)；mgcscavenge.go bgscavenge(L649)。
 
-K17 结论四要点：Go GC 无分代、与应用并发、协助标记、并发时开写屏障。设计推论：无分代意味着上千万 kv 的特征系统要主动降扫描成本（sync.Pool 到 offheap）；GC CPU 超 25% 会触发大量协助伤延迟；简单场景 sync.Pool 就够，复杂场景才考虑 dgraph 这类欺骗 GC 的 offheap 方案。〔TBX10 p32〕 Go 参数极少（GOGC/GOMEMLIMIT）是在逼你降分配而不是调参。
+全章结论四要点：Go GC 无分代、与应用并发、协助标记、并发时开写屏障。设计推论：无分代意味着上千万 kv 的特征系统要主动降扫描成本（sync.Pool 到 offheap）；GC CPU 超 25% 会触发大量协助伤延迟；简单场景 sync.Pool 就够，复杂场景才考虑 dgraph 这类欺骗 GC 的 offheap 方案。〔TBX10 p32〕 Go 参数极少（GOGC/GOMEMLIMIT）是在逼你降分配而不是调参。
 
 ## pprof 四级优化：从 72070 到 9625 ns/op
 
@@ -129,6 +129,14 @@ C:dachang/micro_service 的 Search 服务（召回加过滤）给了完整案例
 - 语义垃圾 GC 无能为力：slice 缩容先置 nil；语法垃圾才是 GC 的活。〔TBX10 p11-14〕
 - 四级优化：定容与池化把 allocs/op 从 24 砍到 6；本机 30170 ns/op 复测同量级。〔C:dachang/micro_service/pprof/object_pool.go:13-76〕
 
+## 在 dnsproxi 里看这一章
+
+dnsproxi 的命中路径就是本章 pool 一课的实战落点（行号工作副本实读）：
+
+- cache/reply.go:49 `BufPool = sync.Pool{New: func() any { b := make([]byte, 4096); return &b }}`：4KB 应答缓冲池，命中路径零分配（labs 实验 4 的 B 形态）。
+- main.go:283-293 `handleQuery` 命中分支：`BufPool.Get().(*[]byte)` 取缓冲、`e.ReplyPool(query, *bufp)` 写入、`pc.WriteTo` 发完才 `BufPool.Put(bufp)`。注释点明并发契约：同 goroutine 用完即还天然安全，跨 goroutine 复用会 TTL 撕裂，这正是 sync.Pool 的 per-P 本地缓存语义在应用层的镜像。
+- 语义垃圾现成反面：cache.Cache 的 `m map[Key]*Entry`（cache/cache.go:54）配 `Expired()` 惰性判定，过期条目在下一次 ExpireRound 抽样才被摘；`Ghosts()`（cache/expire.go）数的就是"还占着格子的尸体"，对应"语法上可达但语义上是垃圾"。
+
 ## Take-away
 
 预测：把 `make([]int, 10240)` 挪进函数返回值里，逃逸分析输出会怎么变？先猜再跑。观察：对你手头服务跑 `GODEBUG=gctrace=1`，找一条 GC 行读出存活堆与 goal。改造：找一个 allocs/op 大于 10 的基准，先定容后池化，重测三级数据。
@@ -138,7 +146,7 @@ C:dachang/micro_service 的 Search 服务（召回加过滤）给了完整案例
 - 命令速查：`go build -gcflags="-m"`（逃逸）、`GODEBUG=gctrace=1`（GC 行）、`GOGC=200`（翻倍率）、`GOMEMLIMIT=64MiB`（软上限）、`go tool pprof`（top/peek/list）。
 - 源码（本机 go1.26.4）：malloc.go mallocgc(L1067)/mallocgcTiny(L1202)/mallocgcSmallNoscan(L1358)；internal/runtime/gc/sizeclasses.go（68 档）；mgcmark.go gcAssistAlloc(L499)；mbarrier.go writeBarrier。
 - sweep/scavenge：mgcsweep.go bgsweep(L272)/sweepone(L359)；mgcscavenge.go bgscavenge(L649)。
-- 延伸：GC Handbook；memorymanagement.org；1.25 实验性 Green Tea GC（GOEXPERIMENT=greenteagc，重排标记工作提升局部性，未默认启用）。
+- 延伸：GC Handbook；memorymanagement.org；Green Tea GC（重排标记工作提升局部性）1.26 起默认开启〔1.26 修正〕：`grep -n GreenTeaGC $(go env GOROOT)/src/internal/buildcfg/exp.go` 输出 `88: GreenTeaGC: true,`。
 - 旧章交叉：p30 §接口装箱（interface 装箱分配）、p21 §bench hygiene（-benchmem 与 b.Loop）。
 - 原材料单元：TBX10（GC 全景 17 讲）、C:dachang/micro_service#K11（pprof 四级优化实例）。
 
@@ -153,10 +161,10 @@ ok  	golearn/exercises/p32gc	1.3s
 
 7 个条目各考一件事：
 
-- `TestEscapeMatrix`：§1 四例（栈、堆指针、大对象、接口装箱），断言行为，`go build -gcflags="-m"` 看编译器判定。
-- `TestSemanticGarbage`：§4 置 nil 前后对照（错误写法与正解各一段）。
-- `TestGCTriggerGoal`：§3 MemStats 一致性（HeapAlloc、NumGC 非零），gctrace 行见正文。
-- `TestPPROFDemo`：§5 四级函数等价性（recall1 到 recall4 输出全等）。
+- `TestEscapeMatrix`：为什么需要 GC 一节的四例（栈、堆指针、大对象、接口装箱），断言行为，`go build -gcflags="-m"` 看编译器判定。
+- `TestSemanticGarbage`：垃圾的两副面孔一节的置 nil 前后对照（错误写法与正解各一段）。
+- `TestGCTriggerGoal`：三色标记与写屏障一节的 MemStats 一致性（HeapAlloc、NumGC 非零），gctrace 行见正文。
+- `TestPPROFDemo`：pprof 四级优化一节的四级函数等价性（recall1 到 recall4 输出全等）。
 - `BenchmarkAppendNoCap`/`BenchmarkMakeCap`/`BenchmarkPool`：三级分配对照，数字见文件头注释（本机 42202/7024/2748 ns/op 一轮实拍，另一轮 32410/9165/3030，波动正常看量级与 allocs/op）。
 - pprof_demo.go 的 recall3 用全局切片复用：非并发安全，仅对照演示，并发版用 recall4 的 sync.Pool。
-- 在线 pprof：`go run` 任一长驻程序加 `import _ "net/http/pprof"`，浏览器开 127.0.0.1:5678/debug/pprof（micro_service 原版路径 downloads/代码课件/3-go大厂冲刺--代码/micro_service/pprof）。
+- 在线 pprof：`go run` 任一长驻程序加 `import _ "net/http/pprof"`，浏览器开 127.0.0.1:5678/debug/pprof（micro_service 四级优化实例同款）。〔C:dachang/micro_service/pprof/object_pool.go:13-76〕
