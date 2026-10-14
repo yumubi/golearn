@@ -20,3 +20,7 @@ temp
 # 审读台账是本机核对工具（含绝对路径），不随仓库发布
 audit/
 scripts/audit-scope.txt
+
+# 付费课程素材与凭据，不入库
+downloads/
+work/
