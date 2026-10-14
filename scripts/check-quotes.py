@@ -124,7 +124,18 @@ def check(path, max_ratio):
     ratio = quote_chars / max(1, len(text))
     if ratio > max_ratio:
         errs.append(f"{path} 摘录占比 {ratio:.0%} 超过 {max_ratio:.0%}")
+    heads = {}
+    for nf in sorted((M.ROOT / "notes").glob("p*.md")):
+        mm = re.match(r"(p\d+(?:_5)?)\b", nf.name)
+        if mm:
+            heads[mm.group(1)] = "\n".join(x for x in nf.read_text().splitlines() if x.startswith("#"))
     for n, l in enumerate(lines, 1):
+        for mm in re.finditer(r"\b(p\d+(?:_5)?)(?:[a-z-]*)?\s*§\s*([^\s，。；：)）、`/]+)", l):
+            k, sec = mm.group(1), mm.group(2)
+            if k not in heads:
+                errs.append(f"{path}:{n} 引用 {k} §{sec}：notes/{k}-*.md 不存在（尚未写的章不能带 § 引用）")
+            elif sec not in heads[k]:
+                errs.append(f"{path}:{n} 引用 {k} §{sec}：该章标题里没有这一节，请重读后改成真实小节名，或写“旧章无”")
         if "downloads/" in l:
             errs.append(f"{path}:{n} 正文不能写 downloads/ 路径（读者没有这个目录）；用 〔C:…〕/〔TBxx pN〕 标签指向材料")
     if chr(0x2014) in text:
