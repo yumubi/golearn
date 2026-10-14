@@ -41,7 +41,7 @@ dnsproxi_queries_total{outcome="forwarded"} 2
 dnsproxi_cache_entries                      1
 ```
 
-最后一行是个值得记住的现象：**`dig` 默认发出的查询带 AD 标志位，而缓存只接受"RD=1，其余标志全 0，没有 EDNS，单问题，没有附加记录"的纯净查询**（`cache.Request` 的判据）。所以真实的 stub resolver 发来的包大多不会命中这个缓存。这是教学实现的有意简化，也是你可以改的第一个地方。
+最后一行是个值得记住的现象：**`dig` 默认发出的查询带 AD 标志位，而缓存早期只接受"RD=1，其余标志全 0，没有 EDNS，单问题，没有附加记录"的纯净查询**（`cache.Request` 的判据）。所以真实的 stub resolver 发来的包大多不会命中这个缓存。这已经修了：判据放宽为 `flags2&^0x20`（只豁免 AD 位，RA/rcode 仍拒），`dig` 默认查询现在能命中（见下文"动手"）。
 
 ## 二、模块分工
 
@@ -139,7 +139,12 @@ UDP 应答超过上限时，`tcp.TruncConn` 只保留头与问题段、把应答
 cd dnsproxi-go && go vet ./... && go test -race -count=1 ./...
 ```
 
-我在本机用 HEAD 版本跑过：`dnsproxi-go`、`cache`、`tcp`、`wire` 各包通过。建议三个改造：让缓存接受带 AD 标志的查询（先想清楚应答里的 AD 位该不该照抄）；给 `main` 接上 `signal.NotifyContext`；把命中路径的应答拷贝去掉，对照 `labs/experiments/hitpath-ab` 的基准。
+我在本机用 HEAD 版本跑过：`dnsproxi-go`、`cache`、`tcp`、`wire` 各包通过。当初建议的三个改造，前两个已经落地（提交 `ff5f72b`、`68aedcd`）：
+
+1. 缓存现在接受带 AD 标志的查询：`cache.Request` 的判据从"flags2 全 0"放宽为 `flags2&^0x20`，只豁免 AD 位，RA/rcode 仍拒；应答里的 AD 位仍由上游决定，不从查询带。
+2. `main` 已接上 `signal.NotifyContext`（SIGTERM/SIGINT 转 ctx 取消）。顺带修了 ActiveTTL 关停死锁：expirer 在 `wg` 里等 `done`，而 `close(done)` 原挂在 `Run` 的 defer 上（要等 `wg.Wait()` 之后的 return 才跑），两者互等；现在读循环退出路径先 `close(done)` 再 `wg.Wait()`。
+
+剩下的改造题：把命中路径的应答拷贝去掉，对照 `labs/experiments/hitpath-ab` 的基准。
 
 ## 想深入去哪查
 
