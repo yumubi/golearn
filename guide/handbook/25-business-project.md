@@ -11,7 +11,8 @@
 
 还原一下当时的场景。你入职一个新团队，老板给你一个空仓库："做个内容社区，先能注册登录发帖，后面会火。"你面对的不是技术选型清单，是一串顺序问题：第一刀切在哪（先写哪一层）？什么时候才值得引入 Redis？帖子从 10 万涨到 1000 万，数据库要动什么？用户量过百万，要不要拆微服务？每一步都有人催你"早点上"，也都有人警告你"别过度设计"。这一节按这条主线走一遍，每一步给出"痛点是什么、为什么这时候引入"，然后你自己在 `minifeed/` 上把最小的一刀做出来。
 
-先把全景铺开。技术栈按课程出现顺序：Gin、GORM 与 MySQL、Redis（含 Lua 脚本）、Kafka、Prometheus 与 Grafana、OpenTelemetry 与 Zipkin、etcd、gRPC 与 Protobuf、Elasticsearch、Canal、K8s；装配用 wire，配置用 viper，日志用 zap。主线分层是 `Handler → Service → Repository → (DAO + Cache)`。〔W02-2 p14-17〕〔W21-1 p25〕这条分层里最实在的一条设计结论：Repository 负责"一切与存储有关的事"，包括缓存一致性、预加载、存储层降级；缓存与否、怎么缓存是技术问题，不是业务逻辑，所以放 Repository 不放 Service。〔W21-1 p25〕这与 10 节的分层原则是同一句话的两种说法。
+先把全景铺开。技术栈按课程出现顺序：Gin、GORM 与 MySQL、Redis（含 Lua 脚本）、Kafka、Prometheus 与 Grafana、OpenTelemetry 与 Zipkin、etcd、gRPC 与 Protobuf、Elasticsearch、Canal、K8s；装配用 wire，配置用 viper，日志用 zap。主线分层是 `Handler → Service → Repository → (DAO + Cache)`。〔W02-2 p14-17〕〔W21-1 p25〕
+这条分层里最实在的一条设计结论：Repository 负责"一切与存储有关的事"，包括缓存一致性、预加载、存储层降级；缓存与否、怎么缓存是技术问题，不是业务逻辑，所以放 Repository 不放 Service。〔W21-1 p25〕这与 10 节的分层原则是同一句话的两种说法。
 
 ## 一、21 周与手册各节的对应
 
