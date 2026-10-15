@@ -1,6 +1,6 @@
 """校验讲课体手册章节：可运行代码块必须真的运行并与紧随其后的输出块一致。
 
-    python3 -I scripts/check-lecture.py guide/handbook/04-interfaces.md [--min-lines 250 --max-lines 480 --min-examples 3]
+    python3 -I scripts/check-lecture.py guide/handbook/04-interfaces.md [--min-lines 250 --max-lines 480 --min-examples 3 --profile project]
 
 约定：
   ```go          以 `package main` 开头：用 go run 运行，stdout 必须与紧随其后的 ```text 块一致
@@ -12,6 +12,7 @@ import re, subprocess, sys, tempfile
 from pathlib import Path
 
 BLOCK = re.compile(r"^```(\w+)?[ \t]*(\w+)?[ \t]*\n(.*?)^```[ \t]*$", re.M | re.S)
+REQUIRED_PROJECT = ["小结", "常见坑", "判断题与答案", "想深入去哪查"]
 REQUIRED = ["和你已知语言的差异", "小结", "常见坑", "判断题与答案", "在项目里", "想深入去哪查"]
 
 
@@ -33,7 +34,7 @@ def main():
     if not lo <= n <= hi:
         errs.append(f"行数 {n} 不在 [{lo}, {hi}]")
     heads = re.findall(r"^## (.+)$", text, re.M)
-    for r in REQUIRED:
+    for r in (REQUIRED_PROJECT if "--profile" in args and args[args.index("--profile") + 1] == "project" else REQUIRED):
         if not any(r in h for h in heads):
             errs.append(f"缺小节（标题需含）: {r}")
     blocks = list(BLOCK.finditer(text))
