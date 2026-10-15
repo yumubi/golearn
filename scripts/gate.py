@@ -107,6 +107,22 @@ r = sh([sys.executable, '-I', 'scripts/audit-claims.py'])
 tail = '\n'.join(l for l in r.stdout.splitlines() if 'MISSING' in l and 'MISSING 0' not in l or l.startswith('  MISSING'))
 rec('notes 引用对账（路径/测试名/反向遗漏）无 MISSING', r.returncode == 0, tail)
 
+# 7.5 手册讲课体：01 到 23 全部跑示例（24/25 按 QUEUE 参数；26 是路线页无 Go 示例）
+LECT = {
+    '22': ['--min-examples', '2'],   # 速通节，容器命令为主，正文只留 2 个可跑 Go 块
+    '23': ['--min-examples', '1'],   # 速通节，头部声明不启集群，只 1 个可跑 Go 块
+}
+for f in sorted(glob.glob('guide/handbook/[0-2][0-9]-*.md')):
+    if os.path.basename(f)[:2] == '26':
+        continue  # 路线页，不是讲课体章节
+    num = os.path.basename(f)[:2]
+    if num in ('24', '25'):
+        args = ['--min-lines', '200', '--max-lines', '450', '--min-examples', '0', '--profile', 'project']
+    else:
+        args = LECT.get(num, [])
+    r = sh([sys.executable, '-I', 'scripts/check-lecture.py', f] + args)
+    rec(f'讲课体 {os.path.basename(f)}', r.returncode == 0, (r.stdout + r.stderr).strip().splitlines()[1][:120] if r.returncode else '')
+
 # 8 变异测试
 if not FAST:
     r = sh([sys.executable, '-I', 'scripts/mutate.py'])
