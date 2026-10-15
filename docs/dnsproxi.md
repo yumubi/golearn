@@ -5,7 +5,7 @@ title: 毕业项目 dnsproxi-go
 # 毕业项目：dnsproxi-go
 
 > DNS UDP 代理：wire 解析 → 转发 → 缓存 → 逐出 → TinyLFU 准入 → 主动老化。
-> 对照同构的 Rust 版（`/Users/akka/Dev/learning/rs/dnsproxi`）。
+> 对照同构的 Rust 版（本机 `rs/dnsproxi`）。
 
 ## 它在哪条弧上
 
@@ -31,7 +31,7 @@ title: 毕业项目 dnsproxi-go
 ## 指标与日志（③ 阶段的落地形态）
 
 ```sh
-cd /Users/akka/Dev/learning/go/dnsproxi-go
+cd dnsproxi-go
 DNS_LISTEN=:15353 DNS_CACHE=1 DNS_LOG_LEVEL=debug go run .
 # 另一个终端：
 curl -s localhost:9153/metrics | grep dnsproxi
