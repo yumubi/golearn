@@ -366,3 +366,24 @@ violations（含 results/LESSON 历史 em-dash 全文件清理）。
   127.0.0.1:10808，直连 443 被企业网拦），Actions ci 在
   f4b4cff 绿，Pages 200。注意：Pages 只部署 docs/（vitepress），
   `guide/handbook/` 仅存在于仓库，不上站点。
+
+### 文档整合：两层阅读模型（2026-10-15，f860bee）
+
+- 用户反馈「guide/、docs/、notes/ 都有文档，不知道看哪个」。整合为
+  两层：第一层速通手册 `guide/handbook/`（26 节，18.5 小时），
+  第二层细节库 notes/（27 章）。单一事实源不变：notes/ 与
+  guide/handbook/ 是正本，docs/ 全部是镜像。
+- `scripts/mirror.sh` 扩展为双镜像（notes → docs/，
+  guide/handbook → docs/handbook/，共 27 页）。改任一正本后必跑。
+- 站点：侧栏新增「速通手册（18.5 小时，先读）」组置顶；nav 加
+  「速通手册」；docs/index.md 重写为两层阅读门面（含「从哪进」
+  三分判断）；docs/table.md 头部注明本表只管细节库。
+- 入口统一：README 读者路径改两层表（修掉过期「约 12 小时」）；
+  INDEX.md 瘦身为指向 README 的指针，不再复制课程表（此前两处
+  课程表各自漂移）。
+- 顺手修 docs/dnsproxi.md 两处泄漏本机绝对路径（prose 与 cd 示例）；
+  p31/p8 正文里的 /Users 路径是终端实拍输出，保留不动。
+- 验证：pnpm run ci 本地绿（eslint 含新增 docs/handbook/*.md），
+  docs:build 27 页 handbook 全部渲染，链接改写为 /golearn/handbook/*。
+  浏览器实拍不可用（browser 工具在本运行时不可用），以 dist 静态
+  grep 代替视觉验证。
