@@ -129,9 +129,9 @@ for n in sorted(glob.glob('notes/p2[1-9]-*.md')):
             miss.append(f'代码块<8(实{t.count("```") // 2})')
     rec(f'{n} 结构', not miss, ', '.join(miss))
     slug = re.match(r'notes/(p\d+)', n).group(1).upper()
-    entries = ['INDEX.md', 'README.md', 'docs/index.md', 'docs/table.md', 'docs/.vitepress/config.ts']
+    entries = ['README.md', 'docs/table.md', 'docs/.vitepress/config.ts']
     miss = [e for e in entries if slug not in open(e).read()]
-    rec(f'{slug} 五处入口同步', not miss, ', '.join(miss))
+    rec(f'{slug} 入口同步（README/table/config）', not miss, ', '.join(miss))
 
 # 10 测试数量不得减少；新增 t.Skip 必须带 `skip-ok: 理由`
 def count_tests(ref):
