@@ -1,6 +1,6 @@
 # 08 运行时直觉：调度、分配、逃逸与 GC
 
-> 详细程度：标准（概念地图深度） · 约 25 分钟
+> 详细程度：标准（概念地图深度） · 约 35 分钟
 > 材料：TB32、TBX10 · 旧长版：`notes/p31-concurrency-scheduler.md`、`notes/p32-memory-gc.md`
 > 前置：03 类型与数据、06 并发一（goroutine 与 channel 的基本用法）
 

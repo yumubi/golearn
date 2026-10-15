@@ -1,6 +1,6 @@
 # 02 工程骨架：包、module、启动次序与工具链
 
-> 详细程度：速通 · 约 15 分钟
+> 详细程度：速通 · 约 30 分钟
 > 材料：TB02、TB04 到 TB08、TB35b、TBX02、TBX11 · 旧长版：`notes/p1-toolchain.md`、`notes/p22-toolchain-docs.md`
 > 前置：01 Go 的世界观
 

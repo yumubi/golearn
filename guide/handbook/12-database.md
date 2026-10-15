@@ -1,6 +1,6 @@
 # 12 数据库：连接池、事务纪律与 ORM 的取舍
 
-> 详细程度：标准 · 约 25 分钟
+> 详细程度：标准 · 约 50 分钟
 > 材料：W02-2、C:go_basic/database、C:go_frame/orm、旧长版 `notes/p9-database.md` `notes/p11-sqlc-goose.md` `notes/p12-sqlc-pgx.md`
 > 前置：10 分层与依赖注入
 

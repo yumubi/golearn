@@ -1,6 +1,6 @@
 # 01 Go 的世界观与差异总表
 
-> 详细程度：标准 · 约 20 分钟
+> 详细程度：标准 · 约 30 分钟
 > 材料：TB00、TB01、TB02、TBX01 · 旧长版：`notes/p1-toolchain.md`、`notes/p2-lang-core.md`
 > 前置：任意一门主流语言
 

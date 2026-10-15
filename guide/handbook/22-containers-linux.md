@@ -1,6 +1,6 @@
 # 22 容器与 Linux 运行时
 
-> 详细程度：速通 · 约 15 分钟
+> 详细程度：速通 · 约 30 分钟
 > 材料：旧章 `notes/p23-linux-runtime.md`、`notes/p25-containers-cloud.md` · 本节命令在本机（go1.26.4，docker 29.4，arm64）复核过
 > 前置：06 并发一、07 并发二（context 与优雅关停）
 

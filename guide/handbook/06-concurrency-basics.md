@@ -1,6 +1,6 @@
 # 06 并发一：goroutine、channel、select 与 sync
 
-> 详细程度：深入 · 约 45 分钟
+> 详细程度：深入 · 约 55 分钟
 > 材料：TB31 到 TB35、`C:go_basic/concurrence`、`C:dachang/concurrence` · 旧长版：`notes/p3-concurrency.md`、`notes/p31-concurrency-scheduler.md`
 > 前置：04 接口与组合、05 错误与资源
 

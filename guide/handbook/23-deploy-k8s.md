@@ -1,6 +1,6 @@
 # 23 部署与 Kubernetes：你描述要的状态，控制器负责逼近
 
-> 详细程度：速通 · 约 15 分钟
+> 详细程度：速通 · 约 25 分钟
 > 材料：W03-1 W03-2、C:go_frame/k8s、K:krm-backend-第八章 K:krm-backend K:krm-frontend · 旧长版：`notes/p26-deploy.md`
 > 前置：22 容器与 Linux 运行时
 > 说明：本节不启动集群，YAML 与 kubectl 命令都出自材料，没有在本机执行；能在本机验证的只有 Go 代码

@@ -1,6 +1,6 @@
 # 15 日志、指标与链路：三根支柱怎么互相定位问题
 
-> 详细程度：标准 · 约 25 分钟
+> 详细程度：标准 · 约 45 分钟
 > 材料：W05-4 W08-1 W08-2 W18-1、C:dachang/trace、旧长版 `notes/p13-metrics.md` `notes/p15-slog.md` `notes/p16-slog-handler.md` `notes/p17-dnsproxi-metrics.md` `notes/p18-dnsproxi-slog.md`
 > 前置：04 接口与组合（装饰器），06 并发一（context）
 

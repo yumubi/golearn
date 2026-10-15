@@ -1,6 +1,6 @@
 # 13 缓存、消息队列与幂等：读写放大之后的三件套
 
-> 详细程度：深入 · 约 45 分钟
+> 详细程度：深入 · 约 60 分钟
 > 材料：W04-1 W04-2 W06-3 W07-1 W07-2 W09-1 W09-2、C:go_frame/mq C:go_frame/lottery、旧长版 `notes/p6-capstone-dnsproxi.md`（dnsproxi 缓存部分）
 > 前置：10 分层与依赖注入，12 数据库
 
