@@ -32,8 +32,12 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: 安装 playwright（站点爬取验证用）
+        run: pip install playwright && python -m playwright install chromium --with-deps
       - name: docs:build（含 eslint/lint 链）
         run: pnpm run docs:build
+      - name: 站点真实验证（链接/子资源/mermaid/搜索索引）
+        run: python3 scripts/verify-site.py
       - name: go vet + test（-race，dnsproxi-go 单独 module）
         run: go vet ./... && go test -race -count=1 ./...
       - name: dnsproxi-go vet + test
