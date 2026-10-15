@@ -1,97 +1,216 @@
-# 23 部署与 Kubernetes
+# 23 部署与 Kubernetes：你描述要的状态，控制器负责逼近
 
 > 详细程度：速通 · 约 15 分钟
-> 材料：W03-1 W03-2、C:go_frame/k8s、K:krm-backend-第八章 K:krm-backend K:krm-frontend、旧章 `notes/p26-deploy.md`
+> 材料：W03-1 W03-2、C:go_frame/k8s、K:krm-backend-第八章 K:krm-backend K:krm-frontend · 旧长版：`notes/p26-deploy.md`
 > 前置：22 容器与 Linux 运行时
-> 说明：本节不启动集群，所有 YAML 与 kubectl 命令都没有在本机执行；能在本机验证的只有 Go 代码部分
+> 说明：本节不启动集群，YAML 与 kubectl 命令都出自材料，没有在本机执行；能在本机验证的只有 Go 代码
 
-## 这一节要建立的认知
+## 先看一个让人愣住的现象
 
-从 compose 到 Kubernetes，概念是同一套：组网、服务发现、启动顺序、资源限额。K8s 多出来的是**声明式**：你不写"启动三个容器"，只写"我要三个副本"，由控制器循环不断让现状向期望收敛。理解这一点，K8s 的所有对象（Deployment、Service、Ingress、HPA）都是同一个模式的变体。
-
-## 一、声明式与收敛
+删掉一个正在运行的 Pod，过几秒去看，又出现了一个新的。没人手动重启它。下面这个纯 Go 的模型不带任何 K8s 组件，只留这套行为的骨架。先读代码猜输出，再往下看。
 
 ```go
-func (c *Cluster) reconcile() {
-	for len(c.pods) < c.desired.Replicas { // 少了补
-		c.next++
-		c.pods[fmt.Sprintf("pod-%d", c.next)] = true
+package main
+
+import "fmt"
+
+var desired int // 期望副本数：来自你提交的 YAML
+var pods = map[string]bool{}
+var next int
+
+func reconcile() {
+	for len(pods) < desired { // 少了补
+		next++
+		pods[fmt.Sprintf("pod-%d", next)] = true
 	}
-	for len(c.pods) > c.desired.Replicas { // 多了删
-		for name := range c.pods {
-			delete(c.pods, name)
+	for len(pods) > desired { // 多了删
+		for name := range pods {
+			delete(pods, name)
 			break
 		}
 	}
 }
+
+func names() []string {
+	ns := make([]string, 0, len(pods))
+	for n := range pods {
+		ns = append(ns, n)
+	}
+	for i := 1; i < len(ns); i++ { // 排序只为输出稳定
+		for j := i; j > 0 && ns[j-1] > ns[j]; j-- {
+			ns[j-1], ns[j] = ns[j], ns[j-1]
+		}
+	}
+	return ns
+}
+
+func main() {
+	desired = 3
+	reconcile()
+	fmt.Println(names())
+	delete(pods, "pod-2") // 模拟 Pod 崩溃
+	fmt.Println(names())
+	reconcile() // 模拟控制器再跑一轮
+	fmt.Println(names())
+	desired = 5
+	reconcile()
+	fmt.Println(names())
+}
 ```
 
-我跑了一个纯 Go 的模型验证行为：期望 3 个副本时有 `pod-1 pod-2 pod-3`；`pod-2` 崩溃后只剩两个；再执行一次 reconcile，补出 `pod-4`；把期望改成 5，补到 5 个。真实的控制器同理，只是现状来自 API server，期望来自你提交的 YAML。资料里对应的一句话是：`kubectl apply` 让实际状态向配置收敛，多了删，少了加。〔W03-2 p23-24〕
+```text
+[pod-1 pod-2 pod-3]
+[pod-1 pod-3]
+[pod-1 pod-3 pod-4]
+[pod-1 pod-3 pod-4 pod-5 pod-6]
+```
 
-## 二、核心对象的关系
+`reconcile` 只干一件事：数一数现状和期望差多少，少了补，多了删。Pod 崩溃是"现状变了"，调大 `desired` 是"期望变了"，无论哪种，同一轮循环都会把差距抹平。真实的 K8s 就是这个模型的工程化：现状来自 API server，期望来自你提交的 YAML，`kubectl apply` 让实际状态向配置收敛，多了删，少了加。〔W03-2 p23-24〕这就是**声明式**：你不描述步骤，只描述结果，所以删除 Pod 会被自动补上，不是有人在监听删除事件，而是两份状态的差值永远在收敛。这一节看完，Deployment、Service、Ingress、HPA 你都会认出这是同一个模式。
 
-三个最小概念：Pod 是实例，Deployment 管 Pod 的数量（少了补多了删），Service 是逻辑服务入口（三个 Pod 对应一个 Service）。〔W03-2 p6〕Deployment 的三要素：`replicas`、`selector.matchLabels`（按标签筛 Pod）、`template`（Pod 模板）。`selector` 和 `template.metadata.labels` 必须一致，否则管不到自己创建的 Pod。〔W03-2 p19-21〕
+## 和你已知语言的差异
 
-| 对象 | 回答的问题 | 备注 |
+| 问题 | compose | K8s |
 |---|---|---|
-| Deployment | 要几个、用哪个镜像 | 不要直接创建 Pod |
-| Service | 集群内怎么找到它 | `port` 是 Service 自己的端口，`targetPort` 是 Pod 上的，`nodePort` 是集群外访问端口〔W03-2 p41〕 |
-| Ingress | 外部请求按路径或域名转发到哪个 Service | 只是规则，真正执行的是 ingress controller〔W03-2 p45-46〕 |
-| PV 与 PVC | 存储怎么撮合 | 存储侧声明有什么，容器侧声明要什么，K8s 撮合两者，典型的接口与实现分离〔W03-2 p28-32〕 |
-| HPA | 按 CPU 自动伸缩 | 前提是 Deployment 设了 `resources.requests.cpu`，并且集群装了 metrics-server〔C:go_frame/k8s/deploy/hpa-blog.yaml〕 |
+| 部署单位 | service，单机 | Pod（跑在哪个节点由调度器定） |
+| 谁保证数量 | 没人，崩了就没了 | Deployment 控制循环补齐 |
+| 服务发现 | 同网络里的服务名 | 同理：Service 名就是 DNS 名 |
+| 依赖顺序 | `depends_on` 加 `healthcheck` | InitContainer 加 readinessProbe |
+| 资源限额 | `cpus`、`mem_limit` | `resources.limits`（同一套 cgroup） |
+| 配置 | `environment` 写死在文件里 | ConfigMap 与 Secret，配置和镜像分离 |
 
-K8s 不再内置 Docker 之后镜像依然可用，因为 Docker 构建的是 OCI 标准镜像。〔W03-2 p22〕
+第二行是本质差异。compose 把你的声明翻译成一次性命令，执行完就退场；K8s 的控制器常驻，每轮循环都在对账。第四五行是同一概念的换皮，compose 玩透了再上集群，要背的只剩 API 语法（旧章 `notes/p26-deploy.md`）。
 
-## 三、应用代码要配合的几件事
+## 一、三个最小概念：Pod、Deployment、Service
 
-1. **配置按环境切换**：资料用 Go 的编译标签，`dev.go` 与 `k8s.go` 两个文件初始化同一个配置结构，`go build -tags=k8s` 选择；连接串里的主机名直接写 Service 名。〔W03-2 p51-52〕更常见的做法是环境变量加配置文件，思路相同：配置与镜像分离。
-2. **服务名当主机名**：compose 里的服务名和 K8s 的 Service 名都是集群内 DNS 名。容器里的 `127.0.0.1` 是它自己，把上游写成宿主机地址是第一次上容器时的常见失败。（旧章 `notes/p26-deploy.md` 的实测）
-3. **探针与限额**：22 节讲过，`readinessProbe` 决定要不要给它流量，`resources.limits` 就是 cgroup。
+材料给的最小集：Pod 是实例，Service 是逻辑上的服务，Deployment 管 Pod，少了就补、多了就删。一个 Web 应用部署三个实例，就是一个 Service 对应三个 Pod。〔W03-2 p6〕
 
-compose 与 K8s 的对应关系：
+三个概念怎么组合成一份能跑的配置？以材料里部署 webook 的例子看 Deployment 的骨架。〔W03-2 p16-17〕
 
-| compose | K8s |
-|---|---|
-| service | Deployment 加 Service |
-| `depends_on` 加 `healthcheck` | readinessProbe 加 InitContainer |
-| `cpus` 与 `mem_limit` | `resources.limits` |
-| `ports` | Service 或 Ingress |
-| `environment` | ConfigMap 与 Secret |
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webook
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: webook
+  template:
+    metadata:
+      labels:
+        app: webook
+    spec:
+      containers:
+        - name: webook
+          image: flycash/webook:v0.0.1
+          ports:
+            - containerPort: 8080
+```
 
-学习顺序建议：先把 compose 的四个面（组网、发现、顺序、限额）玩透，再背 API。（旧章 `notes/p26-deploy.md`，compose 实测未在本机复验）
+`spec` 三要素对应三个问题：〔W03-2 p19-21〕
 
-## 四、client-go 多集群后端：krm 项目
+1. **`replicas`**：要几个。这就是开头 `desired` 的 YAML 写法。
+2. **`selector`**：我怎么在一大堆 Pod 里认出哪些是我的。按标签筛，这里认 `app=webook`。
+3. **`template`**：每个 Pod 长什么样。Pod 里面跑的就是容器，可以跑多个。
 
-资料里的 krm 是一个 K8s 资源管理平台，后端 Gin 加 client-go，前端 Vue3。后端的结构值得记：
+注意 selector 和 template 的 labels 写了同一个键值。这不是巧合：Deployment 靠标签认领自己创建的 Pod，两边不一致，它创建出来的 Pod 自己都找不到，也就谈不上收敛。另外 `apiVersion` 决定 K8s 怎么解读这份配置，写错了 K8s 就不知道你是谁。〔W03-2 p18〕
 
-- **集群即 Secret**：新增集群时先用 kubeconfig 探活（能取到 `ServerVersion` 就是活的），再把 kubeconfig 存进 K8s 自己的 Secret，状态放 annotations，同时同步内存 map。用 K8s 存元数据，免了自己再配数据库。〔K:krm-backend-第八章/controllers/cluster/addOrUpdate.go:1-60〕
-- **统一请求结构**：`ClusterId`、`Namespace`、`Name`、`Item` 四元组，通用 CRUD 全部收口到一个 `KubeUtilser` 接口；十几类资源的 controller 同构，只是类型不同。〔K:krm-backend-第八章/controllers/controllers.go:20-100〕
-- **每请求现建 clientset**：按 `ClusterId` 查 kubeconfig，再创建 clientset。简单，但没有缓存连接，是它的明显可改进处。〔K:krm-backend-第八章/controllers/controllers.go:153-182〕
-- **薄分层**：路由、controller、kubeutils，没有 service 层；业务逻辑很薄。适合"透传 K8s API"的管理平台，不适合复杂业务。
-- 技术债：登出是空实现，服务端没有 token 黑名单；登录是直接对配置里的值做字符串比对（环境变量里存的是 md5 十六进制串，代码没有再做哈希或加盐）。〔K:krm-backend-第八章/controllers/auth/auth.go:15-69〕
+对比 22 节的 compose：`replicas: 3` 在 compose 里 Swarm 才认，纯 compose 没有控制器兜底；在 K8s 里它是一等公民，因为控制器常驻。
 
-前端有两个版本：`krm-frontend` 是基础版（集群、命名空间、节点、用户），`krm-backend` 目录里装的其实是完整的 Vue3 前端（加了资源创建表单、YAML 预览）。分工很清楚：**前端只传 `clusterId`，从不接触 kubeconfig**，所有集群凭据都留在后端。〔K:krm-backend/src/view/components/ClusterNamespaceSelector.vue:38-60〕
+## 二、Service：稳定的门牌，和三个端口
+
+Pod 会死会重生，名字（`pod-1`、`pod-4`……）一直在变，IP 也跟着变。直接连 Pod 是不可维护的。Service 把一组符合标签的 Pod 封装成一个稳定的逻辑入口。〔W03-2 p6〕〔W03-2 p23〕
+
+材料里部署 Redis 时用到了 Service 的三种端口，这是新手最容易混的地方：〔W03-2 p41〕
+
+- **`port`**：Service 自己的端口。集群内其他 Pod 连 `demo-redis-service:6379`，用的是它。
+- **`targetPort`**：转发目的地，Pod 容器上监听的端口。
+- **`nodePort`**：从集群**外**访问的端口，必须在 30000 到 32767 之间，比如 `redis-cli -p 31379`。〔W03-2 p40-42〕
+
+流量路径：外部请求先进 nodePort，转给 Service 的 port，再落到某个 Pod 的 targetPort。Service 的 `type: NodePort` 是为了外部访问；只给集群内部用 `ClusterIP` 就够了，22 节 compose 里的 `ports` 映射只给宿主机，集群内走服务名，这里同理。〔W03-2 p39〕
+
+顺带回答一个老问题：K8s 说不再内置 Docker 了，那我 Docker 构建的镜像还能用吗？能。Docker 实现的是 OCI 标准，镜像归标准管，不归 Docker 管。〔W03-2 p22〕
+
+## 三、Ingress、PV 与 PVC：规则与实现的分离
+
+**Ingress**：七层的路由规则，按域名或路径决定外部请求转给哪个 Service。和 Service 的 LoadBalancer 对比：Service 强调把流量转发到 Pod 上，Ingress 强调转发到不同的 Service 上。〔W03-2 p45〕Ingress 本身只是一份规则，真正执行的是 ingress controller。K8s 作为设计者只关心规则，谁来执行、怎么执行一概不管。〔W03-2 p46〕
+
+C 项目的实际清单就是这个形状：`/blog` 转给 `svc-blog`，`/lottery` 转给 `svc-lottery`，一个入口后面挂多个服务。〔C:go_frame/k8s/deploy/ingress-nginx.yaml:8-24〕
+
+**PV 与 PVC** 是同一思想的存储版。MySQL 要落盘，存储空间被抽象为 PersistentVolume。为什么拆成两个对象？因为作为 K8s 设计者，你既不知道容器里跑的是什么、需要怎么存，也管不了现实中有多少种硬盘和文件协议，只能提供一个抽象让具体实现去管。〔W03-2 p28〕于是：PersistentVolume 是**存储侧**声明我有什么特性，PersistentVolumeClaim 是**使用侧**声明我需要什么特性，K8s 负责撮合两者。〔W03-2 p31-32〕材料里叫 `mysql-pv-claim` 的对象声明了 `storage: 1Gi` 和 `accessModes: ReadWriteOnce`，一个声明方管理挂载点，另一个声明究竟挂的是什么。〔W03-2 p29-31〕这就是第 04 节"接口与实现分离"在基础设施层的翻版。`accessModes` 有三个取值：`ReadWriteOnce` 只能被单个 Pod 读写，`ReadOnlyMany` 多 Pod 只读，`ReadWriteMany` 多 Pod 读写。〔W03-2 p35〕
+
+**HPA**（自动伸缩）同样是规则与数据分离：目标 CPU 利用率是一条规则，数据来自 metrics-server。前提是 Deployment 设了 `resources.requests.cpu`，否则 HPA 无从计算比例，永远不会伸缩。〔C:go_frame/k8s/deploy/hpa-blog.yaml:1-14〕
+
+| 对象 | 回答的问题 | 谁执行 |
+|---|---|---|
+| Deployment | 要几个、用哪个镜像 | 控制循环 |
+| Service | 集群内怎么找到它 | kube-proxy 转发 |
+| Ingress | 按域名/路径转给哪个 Service | ingress controller |
+| PV 与 PVC | 存储怎么撮合 | 存储实现 |
+| HPA | 什么时候加副本 | metrics-server 供数 |
+
+## 四、应用代码要配合的几件事
+
+编排器再聪明，代码不配合也白搭。三件事：
+
+1. **配置按环境切换**。材料用的手法是 Go 编译标签：`dev.go` 和 `k8s.go` 两个文件初始化同一个配置结构体，k8s.go 上写 `//go:build k8s`，`go build -tags=k8s` 选择；连接串里的主机名直接写 Service 名（`webook-mysql:3308`），不是 IP。〔W03-2 p51-52〕更常见的做法是环境变量加配置文件，思路相同：配置与镜像分离，镜像一次构建，处处运行。
+2. **服务名当主机名**。compose 里的服务名和 K8s 的 Service 名都是集群内 DNS 名。容器里的 `127.0.0.1` 是容器自己，把依赖写成宿主机地址，是第一次上容器最常见的失败现场（旧章 `notes/p26-deploy.md`）。
+3. **探针与限额**。22 节讲过：`readinessProbe` 决定要不要给它流量，`resources.limits` 底下就是 cgroup，HPA 又依赖 `requests.cpu`。三处是同一个配置在不同层的回声。
+
+## 五、client-go 多集群后端：krm 项目
+
+K8s 自身的 API 是 HTTP，client-go 是它的 Go SDK。资料里的 krm 是一个 K8s 资源管理平台，后端 Gin 加 client-go，前端 Vue3。它演示了"用 K8s 管理 K8s"，几个结构值得记：〔K:krm-backend-第八章/controllers/cluster/addOrUpdate.go:1-60〕
+
+- **集群即 Secret**。新增集群时先用 kubeconfig 探活（能取到 `ServerVersion` 就是活的），再把 kubeconfig 存进 K8s 自己的 Secret，状态放 annotations，同时同步内存 map。用 K8s 存元数据，免了自己再配一个数据库。
+- **统一请求结构**。`ClusterId`、`Namespace`、`Name`、`Item` 四元组构成 `BasicInfo`，通用 CRUD 全部收口到一个 `KubeUtilser` 接口；十几类资源的 controller 同构，只是类型不同。〔K:krm-backend-第八章/controllers/controllers.go:17-31〕
+- **每请求现建 clientset**。按 `ClusterId` 查 kubeconfig，`RESTConfigFromKubeConfig` 再建 clientset。简单，但没有缓存连接，是它最明显的可改进处。〔K:krm-backend-第八章/controllers/controllers.go:145-178〕
+- **薄分层**。路由、controller、kubeutils，没有 service 层，业务逻辑很薄。适合"透传 K8s API"的管理平台，不适合复杂业务。
+- **技术债**。登出是空实现，服务端没有 token 黑名单；登录是直接对配置值做字符串比对（环境变量里存 md5 十六进制串，代码没有再做哈希或加盐）。〔K:krm-backend-第八章/controllers/auth/auth.go:30-57〕
+
+前端两个版本：`krm-frontend` 是基础版（集群、命名空间、节点、用户），`krm-backend` 目录里装的其实是完整 Vue3 前端（加了资源创建表单、YAML 预览）。分工很清楚：**前端只传 `clusterId`，从不接触 kubeconfig**，所有集群凭据都留在后端。〔K:krm-backend/src/view/components/ClusterNamespaceSelector.vue:40-60〕kubeconfig 等同于集群 root 权限，给到浏览器等于把集群交出去；C 项目的 kind 编排把 kubeconfig 类文件排除在课件提取之外，也是同一意识。
+
+本地想体验集群又不想买机器，材料用 kind：一个 Docker 容器模拟一个节点，`kind create cluster --config cluster-dqq.yaml` 起 1 控制面加 3 worker，本地构建的镜像用 `kind load docker-image` 灌进节点。〔C:go_frame/k8s/deploy/cluster-dqq.yaml:1-15〕注意 kind 集群与 HPA 压测在当时的联网环境没有真正跑起来，这部分只有静态阅读。
+
+## 小结
+
+1. K8s 是声明式系统：你提交期望，控制循环让现状向期望收敛，少了补，多了删。
+2. Pod 是实例，Deployment 管数量，靠 selector 认领；selector 与模板标签必须一致。
+3. Service 是稳定入口；`port` 是 Service 的，`targetPort` 是 Pod 的，`nodePort` 是集群外的。
+4. Ingress 只是一份路由规则，执行靠 ingress controller；PV 与 PVC 是存储侧与使用侧的分离声明。
+5. 应用代码配合三件事：配置与镜像分离、服务名当主机名、探针与限额。
+6. client-go 的套路：kubeconfig 建 clientset，API 都按（集群，命名空间，名字）定位资源。
 
 ## 常见坑
 
-1. `selector` 与 Pod 模板标签写得不一致，Deployment 找不到自己的 Pod。
-2. 把 `port`、`targetPort`、`nodePort` 混为一谈。
-3. 镜像依赖本地构建，节点上没有，`imagePullPolicy` 又拉不下来。
-4. HPA 没设 `requests.cpu`，永远不会伸缩。
-5. 容器里把依赖写成 `127.0.0.1`。
+1. `selector` 与 Pod 模板标签写得不一致，Deployment 找不到自己的 Pod，收敛无从谈起。
+2. 把 `port`、`targetPort`、`nodePort` 混为一谈；外部连不上先问自己走的是哪条路径。
+3. 镜像依赖本地构建，节点上没有，`imagePullPolicy` 又拉不下来；kind 场景要 `kind load` 先灌镜像。
+4. HPA 没设 `resources.requests.cpu`，永远不会伸缩。
+5. 容器里把依赖写成 `127.0.0.1`，连的是容器自己。
+6. 前端拿到 kubeconfig；等价于交出集群管理权。
 
-## 判断题
+## 判断题与答案
+
+先自己答，再看后面。
 
 1. 删掉一个 Pod，Deployment 会发生什么？为什么这叫声明式？
 2. Ingress 和 Service 的 LoadBalancer 分工有什么不同？
 3. 前端为什么不应该拿到 kubeconfig？
 
+**答案**
+
+1. 控制循环发现实际副本比 `replicas` 少一个，按模板补一个新的。声明式指系统维护的是"期望状态"这个事实，任何偏离都会被下一轮循环修正，不依赖有人监听删除事件。
+2. LoadBalancer 关注把流量从集群外引到一个 Service 再分给 Pod；Ingress 关注在多个 Service 之间按域名和路径做七层分发。层次不同：前者是四层入口，后者是七层路由。
+3. kubeconfig 包含集群的完整管理凭据，浏览器上的任何代码都可被读取；前端只需要传 `clusterId`，由后端持有凭据并代理请求。
+
 ## 在项目里
 
-这里没有现成例子：`dnsproxi-go` 目前没有 K8s 清单，只有旧章里的 `labs/compose` 编排。要把它搬上 K8s，对应关系见上面的映射表，比如 `DNS_UPSTREAM` 这类环境变量放进 ConfigMap，UDP 端口通过 Service 的 `protocol: UDP` 暴露。
+这里没有现成例子：`dnsproxi-go` 目前没有 K8s 清单，只有旧章里 `labs/compose` 的编排（`dnsproxi` 依赖 `httpkv` 的 healthcheck，`DNS_UPSTREAM: "upstream:15300"` 用服务名做主机名）。要搬上 K8s，按第三节的对应关系逐条换：`DNS_UPSTREAM` 这类环境变量放进 ConfigMap；UDP 监听端口用 Service 的 `protocol: UDP` 暴露；compose 的 `condition: service_healthy` 换成 readinessProbe 加 InitContainer。
 
 ## 想深入去哪查
 
-- 原材料：W03-2（K8s 入门、PV 与 PVC、Ingress）、`C:go_frame/k8s`（kind 编排、HPA、节点标签）、`K:krm-backend-第八章`（client-go 后端）、`K:krm-backend` 与 `K:krm-frontend`（前端）。
-- 旧长版：`notes/p26-deploy.md`。
+- 原材料：W03-2（K8s 入门、PV 与 PVC、Ingress）、C:go_frame/k8s（kind 编排、HPA、节点标签）、K:krm-backend-第八章（client-go 后端）、K:krm-backend 与 K:krm-frontend（前端）。
+- 旧长版：`notes/p26-deploy.md`（compose 四个面的实测）。
+- W03-1 的多实例 Session 与限流，属于部署引发的代码问题，在 13 与 16 节展开。
 - 资料里的 kind 集群与 HPA 压测，当时的环境联网受限，没有真正跑起来；这部分只有静态阅读。
