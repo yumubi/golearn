@@ -39,21 +39,32 @@ if not FAST:
     r = sh('pnpm run ci')
     rec('pnpm run ci', r.returncode == 0, (r.stdout + r.stderr)[-600:])
 
-# 2 notes → docs 镜像逐字节一致，且 docs 里没有孤儿章
-bad = []
-for n in sorted(glob.glob('notes/p*.md')):
-    d = 'docs/' + os.path.basename(n)
-    if not os.path.exists(d):
-        bad.append(f'{d} 缺失')
-        continue
-    src = open(n).read().split('\n', 1)[1]
-    dst = open(d).read().split('\n', 6)[6]
-    if src != dst:
-        bad.append(f'{d} 与 {n} 不一致')
-for d in glob.glob('docs/p*.md'):
-    if not os.path.exists('notes/' + os.path.basename(d)):
-        bad.append(f'{d} 无对应 notes')
-rec('docs 镜像逐字节一致', not bad, '; '.join(bad))
+# 2 notes → docs、guide/handbook → docs/handbook 镜像逐字节一致，且没有孤儿章
+def mirror_bad(src_glob, dst_dir, src_dir):
+    bad = []
+    for n in sorted(glob.glob(src_glob)):
+        d = dst_dir + '/' + os.path.basename(n)
+        if not os.path.exists(d):
+            bad.append(f'{d} 缺失')
+            continue
+        # 重建镜像应得到的完整文件（与 scripts/mirror.sh 同一格式）再整体比较
+        s = open(n).read()
+        # mirror.sh 格式：frontmatter、空行、h1、空行、原文去掉 h1 行
+        head, body = s.split('\n', 1)
+        expect = f'---\ntitle: {head[2:]}\n---\n\n{head}\n\n{body}'
+        got = open(d).read()
+        if got != expect:
+            bad.append(f'{d} 与 {n} 不一致')
+    # dnsproxi/index/table 是 docs 独有的手写页，不算孤儿
+    for d in glob.glob(dst_dir + '/*.md'):
+        if os.path.basename(d) in ('dnsproxi.md', 'index.md', 'table.md'):
+            continue
+        if not os.path.exists(src_dir + '/' + os.path.basename(d)):
+            bad.append(f'{d} 无对应正本')
+    return bad
+
+bad = mirror_bad('notes/p*.md', 'docs', 'notes') + mirror_bad('guide/handbook/*.md', 'docs/handbook', 'guide/handbook')
+rec('docs 镜像逐字节一致（notes + handbook）', not bad, '; '.join(bad))
 
 # 3 slop-lint：改动过的 md 必须 0 violations
 LINT = '/Users/akka/.agents/skills/no-slop/slop-lint.mjs'
