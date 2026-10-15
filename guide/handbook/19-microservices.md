@@ -117,7 +117,8 @@ func main() {
 
 ### gRPC 和普通 HTTP 接口差在哪
 
-材料介绍 gRPC 时说它"基于 QUIC 协议，还利用了 HTTP2 的双向流特性"。〔W10-1 p26〕这里要纠正一处：gRPC 的传输层是 **HTTP/2**，不是 QUIC。QUIC 是 HTTP/3 的传输层，gRPC 本体并不跑在上面；grpc-go 的 `internal/transport` 包里实现的是 http2 的客户端和服务端（我在本机模块缓存里确认过文件名 `http2_client.go`）。所以 gRPC 和你熟悉的 HTTP/JSON 接口，差别不在"一个走 HTTP 一个不走"，而在三件事：契约用 Protobuf IDL 描述并生成代码（本节后面展开）；消息体是二进制编码而不是文本 JSON〔W10-1 p32〕；HTTP/2 的多路复用和双向流让一条连接上能并发多个调用。Java 的 Spring MVC、TS 的 Express 默认是 HTTP/1.1 加 JSON 的请求响应形态，Rust 的 tonic 和 Java 的 grpc-java 同样基于 HTTP/2。
+材料介绍 gRPC 时说它"基于 QUIC 协议，还利用了 HTTP2 的双向流特性"。〔W10-1 p26〕这里要纠正一处：gRPC 的传输层是 **HTTP/2**，不是 QUIC。QUIC 是 HTTP/3 的传输层，gRPC 本体并不跑在上面；grpc-go 的 `internal/transport` 包里实现的是 http2 的客户端和服务端（我在本机模块缓存里确认过文件名 `http2_client.go`）。
+所以 gRPC 和你熟悉的 HTTP/JSON 接口，差别不在"一个走 HTTP 一个不走"，而在三件事：契约用 Protobuf IDL 描述并生成代码（本节后面展开）；消息体是二进制编码而不是文本 JSON〔W10-1 p32〕；HTTP/2 的多路复用和双向流让一条连接上能并发多个调用。Java 的 Spring MVC、TS 的 Express 默认是 HTTP/1.1 加 JSON 的请求响应形态，Rust 的 tonic 和 Java 的 grpc-java 同样基于 HTTP/2。
 
 ### Protobuf 的兼容性规则
 

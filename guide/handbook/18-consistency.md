@@ -218,7 +218,8 @@ func main() {
   操作序列: A-30; B+30; A-30; B+30; C-30(补偿); B-30(补偿); A+30(补偿)
 ```
 
-读失败路径的操作序列：A 扣 30、B 加 30，C 失败。补偿从 C 开始逆序执行，B、A 依次退回，A、B 回到失败路径开始前的 70 和 30，中间那段 A=40、B=60 的状态对外是可见的，这就是 SAGA"无隔离性"的含义。注意最后的 `C=-30`：这个示例里的 `call` 直接执行 `biz`，没有套上一节的 barrier，C 本来就没转入成功，它的补偿却照样执行，把 C 扣成了负数，这正是**空补偿**要拦的情形。换成 barrier 后，C 的 action 失败时事务回滚、不留记录，补偿到来时 barrier 发现 action 从没执行过，直接返回成功，C 保持 0。资料里完整的 SAGA 把调度交给 dtm：`NewSaga(...).Add(action, compensate, req).Submit()`。〔C:dachang/distributed_transaction/saga/ap/main.go:140-145〕
+读失败路径的操作序列：A 扣 30、B 加 30，C 失败。补偿从 C 开始逆序执行，B、A 依次退回，A、B 回到失败路径开始前的 70 和 30，中间那段 A=40、B=60 的状态对外是可见的，这就是 SAGA"无隔离性"的含义。注意最后的 `C=-30`：这个示例里的 `call` 直接执行 `biz`，没有套上一节的 barrier，C 本来就没转入成功，它的补偿却照样执行，把 C 扣成了负数，这正是**空补偿**要拦的情形。
+换成 barrier 后，C 的 action 失败时事务回滚、不留记录，补偿到来时 barrier 发现 action 从没执行过，直接返回成功，C 保持 0。资料里完整的 SAGA 把调度交给 dtm：`NewSaga(...).Add(action, compensate, req).Submit()`。〔C:dachang/distributed_transaction/saga/ap/main.go:140-145〕
 
 最后一个工程细节：分支里的"余额不能为负"要靠 SQL 原子条件，如 `update ... set balance=balance+? where user_id=? and balance+?>=0`，影响 0 行即余额不足或用户不存在；先 `select` 再 `update` 有并发窗口，两个请求会双双扣成负数。〔C:dachang/distributed_transaction/dao/bank_account.go:36-48〕
 

@@ -300,7 +300,8 @@ func traceMW(next http.Handler) http.Handler {
 {"level":"INFO","msg":"kv get","key":"a","req_id":"t-abc"}
 ```
 
-跨进程就是这个形状的翻版：出口把 ID 写进 header 或 gRPC metadata，入口的中间件取出来放回 ctx。〔自〕课程讲的是进程内靠 ctx 传〔W08-2 p10〕，跨进程的 Propagator 见 otel 初始化〔W08-2 p4〕。但 `context.WithValue` 传的数据**不会跨进程**，跨 RPC 必须放进 metadata 或 header。gRPC 的 metadata key 必须匹配 `[0-9a-z-_.]+`，大写不合法，HTTP header 没有这条限制。〔C:dachang/trace/open_trace/rpc_tracer/client/grpc_client.go:58〕课件注释里"`user_id` 只在本进程内使用"，说的就是这个边界。
+跨进程就是这个形状的翻版：出口把 ID 写进 header 或 gRPC metadata，入口的中间件取出来放回 ctx。〔自〕课程讲的是进程内靠 ctx 传〔W08-2 p10〕，跨进程的 Propagator 见 otel 初始化〔W08-2 p4〕。但 `context.WithValue` 传的数据**不会跨进程**，跨 RPC 必须放进 metadata 或 header。
+gRPC 的 metadata key 必须匹配 `[0-9a-z-_.]+`，大写不合法，HTTP header 没有这条限制。〔C:dachang/trace/open_trace/rpc_tracer/client/grpc_client.go:58〕课件注释里"`user_id` 只在本进程内使用"，说的就是这个边界。
 
 span 里的三类数据各有分工：Tag 侧重查询，Log 记录事件发生的时间点，Baggage 随 trace 传播给所有子孙 span，普通 Tag 和 Log 传不给后代。〔C:dachang/trace/open_trace/local_tracer.go:49-56〕span 之间的引用有两种：`ChildOf`（父依赖子的结果，例如等推荐服务返回）和 `FollowsFrom`（父不依赖子的结果，例如异步上报 UV）。〔C:dachang/trace/open_trace/local_tracer.go:68-77〕
 
