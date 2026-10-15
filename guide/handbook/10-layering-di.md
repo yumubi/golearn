@@ -1,81 +1,260 @@
 # 10 分层、依赖注入与配置：服务代码怎么长成可替换的零件
 
-> 详细程度：深入 · 约 35 分钟
-> 材料：W04-3 W05-3 W04-6 W02-2、C:go_frame/dependency_injection、旧长版 `notes/p5-deepsearch.md`
+> 详细程度：深入 · 约 45 分钟
+> 材料：W04-3 W05-3 W04-6 W02-2 W04-1、C:go_frame/dependency_injection、旧长版 `notes/p5-deepsearch.md`
 > 前置：04 接口与组合
 
-## 这一节要建立的认知
+## 先看一个奇怪的问题
 
-一个后端服务能不能长期演进，看三件事：**每一层只依赖抽象**（能换实现）、**依赖从外面传进来**（能装配）、**配置只在启动时读一次**（能换来源）。
-
-Go 社区在这三件事上的共识都偏"显式"：用接口隔离层，用构造函数传依赖，用 `main` 当装配车间。没有运行时容器，没有注解扫描。框架（wire、viper）只是帮你少写样板，不改变这个结构。
-
-## 和你已知语言的差异
-
-| 问题 | Java / Spring | Rust | Go |
-|---|---|---|---|
-| 依赖怎么进来 | `@Autowired`，运行期反射容器 | 手写构造 + 泛型或 `dyn Trait` | 构造函数参数；可选 wire 在编译期生成装配代码 |
-| 谁来定义接口 | 常在提供方 | 常在提供方 | 惯例在使用方，见 04 节 |
-| 配置来源合并 | `application.yml` + profile + `@ConfigurationProperties` | config-rs 多源合并 | viper 多源合并，`UnmarshalKey` 整体绑定到结构体 |
-| 横切逻辑（限流、重试） | AOP、`@Retryable` | tower `Layer` | 装饰器：同接口包一层 |
-
-## 一、分层：每一层只管一件事
-
-课程里的 webook 后端用四层：web（只管 HTTP）、service（业务逻辑）、repository（存储抽象）、dao（数据库操作）。repository 是整体存储抽象，下面可以是 MySQL、ES 或 MongoDB，dao 只代表数据库。调用链是 web 调 service，service 调 repository，repository 调 dao。〔W02-2 p14-15〕〔W02-2 p16-17〕
-
-两个容易被忽略的细节：
-
-- **领域对象和数据库行分开定义**。`domain.User` 是业务概念，`dao.User` 直接映射表列，在 repository 里互相转换。表结构变了，不会一路波及到 service。〔W02-2 p20〕
-- **缓存放在 repository 层**。缓存属于"如何存数据"，service 对它无感知。构造函数同时收 dao 和 cache 两个依赖。〔W04-1 p16〕
-
-下面是一个能跑的最小骨架，分层靠接口，依赖靠参数：
+下面这个 `UserService.Login` 的函数体里，没有任何一行连数据库、查缓存的代码，只有一句 `s.repo.FindByPhone`。可是它既能登录 MySQL 里的用户，也能登录内存里的用户，还能在测试里登录一个假仓库。先自己想想它到底是怎么知道"该问谁"的。
 
 ```go
+package main
+
+import "fmt"
+
 type UserRepo interface {
-	FindByPhone(ctx context.Context, phone string) (User, error)
+	FindByPhone(phone string) (id int64, err error)
+}
+
+type MySQLRepo struct{}
+
+func (MySQLRepo) FindByPhone(phone string) (int64, error) { return 42, nil }
+
+type MemRepo struct{}
+
+func (MemRepo) FindByPhone(phone string) (int64, error) {
+	return 0, fmt.Errorf("memory repo: user %s not found", phone)
 }
 
 type UserService struct{ repo UserRepo }
 
-func NewUserService(repo UserRepo) *UserService { return &UserService{repo: repo} }
+func (s UserService) Login(phone string) (int64, error) {
+	id, err := s.repo.FindByPhone(phone)
+	if err != nil {
+		return 0, fmt.Errorf("login: %w", err)
+	}
+	return id, nil
+}
 
-func (s *UserService) Login(ctx context.Context, phone string) (int64, error) {
-	u, err := s.repo.FindByPhone(ctx, phone)
+func main() {
+	mysql := UserService{repo: MySQLRepo{}}
+	mem := UserService{repo: MemRepo{}}
+
+	id, err := mysql.Login("138")
+	fmt.Println("mysql:", id, err)
+	id, err = mem.Login("138")
+	fmt.Println("mem:", id, err)
+}
+```
+
+```text
+mysql: 42 <nil>
+mem: 0 login: memory repo: user 138 not found
+```
+
+同一个 `Login` 方法，一行没改，注入 `MySQLRepo` 就返回 42，注入 `MemRepo` 就返回"查不到"。答案只有两个字：**注入**。`Login` 不关心 `repo` 到底是谁，它只声明"我需要一个能按手机号查用户的东西"；具体是谁，由调用方在构造 `UserService` 的时候决定。
+
+把"依赖"从"函数里自己 new"改成"从外面传进来"，就是 Go 社区做依赖注入的全部手法。没有运行期容器，没有注解扫描，依赖就是构造函数参数，装配就写在 `main` 里。这一节从这里往下讲五件事：分层、面向接口、依赖注入、装饰器、配置。合起来回答一个问题：一个后端服务怎么长成可替换的零件。
+
+## 和你已知语言的差异
+
+| 问题 | Java / Spring | Rust | TS / JS | Go |
+|---|---|---|---|---|
+| 依赖怎么进来 | `@Autowired`，运行期反射容器 | 手写构造 + 泛型或 `dyn Trait` | NestJS / InversifyJS 容器 | 构造函数参数；可选 wire 在编译期生成装配代码 |
+| 谁来定义接口 | 常在提供方 | 常在提供方 | 使用方或提供方 | 惯例在使用方，见 04 节 |
+| 配置来源合并 | `application.yml` + profile + `@ConfigurationProperties` | config-rs 多源合并 | dotenv + `process.env` | viper 多源合并，`UnmarshalKey` 整体绑定到结构体 |
+| 横切逻辑（限流、重试） | AOP、`@Retryable` | tower `Layer` | NestJS 装饰器 / 中间件 | 装饰器：同接口包一层 |
+
+表里最反直觉的是第一行：Java 程序员习惯了 `@Autowired` 这种"看不见的装配"，Go 里装配是**看得见的**，就在 `main` 函数里几十行，谁依赖谁一眼能读出来。wire 之类的工具只是帮你少写样板，不改变"显式装配"这个结构。
+
+## 一、分层：每一层只管一件事
+
+为什么不能把增删改查直接写在 Handler 里？回到 04 节的接口原则：Handler 只负责和 HTTP 有关的东西，数据库属于另一种职责。〔W02-2 p14〕把两者混在同一个函数里，改表结构就要改 HTTP 代码，换数据库也要改 HTTP 代码，两件事互相咬死。所以要引入一个"代表数据库抽象的东西"。
+
+课程里的 webook 后端用四层。〔W02-2 p15〕
+
+- **web**：只管 HTTP，接收请求、校验参数、返回响应。
+- **service**：领域服务，代表一个业务的完整处理过程。
+- **repository**：存储抽象，代表"数据存在哪"这件事本身。
+- **dao**：数据库操作，具体和某一种数据库打交道。
+
+其中 repository 和 dao 最容易混。区分的关键在 repository 的定位：它是**整体存储抽象**，下面可以是 MySQL、ElasticSearch 或 MongoDB；dao 只代表"数据库"这一种实现。〔W02-2 p16〕所以一个 repository 可能组合一个 dao，也可能组合一个搜索引擎客户端，dao 只是其中一种可能的底座。
+
+调用链是固定的：web 调 service，service 调 repository，repository 调 dao。〔W02-2 p17〕每一层只能看到紧挨着它的下一层，跨层是禁止的。
+
+下面是一个能跑的最小骨架。注意两个细节，一个在类型上，一个在装配上：
+
+- **领域对象和数据库行分开定义**。`domain.User` 是业务概念，`dao.UserRow` 直接映射表行，两者在 repository 里互相转换。表结构变了，只会波及 dao 和 repository 的转换代码，不会一路烧到 service。〔W02-2 p20〕
+- **缓存放在 repository 层**。缓存属于"如何存数据"的范畴，service 对它无感知，构造函数同时收 dao 和 cache 两个依赖。〔W04-1 p16〕
+
+```go
+package main
+
+import "fmt"
+
+// domain：业务概念，只有业务关心的字段
+type User struct {
+	ID    int64
+	Phone string
+}
+
+// dao：直接映射表行，带存储细节
+type UserRow struct {
+	ID           int64
+	Phone        string
+	PasswordHash string
+}
+
+type UserDAO struct {
+	rows map[string]UserRow
+}
+
+func NewUserDAO() *UserDAO {
+	return &UserDAO{rows: map[string]UserRow{
+		"138": {ID: 7, Phone: "138", PasswordHash: "sha256:abc"},
+	}}
+}
+
+func (d *UserDAO) FindByPhone(phone string) (UserRow, error) {
+	row, ok := d.rows[phone]
+	if !ok {
+		return UserRow{}, fmt.Errorf("dao: not found")
+	}
+	return row, nil
+}
+
+type UserCache struct {
+	m map[string]User
+}
+
+func NewUserCache() *UserCache { return &UserCache{m: map[string]User{}} }
+
+// repository：整体存储抽象，缓存属于这里，负责 dao.UserRow -> domain.User
+type UserRepository struct {
+	dao   *UserDAO
+	cache *UserCache
+}
+
+func NewUserRepository(dao *UserDAO, cache *UserCache) *UserRepository {
+	return &UserRepository{dao: dao, cache: cache}
+}
+
+func (r *UserRepository) FindByPhone(phone string) (User, error) {
+	if u, ok := r.cache.m[phone]; ok {
+		fmt.Println("repository: cache hit")
+		return u, nil
+	}
+	fmt.Println("repository: cache miss, read dao")
+	row, err := r.dao.FindByPhone(phone)
+	if err != nil {
+		return User{}, err
+	}
+	u := User{ID: row.ID, Phone: row.Phone} // 丢掉 PasswordHash
+	r.cache.m[phone] = u
+	return u, nil
+}
+
+// service：业务过程，对缓存、表结构无感知
+type UserService struct{ repo *UserRepository }
+
+func NewUserService(repo *UserRepository) *UserService { return &UserService{repo: repo} }
+
+func (s *UserService) Login(phone string) (int64, error) {
+	u, err := s.repo.FindByPhone(phone)
 	if err != nil {
 		return 0, fmt.Errorf("login: %w", err)
 	}
 	return u.ID, nil
 }
+
+// web：HTTP 层，这里用一个普通函数代替 handler
+type Handler struct{ svc *UserService }
+
+func NewHandler(svc *UserService) *Handler { return &Handler{svc: svc} }
+
+func (h *Handler) HandleLogin(phone string) {
+	id, err := h.svc.Login(phone)
+	fmt.Println("login result:", id, err)
+}
+
+func main() {
+	// 自底向上装配
+	dao := NewUserDAO()
+	cache := NewUserCache()
+	repo := NewUserRepository(dao, cache)
+	svc := NewUserService(repo)
+	h := NewHandler(svc)
+
+	h.HandleLogin("138") // 第一次：查 dao，回写缓存
+	h.HandleLogin("138") // 第二次：命中缓存，不再碰 dao
+}
 ```
 
-装配永远是自底向上：先 new 最底层（连接、缓存），再 new repository，再 service，最后 handler 和路由。这就是课程说的"初始化七步链"。〔W04-3 p4〕
+```text
+repository: cache miss, read dao
+login result: 7 <nil>
+repository: cache hit
+login result: 7 <nil>
+```
+
+〔实测〕`go run .` 跑出上面的输出：第一次 `cache miss` 走 dao，第二次 `cache hit` 不再碰 dao，而 `Login` 和 `HandleLogin` 两层的代码对此毫无感知。注意 `dao.UserRow` 里的 `PasswordHash` 在转换时被丢掉了，`domain.User` 根本不带这个字段，这就是"表结构不影响业务"的具体含义。
+
+装配永远是**自底向上**：先 new 最底层（连接、缓存），再 new repository，再 service，最后 handler 和路由。这就是课程说的"初始化七步链"。〔W04-3 p4〕上面 `main` 里的五行就是它的迷你版。这个顺序是硬约束：上面的层需要下面的实例，所以下面必须先生成。
 
 ## 二、面向接口：收益只有扩展性
 
-课程的定义很朴素：组件之间通信必须通过接口，再配合依赖注入，就是"编译时依赖接口，初始化时注入实现"。〔W04-3 p24〕它也直说了代价和收益：**不提高性能，也不提高可靠性，收益只有扩展性**。〔W04-3 p27〕
+分层解决"职责放哪"，接口解决"怎么替换"。课程给面向接口的定义很朴素：组件与组件之间的通信必须通过接口；再配合依赖注入，就是"编译时依赖接口，初始化时注入实现"。〔W04-3 p24〕
 
-所以不是处处抽接口，课程给的判断很实用：
+先看反面。直接依赖具体类型会发生什么：
 
-1. **自底向上抽**：缓存和 DAO 在最底部、不依赖别人，先抽。〔W04-3 p28-30〕
-2. **看变化点**：非主流第三方（短信、对象存储）要考虑替换；MySQL、Redis 这种主流的可以忽略。〔W04-3 p36〕
-3. **handler 不抽接口**：没有人调用它的方法，也看不到需要不同实现的地方，就先不留；注册路由虽然也算用了，可以推迟到将来再抽。〔W04-3 p32〕
-4. **超前设计最小化**：只留接口，不写多余实现；抽象时只考虑有限的几种情况，别想太长远。〔W04-3 p35〕
+```go fail
+package main
 
-一个和 Go 惯例冲突的地方要记住：wire 场景里构造函数最好返回接口（配合 `wire.Bind` 做类型匹配），而 Go 社区的惯例是"接受接口，返回结构体"。课程原话是：`NewXXX` 最好返回接口，Go 的推荐做法是返回具体类型，这和 wire 是冲突的；用 wire 就按类型匹配办事，不用就回到惯例。〔W04-3 p33〕
+import (
+	"bytes"
+	"os"
+)
+
+func Save(f *os.File, data []byte) error {
+	_, err := f.Write(data)
+	return err
+}
+
+func main() {
+	var buf bytes.Buffer
+	_ = Save(&buf, []byte("x"))
+}
+```
+
+```text
+cannot use &buf (value of type *bytes.Buffer) as *os.File value in argument to Save
+```
+
+`bytes.Buffer` 明明有 `Write` 方法，却传不进 `Save`，因为签名把参数锁死成 `*os.File`。这就是"依赖具体类型"的代价：只能写文件，不能写内存、不能写网络，测试也起不了真实文件。签名改成 `io.Writer`（04 节的写法）这些问题一次消失。
+
+但接口不是免费的。课程把收益和代价都讲透了：**面向接口不提高性能，也不提高可靠性，收益只有扩展性**。〔W04-3 p27〕也就是说，它纯粹是为了将来能换实现。既然如此，就不能处处抽接口，要看准了再抽。课程给了四条判断：
+
+1. **自底向上抽**。缓存和 DAO 位于最底部、不依赖别的类型，先抽它们。〔W04-3 p28-30〕
+2. **看变化点**。非主流第三方（短信、对象存储）要考虑替换；MySQL、Redis 这种主流的可以忽略。〔W04-3 p36〕
+3. **handler 不抽接口**。没有人调用它的方法，也看不到需要不同实现的地方，就先不留；注册路由虽然也算用了它，可以推迟到将来再抽。〔W04-3 p32〕
+4. **超前设计最小化**。只留接口，不写多余实现；抽象时只考虑有限的几种情况，别想太长远。〔W04-3 p35〕
+
+一个和 Go 惯例冲突的地方要专门记住：wire 场景里构造函数最好返回接口（配合 `wire.Bind` 做类型匹配），而 Go 社区的惯例是"接受接口，返回结构体"。课程原话是：`NewXXX` 最好返回接口，Go 的推荐做法是返回具体类型，这和 wire 是冲突的；用 wire 就按类型匹配办事，不用就回到惯例。〔W04-3 p33〕
 
 ## 三、依赖注入：手写够用，wire 是省样板
 
-依赖注入有两种形式：外部把实现传进来（注入），或 A 自己去找可用的 B（查找）。共同点是 A 不自己初始化 B。〔W04-3 p10〕Go 里主流是前者，即构造函数参数。
+依赖注入是控制反转（IoC）的一种实现，另一种是依赖查找。它们的共同点是：A 不自己初始化 B。区别在于 B 怎么到 A 手里：外面把实现传进来，叫注入；A 自己去找可用的 B，叫查找。〔W04-3 p10〕Go 里主流是前者，落地就是构造函数参数。
 
-不注入的写法有哪些问题，课程列得很清楚：初始化过程和依赖深度耦合、要额外定义 Config 类型、依赖变更要跟着改、测试不友好、公共客户端难复用。〔W04-3 p5-6〕
+不注入的写法问题很大。要 `gorm.Open` 一个库、`redis.NewClient` 一个连接，Repository 就得知道 DAO 和 Cache 怎么初始化，于是：初始化过程和依赖深度耦合、要额外定义 Config 类型传配置、依赖变更跟着改、测试不友好、公共客户端难复用。〔W04-3 p5-6〕
 
 ### 手写装配
 
-`main` 是装配车间，一个服务通常就是几十行。资源关闭也要成对考虑：每个创建连接的函数，同时返回一个 cleanup 闭包，`main` 里按相反顺序执行。〔C:go_frame/dependency_injection/main.go:22-32〕
+`main` 就是装配车间，一个服务通常几十行。资源关闭也要成对考虑：每个创建连接的函数同时返回一个 cleanup 闭包，`main` 里按相反顺序执行。〔C:go_frame/dependency_injection/main.go:22-32〕先创建的后关闭，保证没有连接被漏掉。
 
 ### wire：编译期生成装配代码
 
-wire 的模型只有三个词：**Provider**（构造函数的集合）、**Bind**（接口到实现的映射）、**Injector**（要生成的入口函数）。你写一个带 `wireinject` 构建标签的文件，里面是 `wire.Build(...)`，运行 `wire` 命令后生成真正的 `wire_gen.go`。〔W04-3 p7-8〕
+wire 的模型只有三个词：**Provider**（构造函数的集合）、**Bind**（接口到实现的映射）、**Injector**（要生成的入口函数）。你写一个带 `wireinject` 构建标签的文件，里面是 `wire.Build(...)`，运行 `wire` 命令后生成真正的 `wire_gen.go`。〔W04-3 p7-8〕下面是课程仓库里的真实片段：
 
 〔C:go_frame/dependency_injection/wire/provider_injector.go:20-39〕
 
@@ -93,42 +272,70 @@ wire.Build(service.SvrSet, handler.HdlSet, database.DbSet)
 - 返回值里的 `func()` 被识别为 cleanup，所有依赖的 cleanup 会**按顺序合并**进 injector 的第二个返回值。〔C:go_frame/dependency_injection/wire/provider_injector.go:36-39〕
 - 生成物是普通 Go 代码，运行期零反射。代价是改了构造函数就要重新跑 `wire`，忘了就会编译失败或用旧装配。
 
-wire 的缺陷课程也点名了：**不能按环境选不同实现**（要自己在函数体里写条件）、**找不到某接口的所有实现**、**找不到某类型的所有实例**（gin 中间件只能手写列表）。结论是"矮子里拔将军"：好处是清晰、可控、比手写装配快。〔W04-3 p17-19〕〔W04-3 p20-21〕wire 不支持单例，重复调用同一个初始化函数会得到多个实例，需要单例要在构造函数里自己用 `sync.Once`。〔W04-3 p9〕〔C:go_frame/dependency_injection/database/gorm/connection.go:14-31〕
+wire 的缺陷课程也点名了：**不能按环境选不同实现**（要自己在函数体里写条件）、**找不到某接口的所有实现**、**找不到某类型的所有实例**（gin 中间件只能手写列表）。结论是"矮子里拔将军"：好处是清晰、可控、比手写装配快。〔W04-3 p17-19〕〔W04-3 p20-21〕wire 不支持单例，重复调用同一个初始化函数会得到多个实例，需要单例就在构造函数里自己用 `sync.Once`。〔W04-3 p9〕〔C:go_frame/dependency_injection/database/gorm/connection.go:14-31〕
 
-另一条路是运行时容器（`notes/p5-deepsearch.md` 与 `exercises/p5deep` 的 `TestProvideInvoke`）：灵活但出错晚，wire 严格但要多一步生成。
+另一条路是运行时容器：`notes/p5-deepsearch.md` 里的 `di` 包用 `reflect.TypeFor[T]()` 当 map key、`Invoke` 时惰性构造，`exercises/p5deep` 的 `TestProvideInvoke` 验证了它的单例语义。运行时容器灵活但出错晚（缺依赖在第一次 `Invoke` 才报），wire 严格但要多一步生成。两条路的取舍在"想深入去哪查"里可以继续追。
 
 ## 四、装饰器：横切逻辑不要侵入业务
 
-短信服务要加限流。第一反应是直接改 `Send`，课程明确反对：别的服务商也要限流、类似功能都得改，越改越难看；功能没错，可扩展性和非侵入性全错。〔W04-6 p9〕
+短信服务要加限流。第一反应是直接改 `Send` 方法，课程明确反对：别的服务商也要限流、类似功能都得改，越改越难看；功能没错，可扩展性和非侵入性全错。〔W04-6 p9〕
 
-正解是装饰器：不改原实现，在外面包一层同接口的对象，可以层层叠加，被装饰者作为依赖注入，装饰器只做一件事。〔W04-6 p10-12〕
+正解是装饰器：不改原实现，在外面包一层同接口的对象，可以层层叠加，被装饰者作为依赖注入，装饰器只做一件事。〔W04-6 p10-12〕下面把限流和 failover 两个装饰器叠在一起：
 
 ```go
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync/atomic"
+)
+
+type Sender interface {
+	Send(ctx context.Context, to, msg string) error
+}
+
+type provider struct {
+	name string
+	err  error
+}
+
+func (p provider) Send(ctx context.Context, to, msg string) error {
+	if p.err != nil {
+		return p.err
+	}
+	fmt.Printf("%s -> %s: %s\n", p.name, to, msg)
+	return nil
+}
+
+type Limiter interface {
+	Limit(key string) bool
+}
+
+type fixedLimiter struct{ on bool }
+
+func (l fixedLimiter) Limit(key string) bool { return l.on }
+
+var errLimited = errors.New("limited")
+
 type RateLimitSender struct {
 	next    Sender
 	limiter Limiter
 }
 
 func (r RateLimitSender) Send(ctx context.Context, to, msg string) error {
-	limited, err := r.limiter.Limit(ctx, "sms")
-	if err != nil {
-		return fmt.Errorf("limiter: %w", err)
-	}
-	if limited {
+	if r.limiter.Limit("sms") {
 		return errLimited
 	}
 	return r.next.Send(ctx, to, msg)
 }
-```
 
-两个细节：
+type Failover struct {
+	svcs []Sender
+	idx  atomic.Uint64
+}
 
-1. 触发限流返回的 `errLimited` **保持非导出**。这是内部治理信号，暴露成公开错误会被上游当业务错误处理，到逼不得已再公开。〔W04-6 p12〕
-2. 装饰器里内嵌被装饰接口可以只实现部分方法，但调用方能直接访问内嵌字段绕开装饰器；非内嵌版必须实现全部方法，但绕不开。要拦截全部调用就选后者。〔W04-6 p15〕
-
-同样的手法做**容错**。failover 把多个服务商包成一个 `Sender`：起始下标用原子计数轮询（避免所有请求都砸在第一个），失败换下一个，全部失败才报错。其中有一条重要纪律：**超时和取消直接返回，不再重试**，继续重试只会浪费配额并拖垮体验。〔W04-6 p25-26〕
-
-```go
 func (f *Failover) Send(ctx context.Context, to, msg string) error {
 	start := f.idx.Add(1) - 1
 	n := uint64(len(f.svcs))
@@ -143,17 +350,48 @@ func (f *Failover) Send(ctx context.Context, to, msg string) error {
 	}
 	return errors.New("all providers failed")
 }
+
+func main() {
+	a := provider{name: "A", err: errors.New("A down")}
+	b := provider{name: "B"}
+
+	send := func(s Sender, to, msg string) {
+		fmt.Println(s.Send(context.Background(), to, msg))
+	}
+
+	// 场景1：A 挂了，failover 自动换 B
+	send(&Failover{svcs: []Sender{a, b}}, "138", "code 111")
+
+	// 场景2：超时直接返回，不再重试 B
+	t := provider{name: "T", err: context.DeadlineExceeded}
+	send(&Failover{svcs: []Sender{t, b}}, "138", "code 222")
+
+	// 场景3：限流装饰器挡在前面，任何服务商都不碰
+	send(RateLimitSender{next: &Failover{svcs: []Sender{a, b}}, limiter: fixedLimiter{on: true}}, "138", "code 333")
+}
 ```
 
-组合起来是 `RateLimitSender{next: &Failover{...}}`：先限流，再 failover，业务代码一行不变。〔实测〕这几段在 `go1.26.4` 上一起编译运行，限流关闭时第一家服务商返回 `EOF` 后自动换到第二家成功，限流打开时直接返回 `limited`。
+```text
+B -> 138: code 111
+<nil>
+context deadline exceeded
+limited
+```
 
-健康判定（连续 N 次超时就切换服务商）用原子 CAS 实现，并发下是近似的，换来无锁。〔W04-6 p28-30〕要记住的通则：无并发控制的操作都不是并发安全的，mock 测不出并发问题。〔W04-6 p31-32〕
+〔实测〕`go run .` 跑出上面的输出。场景 1：A 返回错误，failover 自动换到 B 成功。场景 2：第一家返回 `DeadlineExceeded`，failover **直接返回，不再重试** B。场景 3：限流装饰器挡在最前面，返回 `limited`，任何服务商都没被调用。组合起来就是 `RateLimitSender{next: &Failover{...}}`：先限流，再 failover，业务代码一行不改。
+
+读这个例子有四个细节要抠：
+
+1. 触发限流返回的 `errLimited` **保持非导出**。这是内部治理信号，暴露成公开错误会被上游当业务错误处理，到逼不得已再公开。〔W04-6 p12〕
+2. 装饰器里内嵌被装饰接口可以只实现部分方法，但调用方能直接访问内嵌字段绕开装饰器；非内嵌版必须实现全部方法，但绕不开。要拦截全部调用就选后者。〔W04-6 p15〕
+3. failover 的起始下标用原子计数轮询（`idx.Add(1) - 1`），避免所有请求都砸在第一个服务商；失败换下一个，全部失败才报错。其中一条重要纪律是**超时和取消直接返回，不再重试**：继续重试只会浪费配额并拖垮体验。〔W04-6 p25-26〕
+4. 健康判定（连续 N 次超时就切换服务商）用原子 CAS 实现，并发下是近似的，换来无锁。〔W04-6 p28-30〕要记住的通则：无并发控制的操作都不是并发安全的，mock 测不出并发问题。〔W04-6 p31-32〕
 
 超时、重试、限流这类治理逻辑的位置就是装饰器这一层，或者 gRPC 的拦截器、HTTP 的中间件。它们都是同一个模式（见 04 节）。
 
 ## 五、配置：来源、优先级、整体绑定
 
-配置有四类来源：启动参数、环境变量、配置文件、远程配置中心。课程给的是一套个人实践：命令行最权威，然后是环境变量、配置文件、远程中心。〔W05-3 p4〕〔W05-3 p5-6〕优先级没有行业标准，K8s 场景常把挂载的 ConfigMap 放得更高，团队内一致即可。
+配置有四类来源：启动参数、环境变量、配置文件、远程配置中心。〔W05-3 p4〕当多个来源同时给出同一个配置项，用哪个？这取决于你认为哪个来源更"权威"。课程给的是个人实践：命令行最权威，然后是环境变量、配置文件、远程中心。〔W05-3 p5-6〕优先级没有行业标准，K8s 场景常把挂载的 ConfigMap 放得更高，团队内一致即可。
 
 几条实用的纪律：
 
@@ -165,15 +403,29 @@ func (f *Failover) Send(ctx context.Context, to, msg string) error {
 用标准库演示"默认值 → 文件 → 环境变量 → 命令行"的覆盖链：
 
 ```go
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+)
+
+type Config struct {
+	Addr string
+	DSN  string
+}
+
 func Load(args []string, getenv func(string) string, file []byte) (Config, error) {
-	cfg := Config{Addr: ":8080", DB: DB{DSN: "root:root@tcp(localhost:3306)/webook"}}
+	// 默认值写在业务代码里
+	cfg := Config{Addr: ":8080", DSN: "root:root@tcp(localhost:3306)/webook"}
 	if len(file) > 0 {
 		if err := json.Unmarshal(file, &cfg); err != nil {
 			return cfg, err
 		}
 	}
 	if v := getenv("APP_DB_DSN"); v != "" {
-		cfg.DB.DSN = v
+		cfg.DSN = v
 	}
 	fs := flag.NewFlagSet("app", flag.ContinueOnError)
 	addr := fs.String("addr", "", "listen addr")
@@ -185,26 +437,72 @@ func Load(args []string, getenv func(string) string, file []byte) (Config, error
 	}
 	return cfg, nil
 }
+
+func getenv(val string) func(string) string {
+	return func(k string) string {
+		if k == "APP_DB_DSN" {
+			return val
+		}
+		return ""
+	}
+}
+
+func main() {
+	file := []byte(`{"dsn":"file-dsn"}`)
+
+	cfg, _ := Load([]string{"--addr=:9000"}, getenv("env-dsn"), file)
+	fmt.Printf("%+v\n", cfg) // 命令行 > 环境变量 > 文件 > 默认
+
+	cfg, _ = Load(nil, getenv(""), file)
+	fmt.Printf("%+v\n", cfg) // 只有文件覆盖
+
+	cfg, _ = Load(nil, getenv(""), nil)
+	fmt.Printf("%+v\n", cfg) // 纯默认
+}
 ```
 
-〔实测〕传入文件 `{"db":{"dsn":"file-dsn"}}`、环境变量 `APP_DB_DSN=env-dsn` 和参数 `--addr=:9000`，输出 `{Addr::9000 DB:{DSN:env-dsn}}`；去掉环境变量和参数后输出 `{Addr::8080 DB:{DSN:file-dsn}}`。把 `getenv` 作为参数传进来，是为了让它不依赖进程环境，可以直接单测。
+```text
+{Addr::9000 DSN:env-dsn}
+{Addr::8080 DSN:file-dsn}
+{Addr::8080 DSN:root:root@tcp(localhost:3306)/webook}
+```
+
+〔实测〕`go run .` 跑出上面三行：命令行和环境变量同时存在时，`Addr` 取命令行、`DSN` 取环境变量；只有文件时取文件；都没有时回到默认。把 `getenv` 作为参数传进来，是为了让它不依赖进程环境，可以直接单测。这是纯标准库版本；viper 做的事一样，只是把四种来源和 `UnmarshalKey` 都封装好了。
 
 远程配置中心是"配置文件不够灵活"之后的选择：需要加解密、权限控制、实时更新。〔W05-3 p20〕最典型的用途是**功能开关**，某个功能出问题立刻改配置关掉；但开关有时延和误触风险，关键开关要有权限与审批。〔W05-3 p25〕
+
+## 小结
+
+1. 四层各自管一件事：web 只管 HTTP，service 管业务，repository 管存储抽象，dao 管数据库；调用链 web → service → repository → dao。
+2. 领域对象和数据库行分开定义，在 repository 里转换；缓存属于 repository 层，service 无感知。
+3. 面向接口的收益只有扩展性；自底向上抽、看变化点、handler 不抽、超前设计最小化。
+4. 依赖注入就是构造函数参数，`main` 是装配车间，自底向上；wire 只省样板，三件套是 Provider、Bind、Injector。
+5. 装饰器是横切逻辑的正解：同接口包一层，被装饰者注入，可层层叠加；failover 里超时和取消直接返回不重试。
+6. 配置四来源，优先级命令行 > 环境变量 > 文件 > 远程；整体绑定、默认值留业务代码、只在初始化读。
 
 ## 常见坑
 
 1. **viper 的 `WatchConfig` 要在设置文件路径之后调用**，放在前面监听不到。〔W05-3 p25〕
 2. **匿名导入 `viper/remote`**，不导入的话 `AddRemoteProvider` 注册的 etcd3 provider 不生效，运行时才报错。〔W05-3 p23〕
-3. **配置文件相对路径的基准是 working directory**，IDE 和容器里不一样，在 IDE 里要调整 working directory 的设置，否则配置文件找不到。上线用绝对路径或固定路径。〔W05-3 p10〕
+3. **配置文件相对路径的基准是 working directory**，IDE 和容器里不一样，在 IDE 里要调整 working directory 的设置，否则配置文件找不到；上线用绝对路径或固定路径。〔W05-3 p10〕
 4. **两次加载的组件要重建**：远程配置覆盖本地后，已经用旧配置初始化的组件（日志、连接池）不会自动生效。〔W05-3 p7〕
-5. **缓存读不到就一律回落数据库**：Redis 一崩，所有读都落到数据库。对策见 13 节第三节末段。
+5. **缓存读不到就一律回落数据库**：只要缓存返回 error 就查库，Redis 一崩，所有读都落到数据库。〔W04-1 p17〕
 
-## 判断题
+## 判断题与答案
+
+先自己答，再看后面。
 
 1. 为什么 `NewUserRepository(dao, cache)` 把两个依赖都从参数传入，而不是在里面 `gorm.Open`？
 2. 限流装饰器为什么要返回非导出的 `errLimited`？
 3. failover 里 `context.DeadlineExceeded` 为什么不继续换下一家？
 4. 配置里为什么把 `getenv` 做成参数？
+
+**答案**
+
+1. 在函数里 `gorm.Open` 会把 repository 和数据库的初始化过程、连接配置耦死，测试起不了真库，换数据库也要改这里；传参让调用方决定依赖是谁，是标准注入。
+2. 限流触发是内部治理信号，不是业务错误；暴露成公开错误会被上游当成"短信发送失败"去处理，到逼不得已才公开。
+3. 超时是调用方设的时限到了，继续重试只会浪费配额并拖垮体验，用户已经等不到结果；取消同理，是调用方主动放弃，更不该重试。
+4. 把 `getenv` 做成参数后，`Load` 不依赖进程环境，单测可以直接传一个假的读取函数，覆盖"环境变量存在"和"不存在"两种分支。
 
 练习包 `exercises/p5deep/`：`TestTypeKey`（以类型为 key 的注册表）、`TestProvideInvoke`（迷你容器与单例语义）、`TestGracefulShutdown`（关闭顺序）。
 
