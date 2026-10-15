@@ -4,61 +4,257 @@
 > 材料：TB09 W02-1 W10-1 W13-2、C:go_basic/http C:go_basic/grpc C:go_basic/protoc、旧长版 `notes/p10-grpc.md` `notes/p8-fast-track.md`
 > 前置：04 接口与组合，10 分层与依赖注入
 
-## 这一节要建立的认知
+## 先看一个反直觉的现象
 
-HTTP 和 gRPC 在 Go 里是同一种东西的两种面孔：**一个处理函数 + 一串包在外面的中间件**。HTTP 的中间件是 `func(http.Handler) http.Handler`，gRPC 的是拦截器 `func(ctx, req, info, handler)`。限流、日志、鉴权、超时、链路追踪都挂在这一层，业务代码不动。理解了这一点，换框架（标准库、gin、gRPC）只是换了签名。
+注册了 `GET /books/{id}` 和 `POST /books` 两条路由之后，`POST /books/42` 应该返回什么？直觉是 404：`POST /books/42` 这个"方法加路径"的组合我根本没注册过。Go 1.22 起的新路由器给出的却是 405。先跑一遍再往下读：
+
+```go
+package main
+
+import (
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+)
+
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /books/{id}", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "book %s", r.PathValue("id"))
+	})
+	mux.HandleFunc("POST /books", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	for _, req := range []struct{ method, path string }{
+		{"GET", "/books/42"},
+		{"POST", "/books/42"},
+		{"GET", "/nope"},
+	} {
+		r, _ := http.NewRequest(req.method, srv.URL+req.path, nil)
+		resp, err := http.DefaultClient.Do(r)
+		if err != nil {
+			panic(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		fmt.Printf("%s %s -> %d %s\n", req.method, req.path, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+}
+```
+
+```text
+GET /books/42 -> 200 book 42
+POST /books/42 -> 405 Method Not Allowed
+GET /nope -> 404 404 page not found
+```
+
+405 而不是 404 的原因：新路由器把"方法和路径"当成一段来匹配。`/books/42` 的路径段命中了 `GET /books/{id}` 里的 `{id}` 通配符，所以这个路径它是"认识"的，只是方法 POST 对不上，于是返回 405，并在响应头里写上 `Allow: GET, HEAD` 声明它支持哪些方法。而 `/nope` 连路径都不认识，才落到 404。
+
+这个细节本身不是重点，它揭开的是整章的骨架：**一个 router 把请求分给一个 handler，handler 外面再套一层层中间件**。HTTP 和 gRPC 是这同一副骨架的两种面孔，区别只在签名。理解了骨架，换标准库、gin、gRPC 只是换签名。
+
+## 和你已知语言的差异
+
+| 问题 | Java / Kotlin | Rust | TS | Go |
+|---|---|---|---|---|
+| HTTP 处理函数 | Spring `@GetMapping` 方法 | axum `async fn` + extractor | Express `(req, res)` 回调 | 固定原型 `func(w, r)` |
+| 横切逻辑怎么写 | Servlet Filter / HandlerInterceptor | tower `Layer<Service>` 洋葱 | Express middleware `(req, res, next)` | `func(http.Handler) http.Handler` |
+| RPC 契约 | gRPC-java：`.proto` 生成 stub | tonic：`.proto` 生成 trait | @grpc/grpc-js 生成 | grpc：`.proto` 生成 interface |
+| 路由能力放哪 | 框架注解 | 框架宏 | 框架路由表 | 1.22 起标准库自带 |
+
+最陌生的是最后一行：Java 里写 Web 服务几乎默认配一个框架，Go 里标准库 `net/http` 自己就能把路由这件事做完整。这一节先讲标准库能干什么，再讲 gin 到底补了什么。
 
 ## 一、HTTP：标准库已经够用
 
-最小服务只要两个调用：`http.HandleFunc` 注册，`http.ListenAndServe` 启动，处理函数的原型固定为 `func(w http.ResponseWriter, r *http.Request)`。〔TB09 p3-4〕
+最小服务只需要两个调用：`http.HandleFunc` 注册处理函数，`http.ListenAndServe` 启动监听。处理函数的原型是固定的 `func(w http.ResponseWriter, r *http.Request)`：`r` 是进来的请求，`w` 用来写响应。所有基于标准库的 handler 都长这个样。〔TB09 p3-4〕
 
-Go 1.22 起 `ServeMux` 支持方法前缀和路径通配符，原来要引入第三方路由库才能做的事，标准库直接支持：
+2021 年的课程还在为"方法加路径"的路由引入第三方包 gorilla/mux，靠 `Methods("POST")` 和 `mux.Vars` 才能做的事，现在标准库直接支持：〔TB09 p13-14〕〔C:go_basic/http/server/main.go:176-185〕
 
 ```go
 mux := http.NewServeMux()
 mux.HandleFunc("GET /books/{id}", func(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "book %s", r.PathValue("id"))
 })
-mux.HandleFunc("POST /books", func(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusCreated)
-})
 ```
 
-〔实测〕go1.26.4 下 `GET /books/42` 返回 `200 book 42`；`POST /books/42` 自动返回 `405 Method Not Allowed`；没注册的路径返回 `404`。方法不匹配自动给 405，是新路由器的一个实用细节。老课程里用 gorilla/mux 做的 `Methods("POST")` 和 `mux.Vars` 现在可以不引入。〔TB09 p13-14〕〔C:go_basic/http/server/main.go:176-185〕
+`{id}` 是路径通配符，`r.PathValue("id")` 把它取出来；`GET` 前缀限制了方法。方法对不上自动 405，没匹配的路径自动 404，这些都不用自己写。
 
-### 请求生命周期里的几条铁律
+### 响应顺序是一条铁律
 
-1. **响应顺序**：先 `w.Header().Add`，再 `WriteHeader(status)`，最后 `Write(body)`。`WriteHeader` 只能调一次，`Write` 之前没调就隐式是 200，之后再改 Header 无效。〔C:go_basic/http/server/main.go:32-37〕
-2. **客户端必须关 `resp.Body`**，否则连接不复用，造成协程和内存泄漏，便捷方法 `http.Get` 也一样。〔C:go_basic/http/client/main.go:25〕
-3. **用 `r.Context()` 感知取消**：客户端断开或服务端超时，`r.Context().Done()` 会触发，长耗时逻辑要监听它。
-4. **middleware 本质**：接受 `http.Handler` 返回 `http.Handler` 的函数，嵌套包裹后串在业务 handler 之前，避免每个 handler 重复写日志、校验。〔TB09 p14-16〕
+写响应头、状态码、响应体三件事有严格先后：先 `w.Header().Add`，再 `w.WriteHeader(status)`，最后 `w.Write(body)`。〔C:go_basic/http/server/main.go:32-37〕
+
+原因是 `http.ResponseWriter` 的底层把 header 和状态码都"缓存"在内存里，直到第一次真正写 body 或显式调 `WriteHeader` 时才一起发给客户端，发出去之后自然再也改不了。具体有三条推论：
+
+1. `WriteHeader` 只能调一次，第二次是空操作。
+2. `Write` 之前没调 `WriteHeader`，就隐式按 200 发。
+3. 发出去之后再 `w.Header().Add` 无效。
+
+配套的另一半是客户端侧：**用完必须关 `resp.Body`**，否则这条连接不复用，每次请求都新建连接，协程和内存一起泄漏。便捷方法 `http.Get` 也一样要关。〔C:go_basic/http/client/main.go:25〕
+
+### 超时：只设一个远远不够
+
+长耗时处理函数要感知"服务端或客户端已经放弃"，靠的是 `r.Context()`。用 `http.TimeoutHandler` 包一层，超时后处理函数的 context 会被取消：
 
 ```go
-srv := &http.Server{
-	Handler:           logMW(http.TimeoutHandler(mux, 100*time.Millisecond, "timeout")),
-	ReadHeaderTimeout: 2 * time.Second,
+package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"time"
+)
+
+func main() {
+	done := make(chan struct{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/slow", func(w http.ResponseWriter, r *http.Request) {
+		defer close(done)
+		select {
+		case <-time.After(300 * time.Millisecond):
+			w.Write([]byte("finished"))
+		case <-r.Context().Done():
+			fmt.Printf("handler sees: %v\n", r.Context().Err())
+		}
+	})
+	srv := httptest.NewServer(http.TimeoutHandler(mux, 100*time.Millisecond, "timeout"))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/slow")
+	if err != nil {
+		panic(err)
+	}
+	resp.Body.Close()
+	<-done
+	fmt.Printf("client gets: %d\n", resp.StatusCode)
 }
 ```
 
-〔实测〕`/slow` 处理函数睡 300ms，超时包装器 100ms 后向客户端返回 `503 timeout`，同时处理函数里的 `r.Context().Err()` 是 `context deadline exceeded`。**只设一个 `ReadHeaderTimeout` 远远不够**：慢速读请求体、慢速写响应都要有超时，不设就是资源泄漏的入口，生产里要把 `ReadTimeout`、`WriteTimeout`、`IdleTimeout` 按业务填上。
+```text
+handler sees: context deadline exceeded
+client gets: 503
+```
+
+超时包装器 100ms 一到就向客户端回 503，同时把处理函数的 `r.Context()` 取消，处理函数里的 `r.Context().Err()` 变成 `context deadline exceeded`，它就可以停下。这里也暴露一个生产上的坑：`http.Server` 的 `ReadHeaderTimeout` 只管"读完请求头"，慢速读 body、慢速写响应它都不管。只设一个超时是资源泄漏的入口，`ReadTimeout`、`WriteTimeout`、`IdleTimeout` 要按业务一起填上。
 
 ### 优雅退出
 
-套路固定：`signal.Notify` 捕获 SIGINT 和 SIGTERM，收到后用带超时的 context 调 `srv.Shutdown(ctx)`。`Shutdown` 立即关闭所有 listener、关闭空闲连接、等活动连接处理完。〔TB09 p9〕〔实测〕发送 SIGTERM 后 `Shutdown` 返回 `nil`，`Serve` 随后返回 `http: Server closed`，这是正常关闭，不要当错误处理。`ListenAndServe` 要放在独立 goroutine，用 channel 把错误传回主 goroutine。〔TB09 p16-17〕
+套路固定：`signal.Notify` 捕获 SIGINT 和 SIGTERM，收到后用带超时的 context 调 `srv.Shutdown(ctx)`。`Shutdown` 立即关闭所有 listener、关闭空闲连接、等活动连接处理完才返回。〔TB09 p9〕这个行为可以直接跑出来验证：
 
-### gin 的位置
+```go
+package main
 
-标准库解决的是"一个路由器 + handler 模型"，gin 在上面补的是：参数绑定与校验（`Bind` 系列）、路由分组、中间件链、更顺手的响应方法。核心类型是 `gin.Context`，同时承担读请求和写响应。`gin.Default()` 自带 Logger 和 Recovery 两个中间件，`gin.New()` 是裸引擎。〔W02-1 p6〕〔W02-1 p10〕
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+)
 
-组织路由的惯例：每个业务一个 `Handler` 结构体，用 `RegisterRoutes(server)` 自注册，公共前缀用 `server.Group` 防手抖。〔W02-1 p21-25〕gin 的 middleware 就是 `func(*gin.Context)` 的衍生类型，适合所有业务都关心的横切问题：CORS、日志、限流、可观测。〔W02-1 p44-45〕
+func main() {
+	srv := &http.Server{Addr: "127.0.0.1:0", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	})}
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe() }()
+	fmt.Println("serving")
 
-跨域是前后端分离时的典型绊脚石：浏览器先发 `OPTIONS` 预检，服务端在响应头里用 `Access-Control-Allow-*` 表态，所以 CORS 中间件必须能处理预检请求本身，不能让它走到鉴权之类的后续逻辑里。〔W02-1 p41-42〕
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		syscall.Kill(os.Getpid(), syscall.SIGTERM)
+	}()
+	<-sig
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	fmt.Println("shutdown:", srv.Shutdown(ctx))
+	fmt.Println("serve returned:", <-errCh)
+}
+```
 
-标准库路由和 gin 的取舍：服务简单、依赖想少、新项目用 1.22 以后的 `ServeMux` 够用；团队已经熟悉 gin 或者需要它的绑定校验时选 gin。两者的 handler 都能用同样的"中间件 = 包装函数"思路。
+```text
+serving
+shutdown: <nil>
+serve returned: http: Server closed
+```
 
-## 二、gRPC：契约先行
+两行关键输出：`Shutdown` 返回 `nil`（正常退出），`ListenAndServe` 随后返回 `http: Server closed`。这个错误是 `http.ErrServerClosed`，是关闭成功的标志，不要当错误处理。`ListenAndServe` 会阻塞，所以必须放进独立 goroutine，再用 channel 把它的返回值传回主 goroutine。〔TB09 p16-17〕
 
-选型口诀是"遇事不决选 gRPC"：基于 HTTP/2，支持双向流、流控、压缩，跨语言，社区强。〔W10-1 p26〕**契约先行**指先写 `.proto`（IDL，平台无关），再用编译器生成各语言的客户端和服务端代码，Protobuf 序列化更快、体积更小。〔W10-1 p27-29〕
+## 二、中间件：一个处理函数加一串包装
+
+前面已经看到 router 和 handler 的分工，现在看第三层：中间件。它的类型签名一句话说清：
+
+```go
+func middleware(next http.Handler) http.Handler
+```
+
+接受一个 handler，返回一个 handler。返回的那个在调用 `next` 之前做前置逻辑，之后做后置逻辑，于是任意多个中间件可以像洋葱一样套在业务 handler 外面。日志、鉴权、限流、跨域都挂在这一层，业务代码不动。〔TB09 p14-16〕下面同时演示洋葱顺序和响应头顺序：
+
+```go
+package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+)
+
+func withLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("before:", r.URL.Path)
+		next.ServeHTTP(w, r)
+		fmt.Println("after:", r.URL.Path)
+	})
+}
+
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /hello", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("X-Note", "set-before-write")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("hi"))
+	})
+	srv := httptest.NewServer(withLogger(mux))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/hello")
+	if err != nil {
+		panic(err)
+	}
+	resp.Body.Close()
+	fmt.Println("client sees X-Note:", resp.Header.Get("X-Note"))
+}
+```
+
+```text
+before: /hello
+after: /hello
+client sees X-Note: set-before-write
+```
+
+`before` 打印在 handler 之前、`after` 在之后，说明中间件确实"包"住了 handler；`X-Note` 在 `WriteHeader` 之前设置所以客户端能读到。这套"处理函数加包装"的骨架，是 gRPC 拦截器在 HTTP 里的对应物，第四部分会看到两边只是签名不同。
+
+## 三、gin 在标准库之上补了什么
+
+标准库解决的是"路由器加 handler 模型"，gin 补的是路由注册的便利和参数处理：参数绑定与校验（`Bind` 系列）、路由分组、中间件链、更顺手的响应方法。它的核心类型是 `gin.Context`，一个对象同时承担读请求和写响应，日常打交道最多的就是它。〔W02-1 p6〕〔W02-1 p10〕`gin.Default()` 自带 Logger 和 Recovery 两个中间件，`gin.New()` 是裸引擎。
+
+组织路由的惯例是每个业务一个 `Handler` 结构体，写一个 `RegisterRoutes(server)` 自注册，公共前缀用 `server.Group` 防手抖。〔W02-1 p21-25〕gin 的 middleware 就是 `func(*gin.Context)` 的衍生类型，和标准库一样适合所有业务都关心的横切问题：CORS、日志、限流、可观测。〔W02-1 p44-45〕
+
+一个典型的横切例子是跨域：浏览器先发一个 `OPTIONS` 预检请求试探，服务端在响应头里用 `Access-Control-Allow-*` 表态，所以 CORS 中间件必须能处理预检请求本身，不能让它落到鉴权之类的后续逻辑里。〔W02-1 p41-42〕
+
+标准库和 gin 怎么选：服务简单、想少依赖，1.22 以后的 `ServeMux` 够用；团队已经熟悉 gin 或者需要它的绑定校验时选 gin。两边的 handler 都能套进同样的"中间件等于包装函数"思路，没有谁更"正确"。
+
+## 四、gRPC：契约先行
+
+选型上，资料给的口诀是"遇事不决选 gRPC"：基于 HTTP/2，支持双向流、流控、压缩，跨语言，社区强。〔W10-1 p26〕"契约先行"指先写 `.proto`（接口描述语言，平台无关），再用编译器生成各语言的客户端和服务端代码；序列化用 Protobuf，二进制格式，比 JSON 更快更小。〔W10-1 p27-29〕
 
 ### 四种流写在 service 定义里
 
@@ -78,21 +274,70 @@ service student{
 }
 ```
 
-`stream` 写在请求前、响应前、还是两边，决定四种形态：一元、服务端流、客户端流、双向流。流的生命周期不对称：**客户端创建的流最终要 `CloseSend`/`CloseAndRecv`，服务端不用关**，类比 HTTP 里客户端关 body、服务端不关 request。〔C:go_basic/grpc/client/main.go:119〕〔C:go_basic/grpc/client/main.go:155〕
+`stream` 写在请求前、响应前还是两边，决定四种形态：一元、服务端流、客户端流、双向流。读法：请求和响应哪个没直接出现在签名里，哪个就走 stream。四种流的生命周期有一处不对称，最容易被忘：**客户端创建的流最终要调 `CloseSend`（双向流）或 `CloseAndRecv`（客户端流），服务端不用关**。类比 HTTP 里客户端关 body、服务端不关 request。〔C:go_basic/grpc/client/main.go:119〕〔C:go_basic/grpc/client/main.go:155〕
 
-### 拦截器链
+### 拦截器链：签名变了，骨架没变
 
-`grpc.ChainUnaryInterceptor(a, b, c)` 把多个拦截器串成链，签名是 `(ctx, req, info, handler)`，和 HTTP 中间件同一个思路：调 `handler(ctx, req)` 之前是前置逻辑，之后是后置逻辑。〔C:go_basic/grpc/server/main.go:61〕客户端拦截器的签名里是 `invoker` 而不是 `handler`。练习包 `exercises/p10grpc` 里的 `LoggingUnaryInterceptor` 是最小例子。
+`grpc.ChainUnaryInterceptor(a, b, c)` 把多个拦截器串成链，单个拦截器的签名是 `(ctx, req, info, handler)`，和 HTTP 中间件是同一个思路：调 `handler(ctx, req)` 之前是前置逻辑，之后是后置逻辑。〔C:go_basic/grpc/server/main.go:61〕客户端拦截器的签名里是 `invoker` 而不是 `handler`。
+
+下面的例子不引真 gRPC（那需要生成代码，测试跑不了），只复刻拦截器链的形状，看它和 HTTP 中间件是同一副洋葱：
+
+```go
+package main
+
+import "fmt"
+
+// 模拟 grpc.UnaryHandler 和一元拦截器的形状：
+// 真实签名是 (ctx, req, info, handler)，这里只留 req 和 handler。
+type unaryHandler func(req string) string
+type unaryInterceptor func(req string, next unaryHandler) string
+
+func withLog(name string) unaryInterceptor {
+	return func(req string, next unaryHandler) string {
+		fmt.Println(name, "before")
+		out := next(req)
+		fmt.Println(name, "after")
+		return out
+	}
+}
+
+func main() {
+	handler := func(req string) string { return "resp:" + req }
+
+	chain := func(req string) string {
+		steps := []unaryInterceptor{withLog("a"), withLog("b")}
+		h := handler
+		for i := len(steps) - 1; i >= 0; i-- {
+			next := h
+			step := steps[i]
+			h = func(r string) string { return step(r, next) }
+		}
+		return h(req)
+	}
+
+	fmt.Println(chain("hi"))
+}
+```
+
+```text
+a before
+b before
+b after
+a after
+resp:hi
+```
+
+`a` 包在 `b` 外面：请求先经过 a 再经过 b，响应先经过 b 再经过 a。`ChainUnaryInterceptor(a, b)` 的执行顺序就是这个声明顺序。练习包 `exercises/p10grpc` 里的 `LoggingUnaryInterceptor` 是真实的最小例子，签名里多了 `info *grpc.UnaryServerInfo`，作用是在 `handler` 返回后打一条方法名加错误的日志。
 
 ### 几条实践
 
-1. **一个 `*grpc.ClientConn` 可以被多个 client 共用**（多路复用），不要每次调用都新建。`grpc.NewClient` 是惰性连接，调用级超时用 `context.WithTimeout`。〔C:go_basic/grpc/client/main.go:43-69〕
-2. **负载均衡默认是 `pick_first`**：永远选 resolver 解析出的第一个节点，要做均衡必须在 service config 里指定 `round_robin` 等。〔W13-2 p4〕〔W13-2 p5〕
-3. **重试靠 service config 的 `retryPolicy`** 加负载均衡：调用不通就重试，LB 保证不再选坏节点；`retryableStatusCodes` 通常只填 `UNAVAILABLE`。〔W13-2 p29〕
-4. **生成代码的命令已变**：课程里的 `--go_out=plugins=grpc` 是旧写法，现行是独立的 `protoc-gen-go-grpc` 插件和 `--go-grpc_out`。〔C:go_basic/grpc/idl/service/student_service.proto:46-47〕
-5. **`go_package` 必须带 `.` 或 `/`**，分号前是输出路径，分号后是包名。〔W10-1 p34〕〔C:go_basic/grpc/idl/model/student.proto:5〕
+1. **一个 `*grpc.ClientConn` 可以被多个 client 共用**（HTTP/2 多路复用），不要每次调用都新建。`grpc.NewClient` 是惰性连接，调用级超时用 `context.WithTimeout`。〔C:go_basic/grpc/client/main.go:43-69〕
+2. **负载均衡默认是 `pick_first`**：永远选 resolver 解析出的第一个节点，等于没有均衡。要均衡必须在 service config 里指定 `round_robin` 等。〔W13-2 p4〕〔W13-2 p5〕
+3. **重试靠 service config 的 `retryPolicy` 加负载均衡**：调用不通就重试，重新走一遍负载均衡保证不选坏节点；`retryableStatusCodes` 通常只填 `UNAVAILABLE`。〔W13-2 p29〕
+4. **生成代码的命令已经变了**：课程里的 `--go_out=plugins=grpc` 是旧写法，现行是独立的 `protoc-gen-go-grpc` 插件配 `--go-grpc_out`。〔C:go_basic/grpc/idl/service/student_service.proto:46-47〕
+5. **`go_package` 必须带 `.` 或 `/`**：分号前是输出路径，分号后是包名。〔W10-1 p34〕〔C:go_basic/grpc/idl/model/student.proto:5〕
 
-### HTTP 还是 gRPC
+## 五、HTTP 还是 gRPC
 
 | 维度 | HTTP/JSON | gRPC |
 |---|---|---|
@@ -101,28 +346,43 @@ service student{
 | 性能与流 | 够用 | 二进制、HTTP/2、四种流 |
 | 契约 | 靠文档或 OpenAPI | `.proto` 是契约本身 |
 
-REST 是一种风格，微服务是一种架构，两者没有必然关系。〔W10-1 p11〕〔W10-1 p12〕作者的经验判断（资料没有这句）：对外和前端用 HTTP，内部服务之间用 gRPC，两者共用同一套中间件思路。
+选型的出发点是一条概念上的澄清：REST 是一种风格（编程风格/架构风格），微服务是一种架构，两者没有必然关系。〔W10-1 p12〕落到实践上的常见分工是：对外和前端用 HTTP，内部服务之间用 gRPC，两边共用同一套"处理函数加中间件"的思路。
+
+## 小结
+
+- HTTP 的最小骨架是 router 加 handler，handler 原型固定为 `func(w http.ResponseWriter, r *http.Request)`；1.22 起标准库路由器自带方法前缀和路径通配符。
+- 响应顺序有铁律：先 Header，再 `WriteHeader`，最后 `Write`；客户端用完必须关 `resp.Body`。
+- 中间件是 `func(http.Handler) http.Handler`，洋葱式包在 handler 外面；gin 的中间件是 `func(*gin.Context)`，同一个思路。
+- gRPC 契约先行：`.proto` 声明四种流，生成客户端和服务端；拦截器是 `(ctx, req, info, handler)` 的链，和 HTTP 中间件同构。
+- HTTP 与 gRPC 不是非此即彼，而是"对外用 HTTP、对内用 gRPC、中间件思路共用"。
 
 ## 常见坑
 
-HTTP 侧的坑（超时只设一个、忘关 `resp.Body`、把 `http.ErrServerClosed` 当错误）已在上面的铁律里讲过，这里只列 gRPC 侧的：
+HTTP 侧的坑（超时只设一个、忘关 `resp.Body`、把 `http.ErrServerClosed` 当错误）已在上面铁律里讲过，这里只列 gRPC 侧：
 
-1. gRPC 客户端每次调用新建连接。
+1. gRPC 客户端每次调用新建连接，丢掉 HTTP/2 的多路复用。
 2. 用旧的 `plugins=grpc` 命令，新版本工具链不认。
 3. 在 proto 里改字段编号或复用已删除的编号，导致线上新旧版本互相读错数据。〔W10-1 p35〕
 
-## 判断题
+## 判断题与答案
 
 1. `POST /books/42` 没有注册，为什么返回 405 而不是 404？
 2. `TimeoutHandler` 超时后，处理函数里怎么知道要停？
 3. 服务端流和双向流的客户端各自要调哪个方法结束？
 4. 为什么 `grpc.NewClient` 创建成功不代表服务可达？
 
+**答案**
+
+1. 1.22 路由器按"方法加路径"两段匹配；`/books/42` 命中了 `GET /books/{id}` 的路径段，只是方法对不上，所以回 405 并在 `Allow` 头里声明允许的方法。`/nope` 连路径都没匹配上才回 404。
+2. `TimeoutHandler` 超时后取消请求的 `r.Context()`，处理函数里 select `r.Context().Done()` 会收到 `context deadline exceeded`，据此停下不再白干。
+3. 客户端流的客户端用 `CloseAndRecv()` 发完并一次性收服务端的汇总响应；双向流的客户端用 `CloseSend()` 声明不再发，然后继续 `Recv` 收剩余消息。服务端两个都不需要主动关闭。
+4. `grpc.NewClient` 是惰性连接，创建时不拨号，第一次 RPC 才真正建立连接；所以创建成功只代表参数合法，服务端是否可达要到第一次调用才见分晓。
+
 练习包：`exercises/p10grpc` 的 `TestUnary`、`TestServerStreamWatch`、`TestClientStreamBulkSet`、`TestBidiChat`（四种流，用内存里的 bufconn 跑真协议栈）、`TestConcurrentUnary`。〔实测〕`go test -race -count=1 ./exercises/p10grpc/...` 通过。
 
 ## 在项目里
 
-- `dnsproxi-go/metrics.go` 的 `metricsServer` 返回一个带 `ReadHeaderTimeout` 的 `http.Server`，是 HTTP 服务的最小生产写法的例子（暴露 `/metrics`）。
+- `dnsproxi-go/metrics.go` 的 `metricsServer` 返回一个带 `ReadHeaderTimeout` 的 `http.Server`，是 HTTP 服务最小生产写法的例子（独立端口暴露 `/metrics`）。
 - 这里没有现成的 gRPC 例子，dnsproxi 走的是 UDP 和 TCP 上的 DNS 协议（见 24 节）。gRPC 的真实使用见练习包 `exercises/p10grpc` 和课程的微服务拆分（W10 系列）。
 
 ## 想深入去哪查
