@@ -1,6 +1,6 @@
 # Go 后端速通手册
 
-给有多门语言基础的后端工程师：用约 12 小时建立 Go 的体系、思想与范式，再靠两个项目补细节。路线与每天的目标见 [26 学习路线](26-route.md)。
+给有多门语言基础的后端工程师：用约 18.5 小时建立 Go 的体系、思想与范式，再靠两个项目补细节。路线与每天的目标见 [26 学习路线](26-route.md)。
 
 | 篇 | 节 |
 |---|---|
@@ -8,6 +8,6 @@
 | 核心范式 | [04 接口与组合](04-interfaces.md) · [05 错误与资源](05-errors.md) · [06 并发一](06-concurrency-basics.md) · [07 并发二](07-concurrency-engineering.md) · [08 运行时](08-runtime.md) · [09 泛型](09-generics.md) |
 | 服务工程 | [10 分层与依赖注入](10-layering-di.md) · [11 HTTP 与 gRPC](11-http-grpc.md) · [12 数据库](12-database.md) · [13 缓存消息幂等](13-cache-mq-idempotency.md) · [14 测试](14-testing.md) · [15 可观测](15-observability.md) · [16 稳定性](16-stability.md) |
 | 规模与演进 | [17 数据迁移](17-migration.md) · [18 分布式一致性](18-consistency.md) · [19 微服务](19-microservices.md) · [20 注册发现与负载均衡](20-discovery-lb.md) · [21 搜索 Feed IM](21-search-feed-im.md) · [22 容器与 Linux](22-containers-linux.md) · [23 部署与 K8s](23-deploy-k8s.md) |
-| 项目线 | [24 dnsproxi-go](24-dnsproxi.md) · [25 业务实战与 minifeed 蓝图](25-business-project.md) |
+| 项目线 | [24 dnsproxi-go](24-dnsproxi.md) · [25 业务实战与 minifeed 蓝图](25-business-project.md) · [26 学习路线](26-route.md) |
 
-每节末尾的"想深入去哪查"指向原材料的单元与页码和旧长版 `notes/`，细节靠它们回查。
+每节末尾的"想深入去哪查"指向原材料的单元与页码和旧长版 `notes/`，细节靠它们回查。01 到 25 节头部时长合计约 18.5 小时；26 节是按天拆分的路线。
