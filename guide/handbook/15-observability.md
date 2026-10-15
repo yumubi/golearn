@@ -64,9 +64,9 @@ Go 把这条线做成显式的：进程内它活在 `context.Context` 里，所�
 |---|---|---|---|
 | 日志 API | SLF4J + Logback，MDC 塞请求 ID | `tracing` 加 `#[instrument]` 传播字段 | 标准库 `log/slog`（1.21 起），可换 zap |
 | 指标 | Micrometer | `metrics` / `prometheus` crate | `client_golang`，OpenTelemetry 也行 |
-| 链路 | OTel agent 字节码注入，无侵入 | `tracing-opentelemetry`，靠 span 宏 | 手动或中间件、插件接入，没有 agent |
+| 链路 | OTel agent 字节码注入，无侵入 | `tracing-opentelemetry`，靠 span 宏 | 手动或中间件、插件接入，没有字节码 agent |
 
-Java 的 MDC 和 agent 靠运行时魔法，Go 都没有，换来一条明路：ctx 是唯一载体，中间件注入，`slog.Handler` 取出。Rust 的 `#[instrument]` 最接近自动，但 slog 也没有宏。所以缺口都得自己写中间件补，这正是本节的重点。
+Java 的 MDC 靠线程局部变量，agent 靠字节码注入，都是运行时魔法；Go 没有线程局部存储，也没有 JVM 式的字节码 agent，换来一条明路：ctx 是唯一载体，中间件注入，`slog.Handler` 取出。Rust 的 `tracing` 靠 `#[instrument]` 和 subscriber 自动带字段，最接近 Java 的体验；`slog` 没有对应的宏。所以缺口都得自己写中间件补，这正是本节的重点。
 
 ## 一、日志：先定级别和纪律，再选库
 
@@ -154,12 +154,12 @@ func main() {
 
 `req_id` 出现两次，值还不一样，检索时两条都算命中。dnsproxi 的做法是注入前先查重（`logger.go` 的 `recordHas`），显式传了就以显式为准；自己写 handler 要么同样查重，要么规定死"这个键只许注入"。
 
-日志规模化后要集中检索，ELK 是常见方案：Logstash 收集、解析、转换，Elasticsearch 存储检索，Kibana 展示。〔W18-1 p4〕Filebeat 是常见的轻量采集器，Kibana 的数据源向导会提示装它，默认直传 ES；课程要的是经过 Logstash，两者路径不同。〔W18-1 p19〕两件事能让 Logstash 几乎不干活：
+日志规模化后要集中检索，ELK 是常见方案：Logstash 收集、解析、转换，Elasticsearch 存储检索，Kibana 展示。〔W18-1 p4〕Filebeat 是常见的轻量采集器，Kibana 的数据源向导会提示装它，默认直传 ES；课程要的是经过 Logstash，两者路径不同。〔W18-1 p19〕两件事能让 Logstash 少干很多活：
 
-- **结构化日志**：JSON 输出本身就是字段，不用写 grok 正则去解析文本。〔W18-1 p11〕
+- **结构化日志**：JSON 输出本身就是字段，不用写 grok 正则去解析文本。课程也说，结构化日志里 Kv 这类从文本里抠键值对的过滤插件用不太上。〔W18-1 p11〕
 - **展示端分工**：Kibana 深度绑定 ES、专注日志；Grafana 多数据源、告警更成熟。通常指标放 Grafana，日志放 Kibana。〔W18-1 p14〕
 
-文件落盘用 lumberjack 之类做切片，文件大了或时间到了就切新文件。〔W18-1 p21〕
+文件落盘用 lumberjack 之类做切片。〔W18-1 p21〕课程说文件大了或时间变了就分割；按 lumberjack 自己的文档，它只在文件超过 `MaxSize` 时自动切，`MaxAge` 管的是旧文件保留多少天，想按天切要自己定时调 `Rotate()`。〔自，待核〕
 
 ## 二、指标：四种类型与一条生死纪律
 
@@ -267,16 +267,16 @@ func upstreamErrReason(err error) string {
 
 〔实测〕`go run main.go`（超时、连接拒绝、普通 error 各一次）输出：`demo_upstream_errors_total{reason="network"} 1`、`{reason="refused"} 1`、`{reason="timeout"} 1`。`errors.As` 认超时，`errors.Is` 认连接拒绝，其余归 `network`，错误再包装也造不出新 label 值。
 
-中间件统计响应时间的标准形状：进入记时刻，`defer` 里取状态码加 `Observe`，label 取方法、路由模式、状态码三项。〔W08-1 p27-28〕
+课程用中间件统计 HTTP 响应时间，并说响应时间上 Summary 用得比较多，同时会统计 Count 和 Sum。〔W08-1 p27-28〕本节示例改用 Histogram，形状是：进入记时刻，返回后取状态码加 `Observe`，label 取方法、路由模式、状态码三项。〔自〕
 
 ## 三、链路：trace、span 与 ctx 传播
 
 链路的核心是 trace 和 span：一个请求一个 trace，每段调用一个 span，span 有父子关系；span 的长度是执行时间，span 之间的空隙是父 span 自己代码的时间，空隙又长又多就该补打点。〔W08-1 p3-5〕〔W08-1 p6〕
 
-OpenTelemetry（otel）是 CNCF 主导的标准，统一 API，导出器适配 Zipkin、Jaeger、Prometheus 等，优先用 otel 的 API。〔W08-2 p3〕初始化设置 Propagator 和 TracerProvider，**Provider 要 Shutdown，否则退出时最后一批数据丢失**。〔W08-2 p4〕span 生命周期一条规则：`Start` 传入的 ctx 里带着 span 信息，新 span 自动挂为子节点；每个 `Start` 配对一次 `End`，谁创建谁结束，惯用 `defer span.End()`。〔W08-2 p6〕接入位置有规律：
+OpenTelemetry（otel）是 CNCF 主导的标准，统一 API，可以把数据发往 Jaeger、Prometheus 等后端，优先用 otel 的 API。〔W08-2 p3〕课程里链路后端用的是 Zipkin。〔W08-2 p22〕初始化设置 Propagator 和 TracerProvider，**Provider 要关闭**。〔W08-2 p4〕不关的后果是：批量上报的 span 还缓冲在内存里，进程退出时最后一批丢失。〔自〕span 生命周期一条规则：`Start` 传入的 ctx 里带着 span 信息，新 span 自动挂为子节点；每个 `Start` 配对一次 `End`，谁创建谁结束，惯用 `defer span.End()`。〔W08-2 p6〕接入位置有规律：
 
-1. **入口自动**：Gin 加 `otelgin.Middleware`，每请求自动建 root span。〔W08-2 p14-15〕
-2. **数据库自动**：GORM 加 tracing 插件，span 带完整 SQL 和影响行数。〔W08-2 p16-17〕
+1. **入口自动**：Gin 加 `otelgin.Middleware`，每个请求自动建入口 span。〔W08-2 p14-15〕
+2. **数据库自动**：GORM 加 tracing 插件，span 里带 SQL 等丰富的调试信息。〔W08-2 p16-17〕
 3. **手动打点**：关键步骤、易错步骤、程序出口（调第三方）才手动加；缓存性能敏感，默认不打。〔W08-2 p18〕
 
 没有 otel 时，最小实现也是这个形状：`traceMW` 从 header 取追踪 ID 塞进 ctx，业务代码只管 `logger.InfoContext(r.Context(), "kv get", "key", "a")`（logger 就是开头的 `ctxHandler`）：
@@ -300,7 +300,7 @@ func traceMW(next http.Handler) http.Handler {
 {"level":"INFO","msg":"kv get","key":"a","req_id":"t-abc"}
 ```
 
-跨进程就是这个形状的翻版：出口把 ID 写进 header 或 gRPC metadata，入口的中间件取出来放回 ctx。〔W08-2 p10〕但 `context.WithValue` 传的数据**不会跨进程**，跨 RPC 必须放进 metadata 或 header。gRPC 的 metadata key 必须匹配 `[0-9a-z-_.]+`，大写不合法，HTTP header 没有这条限制。〔C:dachang/trace/open_trace/rpc_tracer/client/grpc_client.go:58〕课件注释里"`user_id` 只在本进程内使用"，说的就是这个边界。
+跨进程就是这个形状的翻版：出口把 ID 写进 header 或 gRPC metadata，入口的中间件取出来放回 ctx。〔自〕课程讲的是进程内靠 ctx 传〔W08-2 p10〕，跨进程的 Propagator 见 otel 初始化〔W08-2 p4〕。但 `context.WithValue` 传的数据**不会跨进程**，跨 RPC 必须放进 metadata 或 header。gRPC 的 metadata key 必须匹配 `[0-9a-z-_.]+`，大写不合法，HTTP header 没有这条限制。〔C:dachang/trace/open_trace/rpc_tracer/client/grpc_client.go:58〕课件注释里"`user_id` 只在本进程内使用"，说的就是这个边界。
 
 span 里的三类数据各有分工：Tag 侧重查询，Log 记录事件发生的时间点，Baggage 随 trace 传播给所有子孙 span，普通 Tag 和 Log 传不给后代。〔C:dachang/trace/open_trace/local_tracer.go:49-56〕span 之间的引用有两种：`ChildOf`（父依赖子的结果，例如等推荐服务返回）和 `FollowsFrom`（父不依赖子的结果，例如异步上报 UV）。〔C:dachang/trace/open_trace/local_tracer.go:68-77〕
 
@@ -342,11 +342,11 @@ demo_request_duration_seconds_count 1
 demo_requests_total{method="GET",pattern="GET /kv/{key}",status="200"} 1
 ```
 
-第一行是日志，后面是指标，同一次请求。`pattern="GET /kv/{key}"` 是路由模板不是原始 URL，label 基数有限；`time.Since` 在 `next` 返回之后执行，包住整个 handler。〔W08-1 p27-28〕
+第一行是日志，后面是指标，同一次请求。`pattern="GET /kv/{key}"` 是路由模板不是原始 URL，label 基数有限；`time.Since` 在 `next` 返回之后执行，包住整个 handler。
 
 接力这样发生。假设上游开始超时：
 
-1. **指标告警**：`upstream_errors_total{reason="timeout"}` 增速变高，或 99 线抬高，Grafana 触发告警。告警形态是"某指标超过阈值且持续一段时间"，例如活跃请求数超阈值持续 3 分钟才报，避免抖动误报。〔W08-2 p26〕
+1. **指标告警**：`upstream_errors_total{reason="timeout"}` 增速变高，或 99 线抬高，Grafana 触发告警。告警形态是"某指标超过阈值且持续一段时间"，课程的例子是活跃请求数超阈值并持续一段时间才报，避免抖动误报。〔W08-2 p26〕
 2. **链路定位**：按时间窗口找慢 trace，看哪个 span 变长，是上游、缓存还是自己的代码（span 之间的空隙）。〔W08-1 p6〕
 3. **日志还原**：拿同一个 ID 搜日志，看那次请求的具体错误和参数。
 
@@ -382,7 +382,7 @@ logger.InfoContext(ctx, "cache miss, forwarding", "qname", "down.test")
 1. 把 `req_id`、user id、原始 URL 放进指标 label，Prometheus 内存暴涨。
 2. 自定义 `slog.Handler` 的 `WithAttrs`/`WithGroup` 没转发，`With` 之后注入丢失。
 3. 用不带 ctx 的 `log.Info`，日志里没有请求 ID。
-4. `span` 创建后忘记 `End`，数据不上报。〔C:dachang/trace/open_trace/local_tracer.go:43〕
+4. span 创建后忘记结束（opentracing 叫 `Finish`，otel 叫 `End`），数据不上报；课件注释写的是 Finish 时 SpanContext 才写入后端。〔C:dachang/trace/open_trace/local_tracer.go:43〕
 5. 把敏感信息写进日志，或把 `error` 原样返回给前端。
 6. 抓取间隔过短，高并发下抓取本身成为负担。〔W08-1 p11〕
 7. Provider 不 `Shutdown`，退出时最后一批 span 丢失。〔W08-2 p4〕
@@ -407,8 +407,8 @@ logger.InfoContext(ctx, "cache miss, forwarding", "qname", "down.test")
 
 ## 在项目里
 
-- **日志**：`dnsproxi-go/logger.go` 的 `ctxHandler` 就是本节模式：`withRequestID`/`requestID` 把请求 ID 放进 ctx，`newQueryID` 用 UnixNano 生成 `q-数字`（生产跨实例要换 crypto/rand 或 ulid），`newLogger` 返回带注入的 `*slog.Logger`。它还处理了重复字段：`recordHas` 在注入前查重，显式传过 `req_id` 就不再注入，避免上面演示的双字段问题。`main()` 按 `DNS_LOG_LEVEL` 重置级别，读写全走 `InfoContext`/`WarnContext`/`ErrorContext`，出错日志形如 `upstream read failed`。
-- **指标**：`dnsproxi-go/metrics.go` 按 RED 摆五个指标：`QueriesTotal{qtype,outcome}` 是 Rate，`outcome` 枚举 hit|miss|sinkhole|short|upstream_error；`UpstreamErrorsTotal{reason}` 是 Errors，`reason` 只有 timeout|refused|network，由 `upstreamErrReason` 归类；`UpstreamLatency` 直方图是 Duration，只在转发上游时 Observe；外加 `InFlight`（worker pool 的背压点）和 `CacheEntries`（逼近 CacheMax 没）两个 Gauge。wire 里的 qtype 是 `uint16` 有 65536 种，`qtypeLabel` 收成 9 个实名加 `OTHER`。`MetricsHandler` 就是 `promhttp.Handler`，抓取口独立于业务端口。
+- **日志**：`dnsproxi-go/logger.go` 的 `ctxHandler` 就是本节模式：`withRequestID`/`requestID` 把请求 ID 放进 ctx，`newQueryID` 用 UnixNano 生成 `q-数字`（生产跨实例要换 crypto/rand 或 ulid），`newLogger` 返回带注入的 `*slog.Logger`。它还处理了重复字段：`recordHas` 在注入前查重，显式传过 `req_id` 就不再注入，避免上面演示的双字段问题。`main()` 按 `DNS_LOG_LEVEL` 重置级别，查询路径上的日志走 `InfoContext`/`WarnContext`（如 `upstream read failed`），启动、关停这类与请求无关的日志用不带 ctx 的 `Info`/`Error`。
+- **指标**：`dnsproxi-go/metrics.go` 按 RED 摆五个指标：`QueriesTotal{qtype,outcome}` 是 Rate，`outcome` 注释写的是 hit|miss|sinkhole|short|upstream_error，代码里实际还有 `rate_limited`；`UpstreamErrorsTotal{reason}` 是 Errors，`reason` 只有 timeout|refused|network，由 `upstreamErrReason` 归类；`UpstreamLatency` 直方图是 Duration，只在转发上游时 Observe；外加 `InFlight`（worker pool 的背压点）和 `CacheEntries`（逼近 CacheMax 没）两个 Gauge。wire 里的 qtype 是 `uint16` 有 65536 种，`qtypeLabel` 收成 9 个实名加 `OTHER`。`MetricsHandler` 就是 `promhttp.Handler`，抓取口独立于业务端口。
 - 链路在 dnsproxi 里没有现成例子；日志里的 `req_id` 起的是最小的关联作用。
 
 ## 想深入去哪查

@@ -75,10 +75,10 @@ func handle(name string) error {
 
 ## 二、错误是值：四种处理策略，按耦合从低到高
 
-`error` 就是 `interface{ Error() string }`。`errors.New` 与不带 `%w` 的 `fmt.Errorf` 返回的是同一个未导出类型 `*errors.errorString`（`%T` 实测），带 `%w` 时才换成会包装的类型。〔TB22 p3-4〕既然错误是值，调用方**怎么检视它**，就决定了两端耦合多深。标准做法按推荐优先级从上到下排，耦合逐级升高：〔TB22 p15-16〕
+`error` 就是 `interface{ Error() string }`。`errors.New` 与不带 `%w` 的 `fmt.Errorf` 返回的是同一个未导出类型 `*errors.errorString`，带 `%w` 时才换成会包装的 `*fmt.wrapError`（两点都用 `%T` 在本机实测过）。〔TB22 p4〕既然错误是值，调用方**怎么检视它**，就决定了两端耦合多深。标准做法按推荐优先级从上到下排，耦合逐级升高：〔TB22 p15-16〕
 
 1. **透明处理**：不看内容，`err != nil` 就走错误路径，最多加一层上下文往上返回。80% 以上的场景属于这种，两端零耦合。〔TB22 p7〕
-2. **行为特征检视**：错误类型实现某个小接口（比如 `Timeout() bool`），调用方只问行为、不问身份。这是透明处理之外最松的耦合，`net.Error` 是范本。〔TB22 p13-15〕
+2. **行为特征检视**：错误类型实现某个小接口（比如 `Timeout() bool`），调用方只问行为、不问身份。这是透明处理之外最松的耦合，`net.Error` 是范本。〔TB22 p13-15〕（材料里的 `net.Error` 还带 `Temporary() bool`，现在该方法在标准库里已标注 Deprecated，只用 `Timeout()`。）
 3. **哨兵错误**：包导出 `var ErrXxx = errors.New(...)`，调用方用 `errors.Is` 比较。哨兵成为包 API 的一部分，要长期维护。〔TB22 p8-10〕
 4. **错误类型**：包导出 `XxxError` 类型，调用方用 `errors.As` 取字段。同样成为 API，而且耦合到具体字段。〔TB22 p10-13〕
 
@@ -144,7 +144,7 @@ if errors.As(err, &t) && t.Timeout() {
 }
 ```
 
-问"是否超时"比问"是不是这个哨兵错误"更稳：哨兵是实现的细节，行为是稳定的契约，这一层在判断题第 3 题展开。
+问"是否超时"比问"是不是这个哨兵错误"更稳：超时可能来自好几处，本机实测 `context.DeadlineExceeded` 的 `errors.Is(e, os.ErrDeadlineExceeded)` 是 false，但 `Timeout()` 是 true；只比哨兵就会漏掉它。这一层在判断题第 3 题展开。
 
 Go 1.26 本机已有泛型版 `errors.AsType[E error](err error) (E, bool)`，上面的 `errors.As` 可以写成 `pe, ok := errors.AsType[*ParseError](err)`，不用先声明变量。〔实测〕`go doc errors.AsType` 与上面的例子都在 go1.26.4 上跑过。
 
@@ -177,7 +177,7 @@ func Public(name string) error {
 
 健壮性的三条底线：不要相信外部输入（校验失败立即返回预设错误）；不要忽略任何一个错误；不要假定异常不会发生。〔TB23 p2〕前两条靠纪律，第三条靠 `panic`/`recover`，第六节讲。
 
-Go 不逼你处理，丢掉 `err` 是合法代码，所以漏检只能靠习惯和工具：`errcheck`、`go vet`。最常见的疏漏不是忘了写 `if err != nil`，而是写了但写错地方，比如 `defer f.Close()`：写文件时 `Close` 的错误才是真正的写入失败，直接吞掉会让"看起来成功了"的假象通过。下一节解决。
+Go 不逼你处理，丢掉 `err` 是合法代码，所以漏检只能靠习惯和工具：`errcheck` 这类 linter（`go vet` 不负责查未检查的错误）。最常见的疏漏不是忘了写 `if err != nil`，而是写了但写错地方，比如 `defer f.Close()`：写文件时 `Close` 的错误才是真正的写入失败，直接吞掉会让"看起来成功了"的假象通过。下一节解决。
 
 ## 五、defer：清理的纪律
 
@@ -307,9 +307,9 @@ main recovered: boom
 
 何时用 `panic`：
 
-- **断言式**：标准库里大多数 `panic` 是"这里不可能到达"的断言，如 `encoding/json` 的 "decoder out of sync"。去掉它不改逻辑，但失去 bug 提醒。〔TB23 p8-9〕
+- **断言式**：材料的判断是标准库里大多数 `panic` 是"这里不可能到达"的断言，如 `encoding/json` 的 "decoder out of sync"（本机 go1.26 源码里仍在）。去掉它不改逻辑，但失去 bug 提醒。〔TB23 p8-9〕
 - **启动期**：配置缺失、模板解析失败这类"没法继续"的初始化，`MustXxx` 风格直接 panic。
-- **不要当错误返回**：库的调用者无从知道你会 panic，也没有义务处理。Java 的 checked exception 对应 Go 的 `error`，`panic` 对应 `RuntimeException` 和 `Error`，别混淆。〔TB23 p9-10〕
+- **不要当错误返回**：库的调用者无从知道你会 panic，也没有义务处理。Java 的 checked exception 对应 Go 的 `error`，`panic` 更接近 `RuntimeException` 加 `Error`，别混淆。〔TB23 p9-10〕
 
 ## 七、Option 模式：可选参数怎么办
 
@@ -355,7 +355,7 @@ default: :80 5s 3
 custom:  :80 1s 0
 ```
 
-`WithRetries(0)` 里的 0 是用户的明确选择，和"没传"区分开了。新增配置只加一个 `WithXxx`，`New` 的签名不变。`gorm`、`go-redis` 等库都这样。〔TBX09 p12-14〕Rust 里对应 builder，Java 里对应 builder 或重载。选项本身也可以返回 `error`，用于参数校验。
+`WithRetries(0)` 里的 0 是用户的明确选择，和"没传"区分开了。新增配置只加一个 `WithXxx`，`New` 的签名不变。材料说 gorm、go-redis 等库都用这种写法，〔TBX09 p14〕这一条我没有逐个核对；本机能确认的例子是 `grpc.NewClient(target string, opts ...DialOption)`。Rust 里对应 builder，Java 里对应 builder 或重载。选项本身也可以返回 `error`，用于参数校验。
 
 ## 小结
 
@@ -385,23 +385,23 @@ custom:  :80 1s 0
 
 1. 下面的 `defer` 输出什么：`for i := 0; i < 3; i++ { defer fmt.Print(i) }`？
 2. 在 `main` 里 `defer recover()` 能挡住子 goroutine 的 panic 吗？
-3. 为什么 `net.Error` 的 `Timeout()` 比 `errors.Is(err, os.ErrDeadlineExceeded)` 更适合当"调用方依赖点"？
+3. 为什么 `Timeout() bool` 比 `errors.Is(err, os.ErrDeadlineExceeded)` 更适合当"调用方依赖点"？
 4. `errors.Is(err, ErrNotFound)` 为 true，`err == ErrNotFound` 却为 false，为什么？
 
 **答案**
 
 1. 输出 `210`。`fmt.Print(i)` 的 `i` 在每次注册时求值，压栈后按后进先出打印。
 2. 不能。`recover` 只管当前 goroutine，子 goroutine 的 panic 沿自己的栈向上，越不过 goroutine 边界，进程以 exit status 2 退出。
-3. `os.ErrDeadlineExceeded` 是"这个系统调用超时"的实现细节，会随内部实现变化；`Timeout()` 是稳定的行为契约，调用方只问"这是超时吗"，不绑死底层哨兵。
+3. 超时的来源不止一个：本机实测 `context.DeadlineExceeded` 不满足 `errors.Is(_, os.ErrDeadlineExceeded)`，却满足 `Timeout() == true`。`Timeout()` 是一个行为契约，一次提问覆盖所有来源；比较哨兵只认一种来源，调用方还得知道有哪些哨兵，耦合更深。〔TB22 p13-16〕
 4. 错误被 `%w` 包装后，`==` 只比较最外层，看不到链底；`errors.Is` 沿 `%w` 链逐层找，命中底层的 `ErrNotFound`。
 
 练习包 `exercises/p2_5idiom/` 的 `TestErrorChain`（链路、`Is`、`As`、`%w` 与 `%v`）、`TestGuardClause`（快乐路径重构）；`exercises/p19eco/` 的 `TestFunctionalOptions`（Option 模式）。
 
 ## 在项目里
 
-- **行为特征检视**：`dnsproxi-go/metrics.go` 的 `upstreamErrReason` 先 `errors.As` 到 `net.Error` 再问 `Timeout()`，再用 `errors.Is` 比较 `syscall.ECONNREFUSED`，最后兜底归类为 `network`，保证分类器自己不会 panic。正是第二节策略 2 和 3 的组合。
+- **行为特征检视**：`dnsproxi-go/metrics.go` 的 `upstreamErrReason` 先 `errors.As` 到 `net.Error` 再问 `Timeout()`，再用 `errors.Is` 比较 `syscall.ECONNREFUSED`，最后兜底归类为 `network`。正是第二节策略 2 和 3 的组合。
 - **包装链**：`dnsproxi-go/main.go` 的 `Run` 里对解析监听、绑定、读包失败都用 `fmt.Errorf("...: %w", err)`，调用者看到的是 `listen :5353: ...` 这样的完整因果。
-- **goroutine 入口 recover 与 defer 清理**：同一个 `Run` 里为每个查询启动的 goroutine，开头 `defer func() { if r := recover(); r != nil { ... } }()` 并记日志，防止单个查询的 panic 杀死整个代理；`dnsproxi-go/cache/expire.go` 里 `defer t.Stop()` 与 `defer close(stats)` 紧挨着申请处。
+- **goroutine 入口 recover 与 defer 清理**：同一个 `Run` 里为每个查询启动的 goroutine（`handleQuery` 的调用处），开头 `defer func() { if r := recover(); r != nil { ... } }()` 并记日志，防止单个查询的 panic 杀死整个代理；`dnsproxi-go/cache/expire.go` 里 `defer t.Stop()` 与 `defer close(stats)` 紧挨着申请处。
 
 ## 想深入去哪查
 

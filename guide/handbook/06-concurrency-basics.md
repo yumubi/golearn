@@ -40,13 +40,13 @@ func main() {
 | 通信 | `BlockingQueue`、共享内存加锁 | `mpsc`、`Arc<Mutex>` | channel，是语言内建的一等公民 |
 | 取消 | 中断位、`Future.cancel` | drop、`CancellationToken` | `context.Context`（下一节） |
 | 数据竞争 | 无内建检测，表现为偶发错误 | 编译期排除（`Send`/`Sync`） | 编译器不拦，靠 `-race` 抓 |
-| 子任务 panic | 线程内抛出，不影响其他线程 | task 内被隔离，`JoinHandle` 返回错误 | 未恢复的 panic 终止整个进程 |
+| 子任务 panic | 线程内未捕获异常，默认只终止该线程 | task 内被隔离，`JoinHandle` 返回错误 | 未恢复的 panic 终止整个进程 |
 
-最后两行最值得记。Rust 的 `Send`/`Sync` 在编译期就把"这个类型能不能跨线程"检查完了，Go 没有这套，数据竞争只能在运行时靠 `-race` 抓，抓不到就表现为偶发错误。Java 的线程 panic 只挂掉那条线程，Go 的 goroutine 一旦 panic 且没人 recover，整个进程直接退出。
+最后两行最值得记。Rust 的 `Send`/`Sync` 在编译期就把"这个类型能不能跨线程"检查完了，Go 没有这套，数据竞争只能在运行时靠 `-race` 抓，抓不到就表现为偶发错误。Java 线程里未捕获的异常默认只终止那条线程，Go 的 goroutine 一旦 panic 且没人 recover，整个进程直接退出。
 
 ## 一、goroutine：便宜，但不是免费
 
-`go f()` 创建一个 goroutine。为什么 Go 用 goroutine 而不是 OS 线程？看一个数字：OS 线程默认栈约 1MB，goroutine 初始栈只有 2KB，由 Go 运行时在用户态调度，切换不陷入内核。〔TB31 p6〕规模化的能力来自三点：栈小且可增长、用户态切换、`go` 关键字加 channel 内建。这三点凑在一起，让"每连接一个 goroutine"成为默认写法。
+`go f()` 创建一个 goroutine。为什么 Go 用 goroutine 而不是 OS 线程？看一个数字：OS 线程的栈通常是 MB 级（Java 在 64 位 Linux 上默认 1MB），goroutine 初始栈只有 2KB，由 Go 运行时在用户态调度，切换不陷入内核。〔TB31 p6〕规模化的能力来自三点：栈小且可增长、用户态切换、`go` 关键字加 channel 内建。这三点凑在一起，让"每连接一个 goroutine"成为默认写法。
 
 但规模化之后账就不一样了：2KB 乘一百万是 2GB；栈增长后不会立刻缩回，收缩只发生在 GC 扫描栈时，且仅当使用量不足四分之一才减半，闲置的大栈可能长期占着内存。原材料写的是"不会收缩，直到 goroutine 退出"，那是过度简化，`runtime/stack.go` 的 `shrinkstack` 可证。〔TB35 p2〕所以每连接一个 goroutine 在常规规模下完全合适，进入百万级才需要池化。
 
@@ -88,7 +88,7 @@ func main() {
 
 `spawn` 把"goroutine 的退出状态"通过一个 `chan error` 传回来，调用方 `<-c` 拿结果。这就是 CSP 的基本形态：channel 转移数据，同时转移了数据的所有权。Go 的并发有两层，要分清各自的位置：
 
-1. **默认用 CSP**：把程序拆成若干顺序执行的 goroutine，用 channel 把它们连接起来。channel 传递的是数据，同时转移了数据的所有权。"不要通过共享内存来通信，而要通过通信来共享内存。"〔TB31 p9〕〔TB34 p1-2〕
+1. **默认用 CSP**：把程序拆成若干顺序执行的 goroutine，用 channel 把它们连接起来。channel 传递的是数据，同时转移了数据的所有权。"不要通过共享内存来通信，而要通过通信来共享内存。"〔TB31 p11〕〔TB34 p1〕
 2. **局部用低级同步**：不转移所有权、只是想保护一个结构体的内部状态，或者性能敏感的临界区，用 `sync` 和 `atomic`。〔TB31 p10〕〔TB34 p4〕
 
 另一个要内化的区分：**并发是结构，并行是执行**。把程序设计成可以独立执行的几部分，叫并发；这几部分同一时刻真的在多个核上跑，叫并行。并发设计的程序在单核上也成立，上多核自然获得并行。〔TB31 p4-5〕

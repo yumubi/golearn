@@ -87,11 +87,11 @@ mux.HandleFunc("GET /books/{id}", func(w http.ResponseWriter, r *http.Request) {
 
 写响应头、状态码、响应体三件事有严格先后：先 `w.Header().Add`，再 `w.WriteHeader(status)`，最后 `w.Write(body)`。〔C:go_basic/http/server/main.go:32-37〕
 
-原因是 `http.ResponseWriter` 的底层把 header 和状态码都"缓存"在内存里，直到第一次真正写 body 或显式调 `WriteHeader` 时才一起发给客户端，发出去之后自然再也改不了。具体有三条推论：
+原因是状态码和 header 在 `WriteHeader` 被调用（或者 `Write` 隐式调用它）的那一刻就定下来了，之后再改 `w.Header()` 已经影响不到发出去的响应头。具体有三条推论：
 
-1. `WriteHeader` 只能调一次，第二次是空操作。
+1. `WriteHeader` 只有第一次生效，第二次不起作用，标准库还会在日志里打一条 `superfluous response.WriteHeader call`。
 2. `Write` 之前没调 `WriteHeader`，就隐式按 200 发。
-3. 发出去之后再 `w.Header().Add` 无效。
+3. `WriteHeader` 之后再 `w.Header().Add` 无效。〔实测〕Go 1.26 下先 `WriteHeader(201)` 再 `Add` 一个头，客户端读不到。
 
 配套的另一半是客户端侧：**用完必须关 `resp.Body`**，否则这条连接不复用，每次请求都新建连接，协程和内存一起泄漏。便捷方法 `http.Get` 也一样要关。〔C:go_basic/http/client/main.go:25〕
 
@@ -248,13 +248,13 @@ client sees X-Note: set-before-write
 
 组织路由的惯例是每个业务一个 `Handler` 结构体，写一个 `RegisterRoutes(server)` 自注册，公共前缀用 `server.Group` 防手抖。〔W02-1 p21-25〕gin 的 middleware 就是 `func(*gin.Context)` 的衍生类型，和标准库一样适合所有业务都关心的横切问题：CORS、日志、限流、可观测。〔W02-1 p44-45〕
 
-一个典型的横切例子是跨域：浏览器先发一个 `OPTIONS` 预检请求试探，服务端在响应头里用 `Access-Control-Allow-*` 表态，所以 CORS 中间件必须能处理预检请求本身，不能让它落到鉴权之类的后续逻辑里。〔W02-1 p41-42〕
+一个典型的横切例子是跨域：浏览器先发一个 `OPTIONS` 预检请求试探，服务端在响应头里用 `Access-Control-Allow-*` 表态，所以 CORS 中间件必须能处理预检请求本身，不能让它落到鉴权之类的后续逻辑里。〔W02-1 p41-42〕（只有跨域的"非简单请求"，比如带 JSON `Content-Type` 的 POST，浏览器才会先发预检。）
 
 标准库和 gin 怎么选：服务简单、想少依赖，1.22 以后的 `ServeMux` 够用；团队已经熟悉 gin 或者需要它的绑定校验时选 gin。两边的 handler 都能套进同样的"中间件等于包装函数"思路，没有谁更"正确"。
 
 ## 四、gRPC：契约先行
 
-选型上，资料给的口诀是"遇事不决选 gRPC"：基于 HTTP/2，支持双向流、流控、压缩，跨语言，社区强。〔W10-1 p26〕"契约先行"指先写 `.proto`（接口描述语言，平台无关），再用编译器生成各语言的客户端和服务端代码；序列化用 Protobuf，二进制格式，比 JSON 更快更小。〔W10-1 p27-29〕
+选型上，资料给的口诀是"遇事不决选 gRPC"：利用 HTTP/2 的双向流，支持流控、压缩，跨语言，社区强。〔W10-1 p26〕（该页还写了"基于 QUIC"，这是错的，gRPC 跑在 HTTP/2 上。）"契约先行"指先写 `.proto`（接口描述语言，平台无关），再用编译器生成各语言的客户端和服务端代码；序列化用 Protobuf，二进制格式，课程的说法是序列化速度和压缩效率在同类协议里名列前茅。〔W10-1 p27-29〕
 
 ### 四种流写在 service 定义里
 
@@ -274,7 +274,7 @@ service student{
 }
 ```
 
-`stream` 写在请求前、响应前还是两边，决定四种形态：一元、服务端流、客户端流、双向流。读法：请求和响应哪个没直接出现在签名里，哪个就走 stream。四种流的生命周期有一处不对称，最容易被忘：**客户端创建的流最终要调 `CloseSend`（双向流）或 `CloseAndRecv`（客户端流），服务端不用关**。类比 HTTP 里客户端关 body、服务端不关 request。〔C:go_basic/grpc/client/main.go:119〕〔C:go_basic/grpc/client/main.go:155〕
+`stream` 写在请求前、响应前还是两边，决定四种形态：一元、服务端流、客户端流、双向流。读法：请求前写了 `stream`，客户端就是流式发送；响应前写了 `stream`，服务端就是流式返回；两边都写就是双向流。四种流的生命周期有一处不对称，最容易被忘：**客户端创建的流最终要调 `CloseSend`（双向流）或 `CloseAndRecv`（客户端流），服务端不用关**。课程里的类比是 HTTP 客户端要关 response body，而服务端不用关 request body。〔C:go_basic/grpc/client/main.go:119〕〔C:go_basic/grpc/client/main.go:155〕
 
 ### 拦截器链：签名变了，骨架没变
 
@@ -332,8 +332,8 @@ resp:hi
 ### 几条实践
 
 1. **一个 `*grpc.ClientConn` 可以被多个 client 共用**（HTTP/2 多路复用），不要每次调用都新建。`grpc.NewClient` 是惰性连接，调用级超时用 `context.WithTimeout`。〔C:go_basic/grpc/client/main.go:43-69〕
-2. **负载均衡默认是 `pick_first`**：永远选 resolver 解析出的第一个节点，等于没有均衡。要均衡必须在 service config 里指定 `round_robin` 等。〔W13-2 p4〕〔W13-2 p5〕
-3. **重试靠 service config 的 `retryPolicy` 加负载均衡**：调用不通就重试，重新走一遍负载均衡保证不选坏节点；`retryableStatusCodes` 通常只填 `UNAVAILABLE`。〔W13-2 p29〕
+2. **负载均衡默认是 `pick_first`**：课程的演示里永远只用 resolver 解析出的第一个节点（严格说是第一个连得上的地址，这一点我没在本机验证），等于没有均衡。要均衡必须在 service config 里指定 `round_robin` 等。〔W13-2 p4〕〔W13-2 p5〕
+3. **重试靠 service config 的 `retryPolicy` 加负载均衡**：调用不通就重试，重试时会再经过一遍负载均衡，同时要求负载均衡策略别再挑中已经不可用的节点；`retryableStatusCodes` 通常只填 `UNAVAILABLE`。〔W13-2 p29〕
 4. **生成代码的命令已经变了**：课程里的 `--go_out=plugins=grpc` 是旧写法，现行是独立的 `protoc-gen-go-grpc` 插件配 `--go-grpc_out`。〔C:go_basic/grpc/idl/service/student_service.proto:46-47〕
 5. **`go_package` 必须带 `.` 或 `/`**：分号前是输出路径，分号后是包名。〔W10-1 p34〕〔C:go_basic/grpc/idl/model/student.proto:5〕
 
@@ -368,12 +368,12 @@ HTTP 侧的坑（超时只设一个、忘关 `resp.Body`、把 `http.ErrServerCl
 
 1. `POST /books/42` 没有注册，为什么返回 405 而不是 404？
 2. `TimeoutHandler` 超时后，处理函数里怎么知道要停？
-3. 服务端流和双向流的客户端各自要调哪个方法结束？
+3. 客户端流和双向流的客户端各自要调哪个方法结束？
 4. 为什么 `grpc.NewClient` 创建成功不代表服务可达？
 
 **答案**
 
-1. 1.22 路由器按"方法加路径"两段匹配；`/books/42` 命中了 `GET /books/{id}` 的路径段，只是方法对不上，所以回 405 并在 `Allow` 头里声明允许的方法。`/nope` 连路径都没匹配上才回 404。
+1. 1.22 路由器按"方法加路径"一起匹配；`/books/42` 命中了 `GET /books/{id}` 的路径段，只是方法对不上，所以回 405 并在 `Allow` 头里声明允许的方法。`/nope` 连路径都没匹配上才回 404。
 2. `TimeoutHandler` 超时后取消请求的 `r.Context()`，处理函数里 select `r.Context().Done()` 会收到 `context deadline exceeded`，据此停下不再白干。
 3. 客户端流的客户端用 `CloseAndRecv()` 发完并一次性收服务端的汇总响应；双向流的客户端用 `CloseSend()` 声明不再发，然后继续 `Recv` 收剩余消息。服务端两个都不需要主动关闭。
 4. `grpc.NewClient` 是惰性连接，创建时不拨号，第一次 RPC 才真正建立连接；所以创建成功只代表参数合法，服务端是否可达要到第一次调用才见分晓。

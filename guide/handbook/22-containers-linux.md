@@ -15,7 +15,7 @@ $ docker run -d --name c2 goapp-image
 $ docker stop c2              # 1 秒内退出，日志里有 shutdown 记录
 ```
 
-〔实测〕本机 docker 29.4 上测的：shell 做 PID 1 的容器，`docker stop -t 12` 花了 12.3 秒；exec 形式直起 Go 程序的容器 1.0 秒就停了，容器日志里能看到 `got signal, draining` 和 `shutdown err: <nil>`。
+〔实测〕本机 docker 29.4 上测的：shell 做 PID 1 的容器，`docker stop -t 12` 花了 12.3 秒；exec 形式直起 Go 程序的容器不到 1 秒就停了（复核时测得 0.45 秒），容器日志里能看到 `got signal, draining` 和 `shutdown err: <nil>`。
 
 为什么差一个数量级？因为**信号送到了谁手里**。`docker stop` 先给 PID 1 发 `SIGTERM`。shell 自己是 PID 1，它收到 `SIGTERM` 后既不退出也不转发，你的 Go 程序什么都没收到；等够超时时间，docker 只能发 `SIGKILL`，在途请求全断。exec 形式里 Go 程序自己就是 PID 1，注册过 handler，收到信号走优雅关停。
 
@@ -86,7 +86,7 @@ raw mode wait err: signal: terminated
 ctx mode wait err: <nil>
 ```
 
-两个实验，同一个信号，两种结局。不装 handler 的进程被 `SIGTERM` 直接杀死（`signal: terminated`），装了 handler 的进程把信号变成 `ctx.Done()`，从容退出（`<nil>`）。这就是默认处置和捕获的区别：**`SIGTERM` 的默认处置是直接终止进程，Go 代码一行都不会执行，一行日志都不会留下**。退出码也有约定：被信号杀死的进程，退出码是 128 加信号编号。〔实测〕shell 里 `kill -TERM` 得 143（128+15），`kill -9` 得 137（128+9）。
+两个实验，同一个信号，两种结局。不装 handler 的进程被 `SIGTERM` 直接杀死（`signal: terminated`），装了 handler 的进程把信号变成 `ctx.Done()`，从容退出（`<nil>`）。这就是默认处置和捕获的区别：**`SIGTERM` 的默认处置是直接终止进程，Go 代码一行都不会执行，一行日志都不会留下**。退出码也有约定：被信号杀死的进程，shell 和 docker 报告的退出码是 128 加信号编号（内核本身只记录"被哪个信号杀死"，加 128 是 shell 的换算）。〔实测〕shell 里 `kill -TERM` 得 143（128+15），`kill -9` 得 137（128+9）。
 
 所以优雅关停必须先捕获信号。Go 的做法是把信号变成 context 的取消：
 
@@ -103,15 +103,17 @@ defer cancel()
 err := srv.Shutdown(sctx) // 停止接新连接，等在途请求收尾
 ```
 
-〔实测〕我在本机写了个 `/slow` 接口（睡 1.5 秒）验证完整时序：请求发出后 300 毫秒发 `kill -TERM`，客户端仍然收到了响应体 `done`，进程依次打印 `got signal, draining; inflight= 1`、`shutdown err: <nil>` 后退出。对照组不装 handler：同一时刻发 `SIGTERM`，进程当场消失，客户端拿到连接错误。上面的片段就是这条路径的形状，不是可运行程序（`mux` 没定义）。
+〔实测〕我在本机写了个 `/slow` 接口（睡 1.5 秒）验证完整时序：请求发出后 300 毫秒发 `kill -TERM`，客户端仍然收到了响应体 `done`，进程依次打印 `got signal, draining; inflight= 1`、`shutdown err: <nil>` 后退出。对照组同一时刻发 `kill -9`：进程当场消失，客户端拿到连接错误（curl 状态码 000）。上面的片段就是这条路径的形状，不是可运行程序（`mux` 没定义）。
 
 三条规则，前一条是后一条的前提：
 
 1. **`SIGKILL` 和 `SIGSTOP` 不能被捕获**，这是内核保留的。`docker stop` 先发 `SIGTERM`，等默认 10 秒（`docker stop -t` 可改）才发 `SIGKILL`。你的 `Shutdown` 超时必须小于这个窗口，否则容器照样被强杀。〔实测〕本机 `docker kill -s KILL` 杀掉的容器 `ExitCode` 是 137。
 2. **信号 handler 里只通知，清理逻辑放在主流程**。`NotifyContext` 把信号变成 `ctx.Done()`，你阻塞在 `<-ctx.Done()` 的那个 goroutine 被唤醒，该干什么在主流程里干。C 语言里 handler 只能调 async-signal-safe 函数，Go 把这件事整个搬进了普通 goroutine 的世界，没有那条限制。
-3. **PID 1 特殊**：内核不给 PID 1 默认信号处置，没人装 handler 的 PID 1 收到 `SIGTERM` 会无视它。容器的 ENTRYPOINT 就是 PID 1，所以开头那个 shell 容器才会卡满超时。〔实测〕`docker stop -t 12` 对 shell-PID-1 容器耗时 12.3 秒，其中 12 秒是在等超时。
+3. **PID 1 特殊**：内核不给容器里的 PID 1 套默认信号处置，PID 1 自己没有为 `SIGTERM` 装 handler，信号就被忽略。容器的 ENTRYPOINT 就是 PID 1，`sh` 没装这个 handler，所以开头那个 shell 容器才会卡满超时。〔实测〕`docker stop -t 12` 对 shell-PID-1 容器耗时 12.3 秒，其中 12 秒是在等超时；不加 `-t` 实测 10.2 秒，印证默认宽限期是 10 秒。
 
-开头的结论现在能完整推出来了：**exec 形式的 `ENTRYPOINT` 让你的 Go 程序当 PID 1，装上 handler 才接得住 `docker stop` 的 `SIGTERM`**。缺任何一环，优雅关停都不存在。
+   这条规则对 Go 二进制要小心套用：Go runtime 启动时就替进程装好了自己的信号处理，所以"没人装 handler"在 Go 里并不成立。〔实测〕把一个不调用 `signal.Notify` 的 Go 程序直接当 PID 1，`docker stop` 不会卡，0.2 秒就返回，退出码是 2（不是 143）：进程被 runtime 就地终止，没有排空、没有日志。所以 shell 入口的问题是"信号被 shell 吃掉"，Go 入口的问题是"信号到了，但没有人把它变成优雅关停"。
+
+开头的结论现在能完整推出来了：**exec 形式的 `ENTRYPOINT` 让你的 Go 程序当 PID 1，装上 handler 才接得住 `docker stop` 的 `SIGTERM`**。缺 exec 形式，信号到不了 Go 程序，容器卡满宽限期被强杀；缺 handler，信号到了也只是被当场终止。两种缺法，在途请求都会断。
 
 ## 二、文件描述符：一切 I/O 的把手
 
@@ -155,7 +157,7 @@ after 30 opens: 35
 after close all: 5
 ```
 
-〔实测〕`go run .` 在本机输出上面三行：每开一个文件 fd 表加一行，`Close` 之后如数奉还。上限是 `ulimit -n`，〔实测〕把循环改成无限并在 `ulimit -n 64` 下跑同一个程序，61 次之后内核拒绝再开，报 `open /etc/hosts: too many open files`。两条最常见的泄漏源都在 Go 代码里：`http.Response.Body` 没关（每次请求泄漏一个 fd 加连接），`os.Open` 之后没有 `defer f.Close()`。
+〔实测〕`go run .` 在本机输出上面三行：每开一个文件 fd 表加一行，`Close` 之后如数奉还。上限是 `ulimit -n`，〔实测〕把循环改成无限，在 bash 里 `ulimit -n 64` 后跑同一个程序，大约开到第 60 个就被内核拒绝（运行时自己也占了几个 fd，具体数字随平台略有出入），报 `open /etc/hosts: too many open files`。两条最常见的泄漏源都在 Go 代码里：`http.Response.Body` 没关（每次请求泄漏一个 fd 加连接），`os.Open` 之后没有 `defer f.Close()`。
 
 排查方法：`lsof -p <pid>` 看这个进程的 fd 表，隔几秒再看一次，数量单调增长就是泄漏。日志为什么该写 stderr？因为 docker 的日志驱动收集的就是容器 PID 1 的 fd 1 和 fd 2 字节流，你写进 stderr 的每一行都会出现在 `docker logs` 里。
 
@@ -199,11 +201,11 @@ USER nobody
 ENTRYPOINT ["/usr/local/bin/app"]
 ```
 
-〔实测〕我在本机把一个 http 服务按这个 Dockerfile 完整构建了一遍：交付镜像 22.6MB（alpine 基础层加二进制），构建镜像 `golang:1.26-alpine` 有 351MB，全部留在第一个阶段。`COPY --from=build` 是两个阶段之间唯一的桥，builder 里的 Go 工具链、模块缓存、源码都不进交付。旧章 `notes/p25-containers-cloud.md` 在同款结构上量过：351MB 降到 26.6MB。
+`COPY --from=build` 是两个阶段之间唯一的桥，builder 里的 Go 工具链、模块缓存、源码都不进交付。大小怎么变？旧章 `notes/p25-containers-cloud.md` 在同款结构上量过：构建镜像 `golang:1.26-alpine` 351MB，交付镜像 26.6MB。这组数字来自旧章，这次复核没有重新构建镜像，未在本机复核；基础层 `alpine:3.22` 本机显示 14.4MB，可以看出交付镜像的大头不是你的二进制。
 
-〔实测〕交叉编译这一步单独验证过：`CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build` 产物用 `file` 看是 `ELF 64-bit ... statically linked`；`-trimpath -ldflags="-s -w"` 把二进制从 8.7MB 压到 5.8MB（去掉路径信息、符号表和调试信息）。
+〔实测〕交叉编译这一步单独验证过：`CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build` 产物用 `file` 看是 `ELF 64-bit ... statically linked`；对一个只用 `fmt` 和 `os/signal` 的小程序，加 `-trimpath -ldflags="-s -w"` 把二进制从 2.4MB 压到 1.6MB（去掉符号表和调试信息，`-trimpath` 去掉的是源码路径）。
 
-静态链接是整个玩法的前提。它保证二进制不链 glibc 或 musl 的任何 so，alpine 才装得下它。漏了 `GOOS=linux` 会得到什么？〔实测〕把本机（macOS）编的 Mach-O 二进制拷进 alpine 容器执行，内核直接拒绝：`exec format error`，退出码 126。`file` 命令一眼定性：ELF 是 Linux 的，Mach-O 是 macOS 的。
+静态链接是整个玩法的前提。它保证二进制不链 glibc 或 musl 的任何 so，alpine 才装得下它。漏了 `GOOS=linux` 会得到什么？〔实测〕把本机（macOS）编的 Mach-O 二进制挂进 alpine 容器执行，直接失败，退出码 126。Docker Desktop 给出的报错是 `Cannot run macOS (Mach-O) executable in Docker: Exec format error`；在原生 Linux 上你看到的是内核的 `exec format error`（旧章 `notes/p23-linux-runtime.md` 的记录）。`file` 命令一眼定性：ELF 是 Linux 的，Mach-O 是 macOS 的。
 
 三个习惯，动机都能从层机制推出来：
 
@@ -213,23 +215,23 @@ ENTRYPOINT ["/usr/local/bin/app"]
 
 ## 五、健康检查：活着不等于能用
 
-进程在跑（PID 1 活着）不等于能服务（端口通、业务逻辑没死锁）。编排器靠探针区分这两件事，决定要不要发流量、要不要重启：
+进程在跑（PID 1 活着）不等于能服务（端口通、业务逻辑没死锁）。探针就是用来区分这两件事的，编排器可以据此决定要不要发流量、要不要重启：
 
 ```text
 $ docker run -d --name hc --health-cmd "nc -z localhost 9999 || exit 1" \
     --health-interval 1s --health-retries 2 alpine:3.22 sleep 300
 $ docker ps --format "{{.Status}}"
-Up 3 seconds (unhealthy)      # 没人监听 9999
-$ docker exec -d hc sh -c 'nc -l -p 9999'
+Up 4 seconds (unhealthy)      # 没人监听 9999
+$ docker exec -d hc sh -c 'while true; do nc -l -p 9999; done'
 $ docker ps --format "{{.Status}}"
-Up 6 seconds (healthy)        # 端口通了
+Up 8 seconds (healthy)        # 端口通了
 ```
 
-〔实测〕上面就是本机 docker 的真实输出：探针命令连续失败达到 `retries` 次判 unhealthy，恢复后翻回 healthy。
+〔实测〕上面是本机 docker 的输出（秒数每次略有浮动）：探针命令连续失败达到 `retries` 次判 unhealthy，恢复后翻回 healthy。监听用 `while` 循环是因为 busybox 的 `nc -l` 接受一次连接就退出，单次监听只能让探针成功一次，随后又会翻回 unhealthy。另一个观察：容器一直处于 unhealthy，`docker inspect` 里状态仍是 `running`、`RestartCount` 为 0。单机 docker 只负责把状态标出来，不会替你重启；"据此摘流量、重启"是 Swarm 或 K8s 这类编排器的事（K8s 的探针语义本节未在本机验证）。
 
-设计原则有三条，核心是**探自己，不探下游**：
+设计原则有三条，核心是**探自己，不探下游**（这是业界经验，不是某份文档的规定）：
 
-- 别在探针里查数据库或别的服务：下游挂了你也被判死，故障被放大成雪崩。
+- 别在探针里查数据库或别的服务：如果探针失败会触发重启，下游挂了你也被判死并重启，故障被放大成雪崩。
 - 别探得太频繁：探针流量也是流量。
 - 探法上，`nc -z` 只证明"端口有 listener 在 accept"，抓不到 handler 死锁（端口还在，请求进去没人处理）；打一个真实的轻量端点（比如 `GET /healthz`）覆盖到 handler 链路，代价是探针请求进业务日志，用固定前缀方便过滤。
 
@@ -237,7 +239,7 @@ Up 6 seconds (healthy)        # 端口通了
 
 1. 信号默认处置是直接终止，Go 代码一行不执行；优雅关停靠 `signal.NotifyContext` 把信号变成 `ctx.Done()`，清理放在主流程。〔实测〕机制见 `go doc os/signal.NotifyContext`。
 2. 退出码 128 加信号编号：143 是 SIGTERM，137 是 SIGKILL（也是容器 OOM 或强杀的标志）。
-3. PID 1 没有默认信号处置，`ENTRYPOINT` 必须 exec 形式（JSON 数组），让 Go 程序自己当 PID 1。
+3. PID 1 对没装 handler 的信号不做默认处置，shell 当 PID 1 会吃掉 `SIGTERM`；`ENTRYPOINT` 必须 exec 形式（JSON 数组），让 Go 程序自己当 PID 1。Go 程序没装 handler 时不会卡，而是被 runtime 当场终止（实测退出码 2）。
 4. fd 是一切 I/O 的把手，泄漏到 `ulimit -n` 就是 `too many open files`；`lsof -p` 看趋势。
 5. cgroup 的 `cpu.max` 是"每 period 配 quota"；Go 1.25 起 runtime 自动按它设 `GOMAXPROCS`（向上取整、下限 2、周期更新），前提是 `go.mod` 的 `go` 行在 1.25 及以上。
 6. `GOMEMLIMIT` 是 GC 的软目标，不是硬墙；不含 cgo 和内核内存。
@@ -247,7 +249,7 @@ Up 6 seconds (healthy)        # 端口通了
 ## 常见坑
 
 1. 以为 `kill` 会让 Go 程序优雅退出：不捕获信号就直接终止，一行日志都没有。
-2. 入口用 shell 形式（`ENTRYPOINT ["sh", "-c", "go-app"]`）：信号被 shell 吃掉，`docker stop` 卡满宽限期后强杀。
+2. 入口用 shell 形式（`ENTRYPOINT ["sh", "-c", "go-app"]`）：信号被 shell 吃掉，`docker stop` 卡满宽限期后强杀。有的 shell 对 `-c` 后只有一条命令会自动 exec 替换自己，有的不会，行为取决于具体 shell，别赌。
 3. `go.mod` 里 `go` 行停在 1.24：容器里 `GOMAXPROCS` 仍然等于宿主核数，限了 CPU 也白限。
 4. `Shutdown` 超时设得比容器强杀窗口还长：等不到排空就被 `SIGKILL`。
 5. 把 `GOMEMLIMIT` 当硬限制：它是 GC 的软目标，超限不会被运行时拦住。

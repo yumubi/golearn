@@ -45,7 +45,7 @@ main 函数
 |---|---|---|---|---|
 | 组织与编译单元 | 类 + 包（jar） | crate + mod | 文件 + npm 包 | 包（目录）+ module |
 | 依赖与版本文件 | pom.xml / build.gradle | Cargo.toml + Cargo.lock | package.json + lockfile | go.mod + go.sum |
-| 版本选择策略 | 手动指定 / 默认最新 | 语义化 + lock 锁死 | 语义化区间 + lockfile | MVS（最小版本） |
+| 版本选择策略 | 手动指定版本，传递依赖冲突时由构建工具仲裁 | 语义化区间，取满足约束的最高兼容版本，lock 锁死 | 语义化区间 + lockfile | MVS（最小版本） |
 | 可见性 | public / private | pub | export / 不写 | 首字母大小写 |
 | 入口前会执行的代码 | 静态初始化块 | 无（const/static 求值） | 顶层 import 副作用 | 包级变量 + init 函数 |
 | 项目布局 | 官方约定（Maven 目录） | 较自由 | 较自由 | 无官方标准，通行事实标准 |
@@ -54,7 +54,7 @@ main 函数
 
 ## 一、包：编译单元与可见性
 
-包是 Go 最小的编译单元：一个目录里的所有 `.go` 文件必须声明同一个 `package` 名，编译器把一个目录当整体编译。包名写在每个文件第一行。
+包是 Go 最小的编译单元：一个目录里的所有 `.go` 文件必须声明同一个 `package` 名（`_test` 后缀的外部测试包是例外），编译器把一个目录当整体编译。包名写在每个文件第一行。
 
 容易踩的第一个混淆点是**导入路径和包名是两回事**。`import "fmt"` 里的 `fmt` 是导入路径，指向标准库下的 fmt 目录；`fmt.Println` 里的 `fmt` 是包名，是代码里引用它时用的名字。两者约定俗成同名（路径最后一段就是包名），所以几乎没人意识到这是两个概念。〔TB04 p6-7〕
 
@@ -84,7 +84,7 @@ func([]uint8) (int, error)
 
 一条包规则和可见性绑在一起：**首字母大写才导出，小写仅包内可见**（01 节的差异表讲过）。〔TB04 p7〕导入路径的构成是 module path 加子目录：`import "golearn/dnsproxi-go/wire"` 里，`golearn/dnsproxi-go` 是 module path，`/wire` 是包所在子目录。〔TB04 p11〕
 
-最后是 `main` 包的两条硬规则：整个程序只能有一个 `main` 包；`main` 包**不能**被别的包导入，否则报 `import "xx/main" is a program, not an importable package`。〔TB04 p5〕〔TB04 p7〕它是程序入口，不是给别人复用的库。
+最后是 `main` 包的两条硬规则：一个可执行程序里只能有一个 `main` 包（同一个仓库里要放第二个程序，就放进另一个目录，各自成一个程序）；`main` 包**不能**被别的包导入，否则报 `import "xx/main" is a program, not an importable package`。〔TB04 p5〕〔TB04 p7〕它是程序入口，不是给别人复用的库。
 
 ## 二、module：为什么构建是可重现的
 
@@ -107,7 +107,7 @@ go get example.com/lib@v1.7.0           # 指定版本，升降级都用它
 go install example.com/cmd/tool@latest  # 安装可执行文件
 ```
 
-两个易错点：Go 1.17 起 `go get` 不再用来装可执行文件，改 `go install ...@版本`；〔TBX02 p8〕只删掉源码里的 `import` 不会清掉 `go.mod`，要跑 `go mod tidy`。〔TB07 p8-9〕
+两个易错点：Go 1.17 起 `go get` 不再用来装可执行文件，改 `go install ...@版本`（本机 go1.26 的 `go help get` 也写明，现在 `go get` 只负责调整 go.mod）；〔TBX02 p8〕只删掉源码里的 `import` 不会清掉 `go.mod`，要跑 `go mod tidy`。〔TB07 p8-9〕
 
 本地联调用 `replace` 指向本地路径，缺点是路径因人而异、而且 `go.mod` 要提交；Go 1.18 的 `go.work` 工作区把这种配置放进不进仓库的文件里，更适合。〔TB35b p2-4〕私有 module 用 `GOPRIVATE` 绕过公共代理和校验。〔TB35b p5〕自己发布时，单仓库单 module 最简单；某个版本发坏了，用新 patch 版本加 `retract` 作废，不要删 tag 重发。〔TBX11 p1-4〕〔TBX11 p9-12〕
 
@@ -129,9 +129,9 @@ internal/          # 仅本项目可导入
 
 ## 四、启动次序：从包初始化到 main
 
-开头那段代码为什么先打印"变量 a"？因为 Go 程序启动时先按导入关系初始化所有包，最后才进 `main.main`。整体次序是：按导入顺序递归、**深度优先**初始化依赖包；每个包内部先常量、再变量、最后 `init` 函数；一个包被多处依赖只初始化一次；这些都做完才轮到 `main` 包自己的变量、`init` 和 `main.main`。〔TB08 p5-8〕
+开头那段代码为什么先打印"变量 a"？因为 Go 程序启动时先按导入关系初始化所有包，最后才进 `main.main`。整体次序是：**依赖先于使用者**，沿依赖关系递归初始化；每个包内部先常量、再变量、最后 `init` 函数；一个包被多处依赖只初始化一次；这些都做完才轮到 `main` 包自己的变量、`init` 和 `main.main`。〔TB08 p5-8〕材料把同级依赖的先后讲成「按 import 书写顺序」，这在 Go 1.21 之前成立。我在本机 go1.26 上实测：`main` 先写 `import _ "ex/zz"` 再写 `import _ "ex/aa"`，两个包互不依赖，输出却是 `aa` 在前 `zz` 在后。1.21 起规范改成：把所有包按导入路径排序，每次取排在最前、且依赖都已初始化完的那个。所以同级包的先后看路径字典序，不要依赖 import 的书写顺序。
 
-把"深度优先"画成树更容易记。假设 `main` 空导入 `pkg1` 和 `pkg2`，两者都依赖 `pkg3`：
+把依赖关系画成树更容易记。假设 `main` 空导入 `pkg1` 和 `pkg2`，两者都依赖 `pkg3`：
 
 ```text
 main
@@ -139,7 +139,7 @@ main
 └── pkg2 ── pkg3
 ```
 
-初始化顺序是 `pkg3 → pkg1 → pkg2 → main`：先沿第一条边走到底（pkg3），回退再走 pkg1，再走 pkg2。pkg3 被依赖两次却只初始化一次；pkg1 在 pkg2 前，是因为 `main` 里写在前面的 `import` 先初始化。〔TB08 p7-8〕
+初始化顺序是 `pkg3 → pkg1 → pkg2 → main`：pkg3 没有依赖，最先；pkg1 和 pkg2 都只等 pkg3，此时按路径排序，pkg1 在 pkg2 前；最后才是 `main`。pkg3 被依赖两次却只初始化一次。〔TB08 p7-8〕
 
 `init` 函数有三条硬规则：不能带参数和返回值；不能被显式调用；可以有多个，按出现顺序执行。〔TB08 p4〕〔TB08 p14〕想显式调用它，编译器直接拒绝：
 
@@ -228,15 +228,15 @@ pprof 采集有两条路：在线服务 `import _ "net/http/pprof"` 再开一个
 - 命名空间是导入路径，不是包名；包名不必唯一，冲突就起别名；首字母大写才导出。
 - module 靠 go.mod/go.sum、语义导入版本、MVS 三个机制实现可重现构建。
 - 项目布局没有官方标准，internal/ 是唯一的编译器级访问控制。
-- 启动次序：依赖包深度优先初始化，包内常量 → 变量 → init，最后才进 main；init 只用于注册；main 返回即进程结束。
+- 启动次序：依赖包先于使用者初始化，包内常量 → 变量 → init，最后才进 main；init 只用于注册；main 返回即进程结束。
 - 工具链一个 go 命令全覆盖。
 
 ## 常见坑
 
-1. 把项目放 GOPATH 下期待 vendor 生效：module 时代完全不需要。〔TB06 p5〕
+1. 沿用 GOPATH 时代的习惯：vendor 机制要求项目必须放在 GOPATH 的 src 下才生效，module 时代项目放哪都行，默认也不靠 vendor。〔TB06 p5〕
 2. 跨大版本升级只改 go.mod 不改导入路径：编译找不到包，因为 v2 版本在路径里。
 3. 多 module 仓库打 tag 不带子目录前缀：用户 `go get` 看不到新版本。〔TBX11 p4〕
-4. 发了 v2 没把 module path 加 /v2：被 go 命令拒绝。〔TB07 p13〕
+4. 发了 v2 的 tag 却没把 module path 改成带 `/v2`：这违反语义导入版本的规则，go 命令会拒绝这个版本。〔TB07 p6-7〕
 5. 在 init 里做 I/O 或读配置：依赖变隐式，启动顺序难推理，只该做注册。
 
 ## 判断题与答案
@@ -248,7 +248,7 @@ pprof 采集有两条路：在线服务 `import _ "net/http/pprof"` 再开一个
 答案：
 
 1. v1.3.0。MVS 选的是满足所有依赖方要求的最小版本，不是最新版本 v1.7.0，也不是某个依赖方单独要的 v1.1.0。
-2. 空导入，只为触发 x 包的初始化。副作用发生在依赖包深度优先初始化阶段，即 x 的包级变量和 init 函数执行时，早于 main。
+2. 空导入，只为触发 x 包的初始化。副作用发生在依赖包初始化阶段，即 x 的包级变量和 init 函数执行时，早于 main。
 3. 能。导入路径才是命名空间，包名不必唯一；名字撞了就在 import 里起别名，如 `mrand "math/rand"`。
 
 ## 在项目里

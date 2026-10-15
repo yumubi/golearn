@@ -79,7 +79,7 @@ npx eslint {f}
 
 def run_omp(n, extra=""):
     t = task_file(n, extra)
-    cmd = ["omp", "-p", "--no-session", "--auto-approve", "--max-time", "45m", f"@{t.relative_to(ROOT)}", "按任务文件执行。"]
+    cmd = ["omp", "-p", "--no-session", "--auto-approve", "--model", "focus-glm52/glm5.1", "--max-time", "45m", f"@{t.relative_to(ROOT)}", "按任务文件执行。"]
     log(f"H{n}: omp 开始")
     p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     log(f"H{n}: omp 结束 rc={p.returncode}")

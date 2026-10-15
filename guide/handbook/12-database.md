@@ -6,7 +6,7 @@
 
 ## 先看一个"连上了"的假象
 
-下面这段程序连的是一个**根本不存在的数据库文件**，`sql.Open` 却不报错，第一行插入也成功了。先自己猜一下每一行输出，再往下读：
+下面这段程序先对一个**根本不存在的路径**调用 `sql.Open`，它不报错；再用内存库走一遍建表、插入、查询。先自己猜一下每一行输出，再往下读：
 
 ```go
 package main
@@ -20,9 +20,16 @@ import (
 )
 
 func main() {
+	bad, err := sql.Open("sqlite", "file:/no/such/dir/x.db?mode=ro")
+	fmt.Println("坏路径 Open 报错吗:", err != nil)
+	fmt.Println("坏路径 Ping 报错吗:", bad.Ping() != nil)
+	bad.Close()
+
 	db, err := sql.Open("sqlite", "file:l12s1?mode=memory&cache=shared")
+	if err != nil {
+		panic(err)
+	}
 	defer db.Close()
-	fmt.Println("Open 之后就有错误了吗:", err != nil)
 	if _, err := db.Exec("CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT)"); err != nil {
 		panic(err)
 	}
@@ -38,12 +45,13 @@ func main() {
 ```
 
 ```text
-Open 之后就有错误了吗: false
+坏路径 Open 报错吗: false
+坏路径 Ping 报错吗: true
 查到: alice true
 查不到: true
 ```
 
-第二行才是真正的谜面：`Open` 返回的 `err` 是 `nil`，但它什么都没连。要解释这两个现象，得先建立 Go 数据库访问的心智模型：`database/sql` 不是驱动，也不是某家数据库的客户端，它是**一个连接池加一套统一接口**，具体怎么跟 MySQL、PostgreSQL、sqlite 说话，由驱动补全。所有上层方案（GORM、sqlc、sqlx、pgx 的标准接口模式）都站在它上面，或者干脆绕开它直接说数据库协议。这一节就沿这条线走：先看清池，再守住事务纪律，最后决定 SQL 和 Go 类型之间用什么方式对接。
+前两行才是真正的谜面：路径根本不存在，`Open` 返回的 `err` 却是 `nil`，直到 `Ping` 才暴露问题。后面三行是内存库上的建表、查到和查不到。要解释这些现象，得先建立 Go 数据库访问的心智模型：`database/sql` 不是驱动，也不是某家数据库的客户端，它是**一个连接池加一套统一接口**，具体怎么跟 MySQL、PostgreSQL、sqlite 说话，由驱动补全。所有上层方案（GORM、sqlc、sqlx、pgx 的标准接口模式）都站在它上面，或者干脆绕开它直接说数据库协议。这一节就沿这条线走：先看清池，再守住事务纪律，最后决定 SQL 和 Go 类型之间用什么方式对接。
 
 ## 和你已知语言的差异
 
@@ -58,15 +66,15 @@ Open 之后就有错误了吗: false
 
 ## 一、`*sql.DB` 是池，不是连接
 
-先回答开头的谜面。`sql.Open(driverName, dataSourceName)` 做的事只有两件：检查参数格式、把驱动和连接串记下来。它不发起任何网络请求，所以连一个不存在的地址也照样"成功"。〔C:go_basic/database/crud.go:14-25〕连接错误要等到第一次真正用连接的操作（`Exec`、`Query`、或者显式的 `PingContext`）才冒出来。所以生产代码的正确姿势是启动时 `db.PingContext(ctx)` 一次，把配置错误在启动阶段暴露，而不是等第一个请求进来才炸。
+先回答开头的谜面。`sql.Open(driverName, dataSourceName)` 只按驱动名找到驱动、记下连接串，不保证建立任何连接（具体驱动可能在这一步解析 DSN，但不会去连服务端），所以连一个不存在的地址也照样"成功"，开头示例的前两行就是证据。课程的教学代码把 `sql.Open` 和连接串放在 `db_test.go`。〔C:go_basic/database/db_test.go:24-26〕连接错误要等到第一次真正用连接的操作（`Exec`、`Query`、或者显式的 `PingContext`）才冒出来。所以生产代码的正确姿势是启动时 `db.PingContext(ctx)` 一次，把配置错误在启动阶段暴露，而不是等第一个请求进来才炸。
 
-第二个推论：`*sql.DB` 是连接池，不是一根连接。它是并发安全的，全局建一份就够，到处传着用；给每个请求 `sql.Open` 一次是 Java 时代的坏习惯，在 Go 里既浪费还丢掉池的复用。池有三个旋钮：〔C:go_frame/orm/gorm/connection.go:52-60〕
+第二个推论：`*sql.DB` 是连接池，不是一根连接。它是并发安全的，全局建一份就够，到处传着用；给每个请求 `sql.Open` 一次是新手常见的错误，既浪费，还丢掉了池的复用。池有三个旋钮：〔C:go_frame/orm/gorm/connection.go:52-60〕
 
 1. `SetMaxOpenConns(n)`：同时最多开几条连接，超出的查询排队等；
 2. `SetMaxIdleConns(n)`：空闲时保留几条，多了关掉，下次请求不用重新握手；
 3. `SetConnMaxLifetime(d)`：一条连接最长用多久就换新，防止被数据库或它前面的负载均衡悄悄掐断。
 
-池满了之后会发生什么？直接跑给你看。下面把池上限压到 2，同时发 6 个各约 0.7 秒的查询：
+池满了之后会发生什么？直接跑给你看。下面把池上限压到 2，同时发 6 个同样的慢查询，并先单独测一次它的耗时：
 
 ```go
 package main
@@ -86,34 +94,41 @@ func main() {
 	defer db.Close()
 	db.SetMaxOpenConns(2) // 池上限 2，第 3 个查询必须等
 	db.Exec("CREATE TABLE t(x)")
+	slow := func() {
+		_, _ = db.ExecContext(context.Background(), // 递归 CTE 模拟一个慢查询
+			"WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 3000000) SELECT SUM(x) FROM c")
+	}
+	t0 := time.Now()
+	slow()
+	one := time.Since(t0) // 单个查询的耗时
 	start := time.Now()
 	var wg sync.WaitGroup
 	for range 6 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = db.ExecContext(context.Background(), // 递归 CTE 模拟一个约 0.7 秒的慢查询
-				"WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 3000000) SELECT SUM(x) FROM c")
+			slow()
 		}()
 	}
 	wg.Wait()
-	fmt.Println("6 个查询总耗时:", time.Since(start).Round(100*time.Millisecond))
+	fmt.Println("总耗时超过单个查询的 2 倍:", time.Since(start) > 2*one)
 	s := db.Stats()
 	fmt.Printf("结束后: open=%d idle=%d wait=%d\n", s.OpenConnections, s.Idle, s.WaitCount)
 }
 ```
 
 ```text
-6 个查询总耗时: 2.3s
+总耗时超过单个查询的 2 倍: true
 结束后: open=2 idle=2 wait=4
 ```
 
-6 个查询、2 条连接、每个约 0.7 秒，分三批跑完，总耗时约 2.3 秒而不是 0.7 秒。`db.Stats()` 里的 `WaitCount` 记下了有 4 个查询排队等过连接。〔实测〕重复跑多轮，这两行输出稳定不变，`go1.26.4` 加 `modernc.org/sqlite`：`go run .`，见本节示例。这个排队机制就是 Go 并发模型下"一个请求一个 goroutine 直接查库"不出事的原因：goroutine 非常便宜，来一千个请求就开一千个 goroutine，但真正同时压到数据库上的连接数被池的上限钳住，多出来的 goroutine 在池前排队。池在这里同时是限流器。反过来也要记住它的代价：上限设得太小，吞吐就卡在池上（上面的 2.3 秒就是证据）；设得太大，对 PostgreSQL 这类"一条连接一个进程"的数据库，实例一多就撞服务端的 `max_connections`。PG 的默认上限是 100，生产环境要按"max_connections 除以应用实例数"来规划 `MaxConns`。
+6 个查询、2 条连接，分三批跑完，总耗时是单个查询的两倍以上（具体秒数随机器波动，所以示例只打印布尔值）。`db.Stats()` 里的 `WaitCount` 记下了有 4 个查询排队等过连接。〔实测〕`go1.26.4` 加 `modernc.org/sqlite`，示例由检查脚本实际运行过。这个排队机制就是 Go 并发模型下"一个请求一个 goroutine 直接查库"不出事的原因：goroutine 非常便宜，来一千个请求就开一千个 goroutine，但真正同时压到数据库上的连接数被池的上限钳住，多出来的 goroutine 在池前排队。池在这里同时是限流器。反过来也要记住它的代价：上限设得太小，吞吐就卡在池上（上面总耗时超过单个查询的两倍就是证据）；设得太大，对 PostgreSQL 这类"一条连接一个进程"的数据库，实例一多就撞服务端的 `max_connections`。PG 的默认上限是 100，生产环境要按"max_connections 除以应用实例数"来规划 `MaxConns`。
 
 驱动用之前的另一个坑也要交代：驱动必须**匿名导入**。`database/sql` 通过注册表找驱动，`import _ "modernc.org/sqlite"` 的下划线表示只用它的 `init()` 注册，不直接用包里的任何名字。忘了这一行，编译照样通过，`sql.Open` 运行时才报 `sql: unknown driver "sqlite" (forgotten import?)`。
 
 > 〔W02-2 p7〕GORM 的很多接口都是接收 interface 的，根据你传入不同类型的参数，会执行不同的行为。……虽然 GORM 我用过很多次，但是我还是觉得这些方法语义过于模糊，经常写错。
-GORM 在 `*sql.DB` 之上又包了一层，先看它怎么开连接。它的 DSN 必须带 `charset=utf8mb4&parseTime=True&loc=Local`：〔C:go_frame/orm/gorm/connection.go:17-21〕`utf8mb4` 兼容 emoji，`parseTime=True` 才能把数据库的时间列扫进 `time.Time`，少了它时间字段读出来是字符串或直接报错。上面那段资料的话是 GORM 学习曲线的总纲：它大量接口收 `interface{}`，同一个方法传不同类型行为不同，典型就是 `Updates`，第四节专门拆它。
+
+GORM 在 `*sql.DB` 之上又包了一层，先看它怎么开连接。它的 DSN 必须带 `charset=utf8mb4&parseTime=True&loc=Local`：〔C:go_frame/orm/gorm/connection.go:17-21〕`utf8mb4` 兼容 emoji，`parseTime=True` 才能把数据库的时间列扫进 `time.Time`，少了它，MySQL 驱动把时间列当 `[]byte` 交出来，扫进 `time.Time` 会报错。上面引的那段话点出了 GORM 的学习难点：大量接口收 `interface{}`，同一个方法传不同类型行为不同，典型就是 `Updates`，第四节专门拆它。
 
 ## 二、事务：靠纪律，不靠语法
 
@@ -195,7 +210,7 @@ true true
 sql: Scan error on column index 0, name "deleted_at": converting NULL to string is unsupported
 ```
 
-Rust 有 `Option<String>`，Kotlin 有 `String?`，TS 有 `string | null`，Go 的基础类型没有对应物，所以标准库给了三种绕法，各有归属：
+Rust 有 `Option<String>`，Kotlin 有 `String?`，TS 有 `string | null`，Go 的基础类型没有对应物，所以要靠三种绕法，前两种是标准库和语言自带的，第三种在 SQL 里解决：
 
 ```go
 package main
@@ -249,14 +264,14 @@ GORM 的难点就是第一节引的那句话：同参不同型行为不同。典
 - `Updates(map)`：map 里写什么更新什么，零值照写；
 - `Save`：保存**所有**字段含零值，主键为 0 时相当于 `Create`。〔C:go_frame/orm/gorm/update.go:10-33〕
 
-为什么这样设计？`struct` 参数里 GORM 分不清"你没赋值"和"你赋了零值"，只能约定零值等于没说；`map` 的键显式列出了列名，不存在歧义。代价是你必须记住每个方法对每个参数类型的语义。资料作者的原话就是应对方案：拿不准就看文档、看源码，或者写个小例子验证。〔W02-2 p7〕
+为什么这样设计？一个合理的解释是 `struct` 参数里 GORM 分不清"你没赋值"和"你赋了零值"，只能约定零值等于没说（这是推断，课程只演示了行为）；`map` 的键显式列出了列名，不存在歧义。代价是你必须记住每个方法对每个参数类型的语义。资料作者的原话就是应对方案：拿不准就看文档、看源码，或者写个小例子验证。〔W02-2 p7〕
 GORM 还有几条值得记的约定：〔C:go_frame/orm/gorm/read.go:13-46〕〔C:go_frame/orm/gorm/create.go:16-48〕
 
 1. `First`/`Take`/`Last` 查不到返回 `gorm.ErrRecordNotFound`，`Find` 不会，查无结果就不改你传的结构体；
 2. `Create` 必须传指针，GORM 要回填自增主键和 `CreatedAt`；
 3. 钩子按 `BeforeSave`、`BeforeCreate`、插入、`AfterCreate`、`AfterSave` 的顺序执行，任一钩子返回错误，整个操作回滚。
 
-sqlc 走的是相反的路：SQL 是真相源，Go 代码是生成物。`queries/users.sql` 里写一条带注解的 SQL，`sqlc generate` 一步生成方法：〔W02-2 p7〕
+sqlc 走的是相反的路：SQL 是真相源，Go 代码是生成物。`queries/users.sql` 里写一条带注解的 SQL，`sqlc generate` 一步生成方法：
 
 ```sql
 -- queries/users.sql
@@ -275,7 +290,7 @@ type CreateUserParams struct {
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (CreateUserRow, error)
 ```
 
-写错列名、表名，`sqlc generate` 直接报错，类型安全来自生成阶段而不是编译器（Go 没有宏，做不到 Rust sqlx 那样的编译期校验）。下面的程序把生成的调用效果原样走一遍，看可空列怎么进出：
+写错列名、表名，`sqlc generate` 通常直接报错，类型安全来自生成阶段而不是编译器（Go 没有宏，做不到 Rust sqlx 那样的编译期校验）。但这个检查不完备：旧章实测把 `SELECT COUNT(*) ... WHERE agee > 1` 里的列名拼错，v1.31.1 的 sqlite 引擎照样退出码 0，所以涉及聚合的查询要配测试。来源是 `notes/p11-sqlc-goose.md`。下面的程序把生成的调用效果原样走一遍，看可空列怎么进出：
 
 ```go
 package main
@@ -328,8 +343,8 @@ GetUser(999): true
 
 > 〔W02-2 p22-23〕一般在规范比较严格的公司里面，表结构变更都是要走审批流程的。……评审最重要的就是看你的索引对不对。……后续有新的数据要存储，都要来这里初始化一下表。
 
-规范严格的公司走 SQL 评审，leader 到 DBA，重点看索引对不对；中小企业用 GORM 的 `AutoMigrate`，新表都往一处注册。GORM 那条路的隐患是 `AutoMigrate` 只会加列，改列名、删列、改类型这些破坏性变更它不做，也做不安全，所以它只适合开发期。两条工具的坑值得记：
-- sqlc 的注解 `-- name: Xxx :many` 紧邻长中文注释时，早期版本曾解析失败，当前版本（旧章在 sqlc v1.31.1 复现过）已不复现；生成器的解析器不是编译器，查询文件里的注释保留 ASCII 是便宜的防御。来源是旧章复盘记录，见 `notes/p11-sqlc-goose.md` 的翻车记档（1），资料原话里没有这条。
+规范严格的公司走 SQL 评审，leader 到 DBA，重点看索引对不对；中小企业用 GORM 的 `AutoMigrate`，新表都往一处注册。GORM 那条路的隐患是 `AutoMigrate` 偏向"只增不减"：按 GORM 文档，它会建表、补缺失的列和索引，不会删除不再使用的列，改列名也会被当成新增一列，所以破坏性变更要自己写迁移，它更适合开发期。（以上来自 GORM 文档，本机未验证。）两条工具的坑值得记：
+- sqlc 的注解 `-- name: Xxx :many` 紧邻长中文注释时，旧章怀疑会解析失败，但在 sqlc v1.31.1 上两次构造都没有复现；生成器的解析器不是编译器，查询文件里的注释保留 ASCII 是便宜的防御。来源是旧章复盘记录，见 `notes/p11-sqlc-goose.md` 的翻车记档（1），资料原话里没有这条。
 - goose 的迁移文件里，普通注释行中不要出现 `-- +goose`，会被当成真注解，报错是 `failed to parse annotation line`，不是"你的注释写错了"。来源是旧章复盘记录，见 `notes/p11-sqlc-goose.md` 的翻车记档（2），带完整复现命令。
 
 ## 小结
@@ -390,7 +405,7 @@ func main() {
 连接 2 插入: SQL logic error: no such table: t (1)
 ```
 
-正确姿势是 DSN 写 `file:x?mode=memory&cache=shared` 加 `SetMaxOpenConns(1)`，本节前面的示例都遵守了这条。
+正确姿势有两种：`:memory:` 配 `SetMaxOpenConns(1)`；或者 DSN 写 `file:x?mode=memory&cache=shared`，让所有连接共享同一个内存库。本节前面的示例用的是后一种，练习包 `exercises/p9db` 的 `openTestDB` 则两者都用了。
 
 ## 判断题与答案
 

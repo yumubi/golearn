@@ -93,12 +93,12 @@ Cause: upstream gone
 
 `cancelC(errors.New("upstream gone"))` 把原因塞进去，之后任何拿到这个 ctx 的 goroutine 都能用 `context.Cause(c)` 问出"为什么停"。对比 Java：取消一个 `Future` 只有 `cancel(true)`，没有原因可查；Go 把这个原因做成了 context 的一部分。
 
-超时是取消最常见的来源。材料里给了四种写法，只有最后一种是标准答案：〔C:dachang/concurrence/timeout.go:21-105〕
+超时是取消最常见的来源。材料里给了四种写法，最后一种最常用：〔C:dachang/concurrence/timeout.go:21-105〕
 
 1. **手动 deadline channel**：另起 goroutine `sleep` 后 `close` 一个 channel，`select` 等它。能用，但每处都要手写一遍定时和关闭。
-2. **`time.After`**：`select` 等 `time.After(d)`。它本身没问题（原材料担心它的定时器不回收，那是 Go 1.23 之前的行为；1.23 起未被引用的定时器能被 GC 回收，〔1.26 修正〕`go doc time.After` 是这么写的），但它只管超时，不能把取消往下游传播。
+2. **`time.After`**：`select` 等 `time.After(d)`。它本身没问题（过去有人担心它的定时器不被回收，那是 Go 1.23 之前的行为；1.23 起未被引用的定时器能被 GC 回收，〔1.26 修正〕`go doc time.After` 是这么写的），但它只管超时，不能把取消往下游传播。
 3. **手动 `WithCancel` + `sleep`**：另起 goroutine 睡到点再 `cancel`。能传播取消，但多一个 goroutine，还要保证 `cancel` 一定被调到，容易漏。
-4. **`WithTimeout`**：耗时函数放进独立 goroutine，主 goroutine `select` 同时等结果和 `ctx.Done()`。这是标准答案，超时能传播，取消也能传播。
+4. **`WithTimeout`**：耗时函数放进独立 goroutine，主 goroutine `select` 同时等结果和 `ctx.Done()`。超时能传播，取消也能传播，也不用自己多起 goroutine 计时。
 
 第四种的样子：
 
@@ -309,7 +309,7 @@ fmt.Println(g.Wait()) // task 2 failed，远小于 300ms 就返回
 
 为什么能"远小于 300ms"？task 2 立刻返回错误，`WithContext` 把派生 ctx 取消，其余三个任务的 `select` 里 `ctx.Done()` 分支立刻命中，它们不再等 300ms。这里有个前提：**任务必须监听 ctx**。如果任务不 `select ctx.Done()`，一个失败后兄弟还在白跑，`Wait` 只是"先返回"，不是"先让兄弟停"。
 
-只返回第一个错误是设计如此。要收集全部错误，用 `errors.Join` 或自己 `append`（05 讲过）。对照：Kotlin 的 `coroutineScope`、Java 21 的 `StructuredTaskScope` 是同一个"一个失败取消兄弟"的模型；JS 的 `Promise.all` 遇到第一个失败就返回，但**不会取消其余任务**。
+只返回第一个错误是设计如此。要收集全部错误，用 `errors.Join` 或自己 `append`（05 讲过）。对照：Kotlin 的 `coroutineScope`、Java 的 `StructuredTaskScope`（21 起的预览 API）是同一个"一个失败取消兄弟"的模型；JS 的 `Promise.all` 遇到第一个失败就返回，但**不会取消其余任务**。
 
 ## 五、背压：慢要有路径，不是消失
 
@@ -317,7 +317,7 @@ fmt.Println(g.Wait()) // task 2 failed，远小于 300ms 就返回
 
 1. **阻塞上游**：有界 channel 满了，发送方自然阻塞，压力一路传回源头。默认首选，系统变慢但不丢数据。无缓冲 channel 是容量 0 的极端。
 2. **丢弃**：`select { case q <- x: default: dropped++ }`。适合指标、日志这种"丢一点无所谓"的数据。
-3. **拒绝**：对外返回 429、`ErrNoIdleWorker` 之类的错误，让调用方重试或降级。适合有明确失败语义的请求。
+3. **拒绝**：对外返回 429、`ErrNoIdleWorkerInPool` 之类的错误，让调用方重试或降级。适合有明确失败语义的请求。
 
 丢弃那一类一眼看懂：
 
