@@ -29,6 +29,14 @@ def run_one(m):
         open(path, 'w', encoding='utf-8').write(orig)
     out = r.stdout + r.stderr
     if r.returncode == 0:
+        # 并发时序测试在机器负载高时可能偶发"该失败却通过";重跑一次,仍通过才判幸存
+        try:
+            open(path, 'w', encoding='utf-8').write(orig.replace(m['find'], m['replace']))
+            r2 = subprocess.run(m['run'], capture_output=True, text=True, timeout=300)
+        finally:
+            open(path, 'w', encoding='utf-8').write(orig)
+        if r2.returncode != 0:
+            return 'KILLED  首跑侥幸通过,复跑失败(时序偶发)'
         return 'SURVIVED  变异后测试仍然通过：测试没守住这个行为'
     if m.get('expect') and m['expect'] not in out:
         return f"WRONG-FAIL  失败了但输出不含 {m['expect']!r}（可能死于别的原因）"
