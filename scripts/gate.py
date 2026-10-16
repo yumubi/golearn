@@ -159,6 +159,22 @@ def count_tests(ref):
 
 b, n = count_tests(BASE), count_tests(None)
 rec(f'测试函数总数不减少（BASE {b} -> 现 {n}）', n >= b)
+
+# 10.5 基线包数声明与实测一致（go list 含 _test.go 的包数）
+def test_pkgs(dirmod):
+    out = sh(f'cd {dirmod} && go list -f "{{{{if .TestGoFiles}}}}{{{{.ImportPath}}}}{{{{end}}}}" ./...').stdout.split()
+    return len([x for x in out if x.strip()])
+
+
+declared = []
+for f in ('README.md', 'docs/index.md'):
+    m = re.search(r'(\d+) 包（golearn）\+ (\d+) 包（dnsproxi', open(f).read())
+    if m:
+        declared.append((f, int(m.group(1)), int(m.group(2))))
+if declared:
+    real = (test_pkgs('.'), test_pkgs('dnsproxi-go'))
+    bad = [f'{f}: 写 {a}+{b}, 实测 {real[0]}+{real[1]}' for f, a, b in declared if (a, b) != real]
+    rec('基线包数声明与实测一致', not bad, '; '.join(bad))
 bad = []
 for f in changed('.go'):
     for i, line in enumerate(open(f).read().splitlines(), 1):

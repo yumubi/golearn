@@ -4,8 +4,10 @@ node_modules/
 .cache
 .DS_Store
 .eslintcache
+.claude/
+skills-lock.json
+__pycache__/
 .idea
-.env
 .temp
 .output
 .turbo

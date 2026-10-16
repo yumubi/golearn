@@ -43,4 +43,4 @@ go vet ./... && go test -race -count=1 ./...
 cd dnsproxi-go && go vet ./... && go test -race -count=1 ./...   # 独立 module
 ```
 
-当前基线：18 包（golearn）+ 3 包（dnsproxi，含 /metrics + slog）全绿。
+当前基线：29 包（golearn）+ 5 包（dnsproxi，含 /metrics + slog + guard）全绿。
