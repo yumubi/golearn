@@ -40,7 +40,7 @@ export default defineConfig({
         ],
       },
       {
-        text: '速通手册（18.5 小时，先读）',
+        text: '速通手册（19 小时，先读）',
         collapsed: false,
         items: [
           { text: '手册总览与目录', link: '/handbook/README' },
