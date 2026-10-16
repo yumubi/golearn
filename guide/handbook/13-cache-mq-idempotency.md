@@ -544,6 +544,65 @@ order:42 处理次数: 3
 - `dnsproxi-go/cache/` 是一个真正的缓存实现：`cache.Cache` 的 `Get` 与 `Put` 读写、`cache.ExpireRound` 与 `cache.RunExpirer` 的主动过期（每轮抽样回收，和 Redis 的主动过期同思路）、`cache.FreqSketch` 做 TinyLFU 准入（count-min sketch 估频率，准入不过就拒之门外）。它和业务缓存的区别是容量有限，要关心"淘汰谁"和"准入谁"；业务缓存通常容量按富余设计，只需要关心"存什么"和"TTL 多长"。`reply.go` 的 `BufPool` 是 `sync.Pool` 复用 4KB 应答缓冲，属于进程内的对象缓存，"复用昂贵资源"的动机相通。
 - minifeed 的 `rank.Rank.Refresh` 是"算分加读侧零锁"的单机版：`rank.Source` 给候选集，排序后装进 `atomic.Value`，`Top(n)` 读快照不加锁，对应第五部分榜单读侧的形状；数据未过期时再次调用 `Refresh` 直接跳过，并发调用由 `mu` 合并成一次。注意 `Source.Posts` 不返回 error，所以代码里并没有"刷新失败保留旧榜"的分支，那只是注释里的设想。`counter` 包的 ticker 批量刷库对应第八部分"消费者凑批落库"。消息队列和分布式锁在这两个项目里没有对应物。
 
+
+## 想深入：正文之外的干货
+
+### W04-2 验证码登录：需求到 Lua 的完整链路
+
+- 需求分析三板斧：参考竞品总结功能特性（发码前先过拼图、发过要隔一段时间、首号自动注册、验证码有有效期、不同业务验证码彼此独立）；功能角度分轻重缓急，非功能角度中小公司按"安全性、扩展性、性能"排序想；正常流程与异常流程分开想，还要分清业务异常和技术异常。〔W04-2 p5-6〕
+- 验证码和登录是弱耦合：危险操作二次验证、改密码都要用验证码，所以验证码是独立模块甚至独立服务；短信还可能换供应商（腾讯换阿里）。两个变化点（别的业务要用、可能换供应商）决定抽象预留。〔W04-2 p10-12〕
+- 服务划分叠三层：独立短信发送服务，其上封装验证码功能，再封装登录功能；接口设计方法论是"知道哪里有扩展但不知道怎么扩展时，只按当下需求做简单抽象，别指望设计一个用几十年的接口"。〔W04-2 p13〕〔W04-2 p17〕
+- 腾讯短信 API 五要素：目标手机号、appId、签名（标记谁发的）、模板（服务商预配置得模板 ID）、模板参数；初始化只管鉴权（SecretId/SecretKey），所以抽象出的 `Send(ctx, tplId, args, numbers...)` 不传 appId 和签名，它们在构造函数里注入。〔W04-2 p18-19〕
+- 两条安全线：发频率（同号一分钟一次、有效期十分钟、系统限流兜底）加防暴力破解（验证通过即作废、三次失败作废、失败只说"不对"不提示次数，防止攻击者探测重试上限）。〔W04-2 p26〕
+- 发码的 Redis 设计：key 形态 `phone_code:$biz:$phone`，SET 带 600 秒过期；无 key 直发；有 key 无 TTL 视为系统异常；剩余 TTL 大于 9 分钟判定"发送太频繁"拒绝，否则重发。〔W04-2 p28〕
+- 发码 Lua 三分支：ttl 为 -1（key 没设过期，疑似误操作）返回 -2；ttl 为 -2（不存在）或小于 540（已过一分钟）就写入验证码、设 600 秒过期、把计数 key 置 3 并同步过期，返回 0；其余返回 -1。业务逻辑基本都在 Lua 里。〔W04-2 p32-33〕
+- 验证流程：不存在就是还没发；次数不超 3 比对输入，超 3 直接不等；比对相等把计数 key 置 -1 作废，不相等就 DECR。作废用置 -1 而不是 DEL：删了 key 用户立刻重发新码，频率限制被绕过，保留 key 一并挡住两条路。〔W04-2 p34-35〕
+- 两个 HTTP 接口都挂在 UserHandler 上（POST /login_sms/code/send 与 /login_sms），Handler 聚合 CodeService 和 UserService；严格做法是再立一个 UserAggrService，课程认为还没复杂到那步。发码 handler 校验手机号后按错误分流（太频繁、系统错误要打日志）。〔W04-2 p41-43〕
+- 手机号登录绕不开 FindOrCreate 的并发注册：先查，查不到就注册，注册报唯一索引冲突说明撞上并发，再查一次返回；第三步在主从模式下要走主库，防止复制延迟读到旧库。正常用户走不到第三步。〔W04-2 p45-46〕
+- 双唯一索引的 NULL 问题：邮箱注册的没手机号、手机号注册的没邮箱，ORM 里用 `sql.NullXXX` 家族表示（作者不喜欢指针写法，因为要判 nil）；`sql.NullString` 能用是因为实现了 `sql.Scanner` 和 `driver.Valuer` 两个接口，照这个路子可以写泛型 `JsonColumn[T]` 支持 JSON 列。〔W04-2 p47〕〔W04-2 p52〕
+
+### W07-2 Kafka 客户端与消费端补遗
+
+- 生产者选分区三策略：轮询、随机、按 key 哈希，路由策略可自定义（面试亮点）。〔W07-2 p8〕
+- 本地起 Kafka 用 Docker 就够：新版 Kafka（KRaft 模式）不再需要 ZooKeeper；调试用 kafka-topics.sh 建 topic、kafka-console-consumer.sh 验证消息。〔W07-2 p14-16〕
+- 同步 producer 必须设 `Return.Successes=true`，SendMessage 返回分区号和 offset；异步 producer 把 Successes 和 Errors 都设为 true，从 Input channel 发、用 select 同时监听成功和失败两个 channel。〔W07-2 p19〕〔W07-2 p21〕
+- Sarama 的 Partitioner 有 Random、RoundRobin、Hash、Manual、ConsistentCRC（CRC16 一致性哈希）、Custom（参数化 Hash），典型用法就是同业务同分区保业务有序。〔W07-2 p20〕
+- channel 三条语法要记牢：close 后再写 panic、读得到零值（用第二返回值判关闭）、重复 close 也 panic；for range channel 在 close 后自然退出；select 无 default 会阻塞到某个 case 成功，多 case 就绪随机挑一个，case 后不用 break。〔W07-2 p25-29〕
+- Sarama 消费者的形状：NewConsumerGroup 后循环调 `cg.Consume(ctx, topics, handler)`；ConsumeClaim 里 for range claim.Messages()，消费成功必须 `session.MarkMessage(msg, "")` 提交位点，Setup/Cleanup 用得少；消费者退出靠传进去的 ctx 超时或 cancel。〔W07-2 p30-32〕
+- 重置位点消费历史消息可以在 Setup 里 ResetOffset，但更建议走离线渠道操作集群，不是每次部署都要重置。〔W07-2 p33〕
+- 消费者接口化给依赖注入用：`events.Consumer{Start()}` 统一接口，InteractiveReadEventConsumer 解包 ReadEvent 后调 `repo.IncrReadCnt(biz:"article")`；再加一个阅读历史消费者订阅同一事件，读文章接口零改动，这就是解耦的验证方法。〔W07-2 p41〕〔W07-2 p47〕
+
+### W09-2 调度器实现与并发细节
+
+- Preempt 接口把续约也包进去：抢到任务时起一个 ticker（默认 10 秒一次）goroutine 持续更新数据库证明活着，取消信号（close channel）停止续约并释放任务；续约间隔越短，节点崩溃后被别人接手越快，但数据库压力越大。〔W09-2 p19〕
+- Scheduler 循环四步：先拿 semaphore 令牌（防极端情况抢占几十万任务打爆内存），再短超时查库抢占，抢占成功开 goroutine 执行并 defer 释放令牌加取消续约，最后按执行结果更新 next_time；忘记 Release 令牌，调度器慢慢停摆。〔W09-2 p23-24〕
+- 作业二点出的抢占漏洞：SQL 只查 `status=waiting` 会漏掉"running 但持有者已崩溃"的任务；生产实现要加"续约超时"条件，把僵死任务重新变回可抢占。〔W09-2 p32〕
+- 续约失败回写 `r.Lock=nil` 必须在本地锁（mutex）内做，Run 也在同一把锁里读这个字段，否则是数据竞争。〔W09-2 p13〕
+
+### W07-1 计数的数据库侧细节
+
+- IncrReadCnt 的顺序是先数据库后缓存：缓存失败不影响数据库真值，缓存错由 TTL 和回写修复，顺序颠倒会放大错误；部分失败造成的不一致按第五部分的原则不解决。〔W07-1 p6〕
+- 软删除下的点赞要一个事务里放两个 Upsert：明细表 DoUpdates status=1 加 utime（取消变点赞），计数表 like_cnt 用 gorm.Expr 自增；收藏同理，事务内插入收藏项再 Upsert 计数，缓存复用同一段 Lua。〔W07-1 p17〕〔W07-1 p19-20〕
+- 收藏建模两张表：收藏夹本体（name 加 uid）加关联表（cid 加 biz 加 bizId 加 uid），收藏夹对内容是 1:N；收藏夹本身的增删改查留作练习。〔W07-1 p18〕
+- 查询接口的聚合用 errgroup 并发查文章、总数、个人是否点赞收藏；另一种思路是把 Interactive 当作 Article 的值对象塞进 domain，课程选了 Web 层聚合。〔W07-1 p21-22〕
+- 计数优化的另一条路：SELECT COUNT 性能差，改成维持总数（Redis 或数据库加 Redis，启动或缓存过期后 Count 一次回写）；实在改不了就优化 SQL 让它直接在索引上数，不回表。〔W07-1 p29〕
+
+### W09-1 榜单工程细节
+
+- Ticker 和 cron 的具体写法：`time.NewTicker` 必须 `defer Stop()`，否则 goroutine 泄露；for 加 select 里同时监听 `ctx.Done()` 和 `ticker.C`。robfig/cron/v3 用 `cron.New(cron.WithSeconds())` 开秒域，AddFunc 线程安全，Stop 返回的 ctx 用来等任务真正结束，表达式写不准就用 `@every 1m`。〔W09-1 p14-17〕
+- Job 是和 Web、gRPC 同层的对外暴露方式，不是 DDD 概念；RankingJob 的 Run 里用 `ctx.WithTimeout(30s)` 包住 RankTopN，超时就放弃这一轮。〔W09-1 p25-26〕
+- TDD 思路：gomock 模拟"两批有数据加第三批为空"的 ListPub 和每批的 GetByIds，scoreFunc 直接简化成常数，聚焦流程不聚焦公式。〔W09-1 p20-21〕
+- CronJobBuilder 装饰器给 Job 加观测：记录开始结束日志，Prometheus histogram 按"任务名加成败"打点 Observe 耗时；偶发失败不用管，连续失败要靠 Grafana 告警。〔W09-1 p27〕
+- 批量查询点赞数用 `GetByIds` 一次查一批，不要每篇文章发一条 SQL；批次里最后一条的 utime 早于七天线时，后面批次可以直接不拉。〔W09-1 p19〕〔W09-1 p23〕
+
+### W04-1 压测与练习
+
+- wrk 参数就四个：`-t` 线程数、`-d` 时长（1s 到 1m 都行）、`-c` 并发连接数、`-s` lua 脚本；压测前要做三件事：启用 JWT 登录态、把登录态拉长到 30 分钟防测试中过期、去掉 ratelimit 限流，否则测出来的是鉴权和限流的性能。〔W04-1 p3-5〕
+- 三个 lua 脚本的要点：signup 用不同邮箱模拟注册，login 的 body 要改成自己注册的账号，profile 要手动登录后把 Bearer token 和 User-Agent 复制进 headers（UA 和登录时不一致会 401，把压测变成"测鉴权"）。〔W04-1 p7-8〕
+- 练习：画出 FindById 和 FindByIdV1 在 Redis 崩溃场景下的请求流，两种降级策略（第一部分）的差别就吃透了。〔W04-1 p17-18〕
+
+省略未吸收：W04-2 的 K2/K10/K12（短信配置文件、cookie 登录态、验证码服务与登录服务的取舍细节，与 10 节依赖注入主题重叠）；W07-2 的 K26 批量 DB 实现细节已在正文批量消费处覆盖；W09-1 的 D2 中断条件三合一已并入正文七天优化；W09-2 的 K14/K15 表结构与状态机、K18/K19 gocron 与面试包装、K8s CronJob 配置正文已提。C 单元（go_frame/mq、lottery）的代码行级细节只收了正文引用过的部分，其余是工程脚手架。其余必读条目已全部融入正文或本块。
+
 ## 想深入去哪查
 - 缓存：W06-3（分页缓存、预加载、提前写、淘汰策略）、W04-1（缓存集成位置、两种回源写法）、W04-2（验证码场景的"检查-做某事"Lua）、W07-1（计数的 Lua 脚本与一致性分析）。榜单与调度：W09-1（HackerNews 模型、小顶堆、本地缓存、可用性复盘）、W09-2（分布式锁、续约、MySQL 抢占、K8s CronJob）。
 - Kafka 与 RabbitMQ：W07-2（五概念、分区、acks、Sarama、批量消费）、`C:go_frame/mq`（RabbitMQ 持久化、Ack、Qos、Exchange 类型、Kafka 写入）。抽奖与并发扣库存：`C:go_frame/lottery`（原子 DECR、减库存成功才返回）。

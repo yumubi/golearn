@@ -520,6 +520,62 @@ func main() {
 - **集中配置**：`dnsproxi-go/main.go` 的 `loadConfig` 把所有开关集中在启动时从环境变量读成一个 `Config`，`envIntClamp` 对越界值回退默认（避免错误值炸在后台任务里）。后续代码只拿 `Config`，不再碰环境。
 - **依赖作为函数值传入**：`Proxy.Run` 调用 `tcp.Serve(ctx, ln, p.handleQuery, tcp.ServerCfg{})`，把业务处理函数以方法值传给 TCP 层，TCP 层不知道 `Proxy` 的存在。这是不用 DI 框架的依赖注入。
 
+## 想深入：正文之外的干货
+
+### W04-3 wire 与接口抽取的补充细节
+
+- wire 的完整两步操作：新建 `wire.go`，文件头写 `//go:build wireinject` 编译标签，里面 `wire.Build(...)` 注册全部构造函数、随便 `return` 一个值凑齐返回值；跑 `wire` 命令生成 `wire_gen.go`，真正的初始化方法在里面。前提是 `GOPATH/bin` 在 PATH 里，否则找不到 wire 命令。〔W04-3 p7-8〕
+- wire 改造一套 Web 服务还要四类新方法：把 Gin 中间件准备成 `[]gin.HandlerFunc` 的方法、初始化 sms.Service 这类组件的 ioc 方法、收口路由注册的 `InitWebServer(funcs []gin.HandlerFunc, userHdl *web.UserHandler)`、main 里直接启动。〔W04-3 p13-14〕
+- `wire.Bind(new(redis.Cmdable), new(*redis.Client))` 是接口注入的标准写法：构造函数返回接口时，wire 不会自己猜"谁实现了它"，要显式绑定。〔W04-3 p15〕
+- 反例与正例怎么认：struct 字段注入 `CodeRepository` 是非面向接口（拿不到替换点）；`CodeService` 依赖 `sms.Service` 接口才是，随时能加 aliyun 等实现。〔W04-3 p25-26〕
+- UserService 也可以抽接口，当下的动机是测试，将来可能按版本或 VIP 分实现；实现叫小写的 `userService`，接口不导出也能满足包内使用。〔W04-3 p31〕
+- "返回接口的构造函数"有代价：调用方拿不到具体类型的新增方法，字段可见性也受限，只在该类型确有多实现需求时用。〔W04-3 p33〕
+- 抽接口时把定义放提供方还是消费方？课程把接口放在 service/repository 包内（提供方），Go 社区惯例是消费方定义小接口，两种都有人用，别当成教条。〔W04-3 p29-31〕
+- 手写装配的测试成本对照：给"自己 gorm.Open 的 Repository"写测试要连真库，给注入版只要两个假实现，这正是练习点里"两个测试文件对比"要体会的东西。〔W04-3 p5-6〕
+
+### W04-6 调用治理的完整版图
+
+- 治理的出发点是两条：尽量不搞崩第三方（别触发它的自我保护限流），第三方崩了你还得稳定运行。配套一条血泪教训：不要相信公司外的人、别的部门、同组的人、甚至昨天的自己。〔W04-6 p3-4〕
+- 客户端限流的动机：腾讯短信 API 阈值 3000/s，超了直接被拒；与其等服务商返回限流响应，不如本地就限住。做法沿用 Web 限流的 Redis 滑动窗口，把限流抽成通用 `Limiter` 接口 `Limit(ctx, key) (bool, error)`，比 Gin 插件版少一个 prefix 字段。〔W04-6 p5-7〕
+- 装饰器的单元测试很轻：Limiter 和 Service 都是接口，mockgen 生成 mock 后三个用例就够（正常发送、触发限流、限流器本身报错）；输入对结果没影响，随便写。〔W04-6 p13-14〕
+- 开闭原则、非侵入式、装饰器三者的关系：对修改闭合对扩展开放；侵入式修改降低可读性、可测试性、可扩展性还强耦合，"侵入式=垃圾代码"这个等式基本成立。〔W04-6 p16〕
+- 怎么知道服务商出问题了？无法准确知道，只能猜：频繁超时、EOF 或 UnexpectedEOF、响应时间变长；关系够铁可以问有没有特定错误码。〔W04-6 p20〕
+- failover V1 是朴素轮询：按顺序把 svcs 试一遍，全挂才报错（更可能是你的网络崩了，这时要打日志）。缺点是负载不均，多数请求在 svcs[0] 就成功，服务商一多轮询也慢。〔W04-6 p22〕
+- 原子操作四件套要分清：Load 原子读（不会读到改一半的数据）、Store 原子写（跨核立即可见）、Add 原子自增并返回新值、CAS 比较并交换；原则是没做并发控制的操作一律不是并发安全的。〔W04-6 p27〕
+- 健康判定的实现要点：切 idx 用 CAS（失败说明别人切过了，返回值不用检测），成功时重置计数、超时才累加、其他错误不动。判据除了连续超时还有错误率（超 10%）和响应时间突变（100ms 变 1s），按服务商特点选。〔W04-6 p28-30〕
+- tpl 是要治理的资源：审批流程申请、特定组才能用、容量上限（比如每月 10 万条）控成本；内部调用用静态 token，原则"认 token 不认人"。〔W04-6 p34-36〕
+- JWT token 的设计二选一：给 Send 加 token 参数，或者用 token 替换 tpl 参数。课程选后者，因为语义变了：从"指定模板"变成"授权发送"，模板 ID 服务端从 token 解出来，业务方没法越权用别人的模板；进阶是 appId/appSecret 换临时 token 控时效。〔W04-6 p36-37〕
+- 作业题值得做：同步转异步的容错装饰器，触发限流或判定服务商崩溃时把请求转储进数据库，goroutine 异步重试 N 次，参数可配，保持装饰器风格。〔W04-6 p43〕
+
+### W05-3 配置工程化补遗
+
+- 最初的问题：配置全写死在代码里，靠 `go:build !k8s` 这类编译标签切环境，引出配置模块。〔W05-3 p3〕
+- 两次加载是使用远程配置中心的标准流程：第一次只加载远程中心的连接信息和日志配置（保证连得上、日志可用），第二次完全加载并用远程值覆盖；被覆盖的组件（日志）要重新初始化。〔W05-3 p7〕
+- viper 读本地文件两式：`SetConfigName`+`SetConfigType`+`AddConfigPath` 多路径搜索，或 `SetConfigFile` 直接指路径，效果基本无差别，`ReadInConfig` 触发加载。〔W05-3 p8-9〕
+- `ReadConfig(io.Reader)` 能直接喂字符串配置，测试和本地调试不用写文件；作者自嘲都手写了不如在 IoC 里写死。〔W05-3 p14〕
+- viper 没有内置多环境概念，多环境靠启动参数：`pflag.String("config", "config/config.yaml")` 定义，启动时 `--config=config/dev.yaml` 切文件，注意 working directory。〔W05-3 p16-17〕
+- etcd 作远程配置中心的完整链路：Docker Compose 起 etcd，`etcdctl put /webook "$(<dev.yaml)"` 写入，代码里 `AddRemoteProvider("etcd3", "http://127.0.0.1:12379", "/webook")` 加 `SetConfigType("yaml")` 加 `ReadRemoteConfig`。〔W05-3 p21-24〕
+- 公司级远程配置中心的功能清单：统一接口、Web 界面（路径权限、关键配置限人、版本回滚、环境同步、审批流、灰度发布），本质都是增删改查，不难。〔W05-3 p30〕
+- `--config` 指向不存在的文件时 `ReadInConfig` 在哪一行 panic、错误长什么样，值得自己跑一遍；viper 支持用 `ReadConfig` 在单测里构造配置替代真实文件。〔W05-3 p14,p17〕
+
+### W06-2 存储扩展：MongoDB 与 OSS 落地
+
+- 换存储的现实：技术选型一开始就定死，要换也是一次性 MySQL 换 MongoDB，不会有今天 MySQL 明天 MongoDB；DAO 抽象下加一个 MongoDBArticleDAO 实现即可。〔W06-2 p29〕
+- MongoDB 没有自增主键，`_id` 是 12 字节字节切片不是数字。主键四个方案：ID 全改 string、雪花算法生成 int64、放弃 DAO 一致抽象单独定义接口、GUID；课程选雪花，理由是改动最小加教学价值。〔W06-2 p30-31〕
+- 雪花算法的位分配：1 比特保留加 41 位时间戳加 10 位机器（Worker ID，最多 1024 节点）加 12 位自增序列；用 `bwmarrin/snowflake` 库 `NewNode(1)` 后 `node.Generate().Int64()`。〔W06-2 p32-33〕
+- 主键换了测试跟着换：雪花 ID 无法预知，断言只能判 `ID > 0`，`Ctime/Utime/Id` 归零后再比对象；TDD 方式是把 GORM 集成测试复制一份改造，从 Handler 开始测，靠注入换 DAO。〔W06-2 p34-36〕
+- MongoDB 客户端三步走：`mongo.Connect(options.Client().ApplyURI(...))` 连接，`Database("webook")` 选库，`Collection("articles")` 拿集合；查询优先判 `Err() == mongo.ErrNoDocuments` 再 `Decode` 还原结构体。〔W06-2 p15-19〕
+- BSON 四类型：E 是键值对、D 是 E 的切片、M 是 map、A 是切片；`bson.E` 基本都放 `bson.D` 里。复杂查询（`$or`、`$in`、Projection）可读性很差，driver API 被作者毒评为垃圾。〔W06-2 p20-25〕
+- 更新的零值陷阱：直接拿结构体更新会把没赋值的字段刷成零值，要么显式 `$set` 列字段，要么字段加 `omitempty`，二选一。更新帖子的 filter 要带 `id + author_id` 防越权。〔W06-2 p37-40〕
+- Mongo 版发布接口没有跨库事务：线上库 `UpdateOne` 加 `SetUpsert(true)`，`$set` 更新字段、`$setOnInsert` 保证 ctime 只在首次插入写入；制作库成功线上库失败仍是部分失败，要补偿机制补位。〔W06-2 p44〕
+- OSS 方案的分工：制作库还是关系型数据库，线上库换成 OSS 加 CDN，数据库只存元数据参与复杂查询，文章 Content 同步进 OSS；读者读内容直接走 CDN。〔W06-2 p48-52〕
+- 各云的对象存储基本都兼容 S3 RESTful API，切换成本比短信低（短信没有统一 API）；`PutObject` 要设 `Content-Type` 带 charset，中文不设会乱码。〔W06-2 p52-53〕
+- 撤回时删 OSS 对象不等于内容消失：CDN 可能还有缓存，知道 CDN 拼接方式就能绕开登录直接读内容，公开 CDN URL 等于内容公开，私有内容要签名 URL 加防盗链。〔W06-2 p56-57〕
+- 结论别照搬：帖子这种小文本不适合 OSS，图片视频平台才适合；OSS 操作就是增删改查，不支持复杂查询。〔W06-2 p58〕
+- MongoDB 索引的 ESR 原则：等值（Equal）、排序（Sort）、范围（Range）列按此顺序建，比如 `author_id, read_cnt, ctime`；可扩展成 EESR、ESSR 等，只要相对顺序不变；MySQL 索引同样参考，实践中 S 和 R 换序有时更快。〔W06-2 p64〕
+
+省略未吸收：W06-2 的 BSON 四类型完整代码示例与 `$or/$in/Projection` 逐个写法（K10/K11 的代码面，留给 12 节数据库正篇）、MongoDB 更新删除的逐条操作演示（K9 的剩余部分）、K22 的 Region/Endpoint 获取细节（查服务商文档即可）；W04-6 的面试项目包装话术（K19，面试向）；W05-3 的 company 配置中心界面细节（与正文功能清单重复）。其余必读条目已全部融入正文或本块。
+
 ## 想深入去哪查
 
 - 依赖注入与面向接口：W04-3 全文（wire 用法、缺陷、接口抽取顺序）；`C:go_frame/dependency_injection`（手写装配 vs wire 并排）。

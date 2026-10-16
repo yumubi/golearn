@@ -412,6 +412,59 @@ logger.InfoContext(ctx, "cache miss, forwarding", "qname", "down.test")
 - **指标**：`dnsproxi-go/metrics.go` 按 RED 摆五个指标：`QueriesTotal{qtype,outcome}` 是 Rate，`outcome` 注释写的是 hit|miss|sinkhole|short|upstream_error，代码里实际还有 `rate_limited`；`UpstreamErrorsTotal{reason}` 是 Errors，`reason` 只有 timeout|refused|network，由 `upstreamErrReason` 归类；`UpstreamLatency` 直方图是 Duration，只在转发上游时 Observe；外加 `InFlight`（worker pool 的背压点）和 `CacheEntries`（逼近 CacheMax 没）两个 Gauge。wire 里的 qtype 是 `uint16` 有 65536 种，`qtypeLabel` 收成 9 个实名加 `OTHER`。`MetricsHandler` 就是 `promhttp.Handler`，抓取口独立于业务端口。
 - 链路在 dnsproxi 里没有现成例子；日志里的 `req_id` 起的是最小的关联作用。
 
+## 想深入:正文之外的干货
+
+下面按单元补齐课件里正文没展开的必读点,都压缩成"机制加坑"。
+
+### W05-4 日志工程剩下的干货
+
+- **没有日志的代价**:系统状态没法确认,出问题没法定位,这是日志被放在第一位的理由。〔W05-4 p3〕
+- **zap 的全局路线**:课程用 zap 演示,`zap.NewDevelopment()` 建 Logger,`zap.ReplaceGlobals(l)` 换掉全局 `zap.L()`,返回值是恢复函数,调一下就换回旧 logger。自己维护一个包变量和它没有本质区别,都卡在多 Logger 需求上。〔W05-4 p6〕〔W05-4 p11〕〔W05-4 p14〕
+- **先想清楚在哪打**:系统出口是调第三方,入口是收请求返响应;能用 AOP(中间件)包的交给 AOP,包不到的手动打,`redis.Cmdable` 上百个方法逐个封装不现实。〔W05-4 p26〕〔W05-4 p31〕
+- **读 Body 必须回填**:middleware 里 `GetRawData()` 读走 Body 后要 `io.NopCloser(bytes.NewBuffer(data))` 放回去,Body 是流只能读一次;不回填,后面的 Bind 拿到空 body,这是经典事故。〔W05-4 p27-28〕
+- **记响应要包装 `gin.ResponseWriter`**:`gin.Context` 不暴露响应,重写 `WriteHeader`/`Write`/`WriteString` 把状态码和响应体截下来存进 AccessLog。〔W05-4 p29〕
+- **AccessLog 要限长截断**:不限大小等于给攻击者开洞,长 URL、巨大 body 全落盘;要截断加脱敏。〔W05-4 p28〕
+- **viper 配 zap**:`viper.UnmarshalKey("log", &cfg)` 直接反序列化到 zap 的 config,`cfg.Build()` 出 Logger,再用 IoC 收口到统一的初始化函数。〔W05-4 p23〕
+- **什么时候才值得抽象**:中小项目直接用 zap、viper 没问题;中大型公司抽象自己的接口加适配器才有价值,课程里 viper(直接用)和 zap(包一层)正好是两种做法的对照。〔W05-4 p24〕
+- **适配器和装饰器的分界**:装饰器前后始终是同一个接口,适配器必然跨接口,用在版本升级、接口对齐。〔W05-4 p22〕
+- **日志开销的边界**:百万 QPS 之前不要考虑日志开销;真正要担心的是存储成本和告警噪音,不是 CPU。〔W05-4 p5〕〔W05-4 p32〕
+
+### W08-1 指标埋点的其余做法
+
+- **Summary 的 objectives**:key 是分位(0.5、0.9、0.99、0.999),value 是允许误差,越靠尾部要求越严,从 1% 收到 0.01%。〔W08-1 p23〕
+- **Summary 与 Histogram 怎么选**:Summary 的分位数在客户端算,多实例之间没法聚合;Histogram 存桶,分位数由 Prometheus 服务端算。单实例看分位用 Summary,要跨实例聚合用 Histogram。〔W08-1 p19〕〔W08-1 p22〕
+- **Vector 与两种 label**:固定 label 用 `ConstLabels`(如 instance_id),动态 label 运行时 `WithLabelValues`;`Observe` 就是一次观测。〔W08-1 p24〕
+- **MustRegister 会 panic**:重复注册直接 panic,进程内只注册一次,惯用包级变量加 Init 函数。〔W08-1 p27〕〔W08-1 p38〕
+- **Gauge 记活跃请求**:进入 `Inc()`,退出 `defer` 里 `Dec()`,一般只关心总量。〔W08-1 p30〕
+- **GORM 自带 prometheus 插件**:`db.Use(prometheus.New(Config{...}))`,配 DBName、刷新间隔和 MySQL 采集器;`VariableNames` 没意义,别用。〔W08-1 p31〕
+- **连接池指标怎么读**:`wait_count`、`wait_duration` 大,说明连接数不够要扩;`idle` 大,把最大空闲连接调小;`max_idletime_closed` 大,是最大空闲时间设得太短。〔W08-1 p32-33〕
+- **统计 SQL 耗时用 Callback 不用 Hook**:Hook 是单向的;Callback 注册 `Before("*")` 和 `After("*")`,before 里 `db.Set` 存开始时刻,after 里取出来断言 `time.Time` 再 `Observe`。断言失败要直接 return,before 可能没跑,别 panic。〔W08-1 p34-35〕
+- **分段错误码**:第一位是类型(2 成功、4 客户端、5 系统),中间两位是模块号,后三位是具体错误;监控只盯 5 开头,但 4xx 突增可能是攻击或前端 bug,业务上另设告警。规范和施行成本要折中,只给需要特殊关注的错误定义具体码。〔W08-1 p36〕
+- **错误码埋点在 Wrap 里**:在 Wrap 系列方法里按返回的 Code 计数;别在 middleware 反序列化响应体再统计,性能差。〔W08-1 p38〕
+- **第三方监控用装饰器**:短信按模板 id 当 label 记耗时;微信验证码接口要监控,纯内存的 AuthURL 不用;各家错误码五花八门,监控得侵入各自实现,没法统一。〔W08-1 p39-40〕
+- **Redis Hook 算缓存命中率**:`ProcessHook` 包住 `next(ctx, cmd)`,按 `cmd.Name()` 区分命令;`err == redis.Nil` 判未命中。只有 Get 类命令能这么判,SET/DEL 的 Nil 要排除,否则命中率失真。〔W08-1 p41〕
+
+### W08-2 otel 初始化与告警的补充
+
+- **Context 接口四个方法**:`Deadline`(ok 为 false 表示没有过期时间)、`Done`(返回一个 channel,监听取消信号,最常用)、`Err`(主动取消是 Canceled,超时是 DeadlineExceeded)、`Value`。〔W08-2 p8〕
+- **ctx 的两份职责**:除传值还管超时取消,`WithCancel`/`WithDeadline`/`WithTimeout` 都返回带 Done channel 的新实例;可观测性里传 ID 只是它的一半用途。〔W08-2 p7〕
+- **Provider 的设置时机**:`otel.SetTracerProvider` 改的是全局状态,必须在进程启动早期设置;设晚了,中间件拿到的是 noop tracer,打了也没数据。〔W08-2 p4〕
+- **Exporter 与批量上报**:Zipkin exporter 指向 `http://localhost:9411/api/v2/spans`,`WithBatcher` 可以配 `WithBatchTimeout(1s)`,攒一批再发。〔W08-2 p5〕
+- **span 上的三类操作**:`AddEvent` 记时间点事件,`SetAttributes` 记属性(如短信模板 id),出错时 `RecordError` 把 error 记进 span。〔W08-2 p6〕〔W08-2 p18〕
+- **GORM tracing 插件别双采**:`db.Use(tracing.NewPlugin(WithoutMetrics()))`,插件自带 metrics,和 Prometheus 插件重复,二选一。〔W08-2 p16〕
+- **Grafana 告警怎么配**:Contact Point 定发给谁、怎么发(企业微信群机器人 webhook,邮箱要另配 SMTP),配完先 Test;规则形如 `WHEN max() IS ABOVE 阈值`,Evaluation group 每分钟评估,Pending period 设几分钟,连续满足才真告,防瞬时毛刺。〔W08-2 p24-26〕
+- **一份告警清单**:慢查询(GORM 指标超 100ms,永远不该出现)、慢请求(按接口单独定阈值)、异常请求(非 2xx 或 error 次数)、系统状态(CPU、内存、goroutine 数持续偏高)、业务告警(如短信发送太频繁)。〔W08-2 p27〕
+
+### W18-1 ELK 链路的落地细节
+
+- **Logstash 三段是固定形状**:Input(文件、DB、MQ)收,Filter 解析过滤,Output 写 ES。课程的 pipeline:beats 输入监听 5044 收 Filebeat,`json` filter 把 `message` 字段展开,输出按天索引 `logstash-%{+YYYY.MM.dd}`,方便按时间删旧索引。〔W18-1 p6〕〔W18-1 p22〕
+- **Filebeat 的定位**:轻量、实时盯文件变化、自动发现新文件,输出可以给 Logstash、ES 或 Kafka;和 Logstash 组合就是轻量采集加集中过滤。配置核心是 `enabled: true` 加 paths 通配符。〔W18-1 p20〕〔W18-1 p25〕
+- **落盘目录和采集目录必须对齐**:应用写 `/var/log`(容器里注意权限),Filebeat 的 paths 指向同一目录,两边对不上等于白搭。〔W18-1 p20-21〕
+- **lumberjack 参数是运维契约**:`MaxBackups` 乘 `MaxSize` 决定磁盘上限;`Compress=true` 省六成以上磁盘,但查旧日志要先解压。〔W18-1 p21〕
+- **面试怎么讲可观测性**:单独讲 ELK 显单薄;把 ELK(日志)、Prometheus(指标)、OpenTelemetry(链路)合成一套方案,再配一个从发现、定位到解决的案例。〔W18-1 p27〕
+
+没吸收进来的:各单元的选读条目(Grok/Date/Mutate/Kv 插件细节、compose 部署与 ES 7.13 版本对齐、指标命名分层等)和标注待核的版本问题;其余必读点正文或本块已覆盖。
+
 ## 想深入去哪查
 
 - 日志：W05-4（级别、时机、敏感信息、Logger 抽象与注入）；ELK 见 W18-1（Logstash 过滤插件、Filebeat 路径、Kibana 与 Grafana 分工、lumberjack）。

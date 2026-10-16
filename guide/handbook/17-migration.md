@@ -518,6 +518,33 @@ func main() {
 
 这里没有现成例子：`dnsproxi-go` 没有持久化数据，自然没有迁移问题。思路最接近的是 `dnsproxi-go/cache/expire.go` 里的 `ExpireRound`：后台每轮随机抽样判断过期并删除，同样是"一个后台程序不断把状态收敛到目标"的模式，只是对象是内存缓存而不是两个数据库。完整的数据迁移演练放在 minifeed 项目线里做。
 
+## 想深入:正文之外的干货
+
+### W11-1 导出导入与修复的边角
+
+- 停机式导出导入是初始目标表的基本盘：mysqldump 是 MySQL 自带的导出命令，把表导成 SQL 文件再导回去。注意 `-h` 不写会默认连本地，去找 `/tmp/mysql.sock` 直接报错，host 和 `--port` 都要显式给；`--result-file` 指定输出文件。导入是先 `create database` 建目标库，连上 MySQL 后执行 `source intr.sql`。〔W11-1 p14-15〕
+- `InconsistentEvent` 消息有三个字段：`ID` 定位是哪条数据，`Type` 记三种事件（`target_missing`、`neq`、`base_missing`），`Direction` 记这次校验以 SRC 还是 DST 为准。修复程序靠 `Direction` 知道该拿哪一边的值去盖另一边。〔W11-1 p36〕
+- 校验里最难处理的是系统错误：目标查不到是 `ErrRecordNotFound`，走修复；超时、连接断这类错误只能记日志、告警、人工介入，然后 `continue` 下一条。把系统错误也当不一致去修，会拿不到数据而误删。〔W11-1 p28〕
+
+### W11-2 增量校验的工程细节
+
+- 改造后的 Validator 有两个细节：`ErrRecordNotFound` 时偏移量不增加，原地 `sleep` 后重试，增量校验就这样变成常驻进程，退出条件是 `sleepInterval <= 0`；支持增量之后正反两个方向改成并发跑（errgroup 各起一个），全量时先正后反即可。〔W11-2 p20〕
+- 资料把四个模式和全量、增量的启停整合成 Scheduler，注册成八个 HTTP 接口（`/src_only`、`/src_first`、`/dst_first`、`/dst_only`、`/full/start`、`/full/stop`、`/incr/start`、`/incr/stop`），用 `ginx.Wrap` 包装，默认监听 8082 作为管理端口，wire 依赖注入同步改。迁移过程全靠这个入口驱动。〔W11-2 p24〕
+- 双事务的提交顺序就是模式里的权威序：`SrcFirst` 先 `Commit` 源再提交目标，`DstFirst` 反过来。非权威侧提交失败只回滚它自己那边，差异留给校验，不做任何分布式事务。〔W11-2 p12-13〕
+- 作业把正向校验改批量：从 base 取一批 id，去 target 用 `WHERE id IN` 一次查出来再逐对比较，可选测十万条数据下单条与批量的耗时差。〔W11-2 p38〕
+
+### W18-2 Canal 的组成、配置与缓存案例
+
+- Canal 的组成：Server 连着数据库监控 binlog 并转发给客户端；Client 接收处理变更；binlog 是变更来源；中间还有一层格式转换器，支持 JSON、Avro 等输出；分布式场景用 ZooKeeper 做高可用协调。〔W18-2 p6-7〕
+- 配置分三块：Server 本体（`serverMode=Kafka`）、每个数据库一份的连接配置（canal 用户要高权限，消息发到 `webook_binlog` topic）、Kafka 转发配置。发 Kafka 的一段把 `acks=all`、`max.in.flight=1`、`retries=0` 一起配上，这是用吞吐换强顺序：在途请求压到 1，失败不重试，消息就不会乱序。〔W18-2 p10-12〕
+- 案例一用 Canal 更新缓存，解决更新缓存和更新 DB 的并发问题。两种做法：直接拿 binlog 里的数据更新缓存，前提是同一条数据的 binlog 稳定进同一分区；Canal 只当信号器，收到消息再回查数据库回写，实现简单但高并发回查把压力放大一倍，压 DB。资料选前者。〔W18-2 p20〕
+- 这套做法的本质是把缓存策略从业务代码里剥出去：业务只管写 DB，缓存一致性交给 binlog 消费者。所以消费者绕开 Service 直接操作 Repository，Repository 没逻辑就直捅 Cache；也因为它属于易变的策略，不在 Repository 上定义接口。〔W18-2 p23〕
+- `partitionHash` 的细节：不配置，所有消息全进 partition 0，顺序安全但吞吐归零；按表名哈希会有热点；标准写法是 `.*\\..*:id` 按主键哈希，正则匹配所有表，多个规则按顺序命中即返回，`$pk$` 表示自动取主键，复合主键写 `pk1^pk2`。〔W18-2 p21〕
+- 大规模应用别让所有表共用一个 topic：容易消息积压，Kafka 集群也会成为瓶颈。常见做法是每表一个 topic，用 `dynamicTopic` 的正则把 `schema.table` 路由到对应 topic，集群不够就再加集群。〔W18-2 p22〕
+- 面试里 Canal 的技术细节问得少，常问的就两条：它怎么知道数据库变更（binlog），binlog 三种模式是什么、你们用哪种。把它整合进项目经历的讲法是：早期先更 DB 再更缓存，遇到性能下降、部分失败和并发更新，后来引 Canal 监听 binlog 更新缓存，借 Kafka 的重试解决部分失败，代价是接受最终一致。〔W18-2 p30〕
+
+省略未吸收：W11-1 的"为什么要迁移"动机（选读）、模拟数据生成工具 GenData 与 GenSQL（选读）和 mysqldump 在 MySQL 8.4 上的待核兼容问题；W11-2 的演示流程逐步命令（wrk 压流量、postman 触发校验，选读，常见坑 7 已给要点）、通用迁移方案的界面化愿景（选读）与面试叙事（选读）；W18-2 的 binlog 消息字段逐个说明（选读，正文已讲 DELETE 反直觉那条）、compose 部署与消息验证（选读）、刷 ELK 与 KPI 的建议（与迁移无关）。
+
 ## 想深入去哪查
 
 - 原材料：W11-1（四阶段、八步、Validator、修复与 upsert）、W11-2（双写四模式、ConnPool 实现、增量校验、并发与保护数据库）、W18-2（Canal、binlog 三格式、增量校验案例与切换窗口）。

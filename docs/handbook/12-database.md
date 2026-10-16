@@ -5,7 +5,7 @@ title: 12 数据库：连接池、事务纪律与 ORM 的取舍
 # 12 数据库：连接池、事务纪律与 ORM 的取舍
 
 
-> 详细程度：标准 · 约 55 分钟
+> 详细程度：标准 · 约 60 分钟
 > 材料：W02-2、W06-2、W16-1、C:go_basic/database、C:go_frame/orm、旧长版 `notes/p9-database.md` `notes/p11-sqlc-goose.md` `notes/p12-sqlc-pgx.md`
 > 前置：10 分层与依赖注入
 
@@ -496,6 +496,41 @@ func main() {
 
 - `dnsproxi-go` 是纯内存缓存，没有数据库，这里没有现成例子。
 - minifeed 的 `user/store.go` 与 `post/post.go` 用 `database/sql` 加 `SQLiteStore` 实现了 repository 接口：占位符查询、`defer rows.Close()` 加 `rows.Err()`、`errors.Is(err, sql.ErrNoRows)` 转成包内哨兵错误 `ErrNotFound`，是本节纪律的最小落地（25 节）。练习包 `exercises/p9db` 里 `WithTx` 是本节事务纪律的可测试版本，`openTestDB` 展示了内存库配池的正确姿势。
+
+## 想深入：正文之外的干货
+
+### W02-2 GORM 落地与用户模块的存储细节
+
+- GORM 的安装拆成两个包：本体 `gorm.io/gorm` 是接口定义，驱动是二次封装的 `gorm.io/driver/mysql`，驱动内部再包住 `go-sql-driver/mysql`；换 PostgreSQL 只换驱动包，模型代码不动。〔W02-2 p5-6〕
+- 模型标签不用背：`primaryKey`、`unique`、`default`、`size`、`serializer:json`、`autoCreateTime` 这类标签面试不问，用时查官方文档；唯一要知道的是 `autoCreateTime` 作用在 `int` 字段上写的是 Unix 时间戳秒。〔W02-2 p9〕
+- 公共字段组合 `gorm.Model`（ID、CreatedAt、UpdatedAt、DeletedAt）：只要结构体里有 `DeletedAt` 字段，这个模型就是软删除模型，`Delete` 变成改列而不是删行；实践中每家公司的公共字段都不一样，别照抄。〔W02-2 p8〕
+- 表设计三要点：主键 `Id int64` 配 `primaryKey,autoIncrement` 让数据库生成主键；Email 加 `gorm:"unique"` 唯一索引防重复注册；GORM 生成的 DDL 里 Email 列是 `varchar(191)`，这个 191 是 utf8mb4 编码下索引长度限制的产物。〔W02-2 p21-23〕
+- 唯一索引冲突怎么变成业务错误：DAO 层判 `errors.As` 出 `*mysql.MySQLError` 且 `Number == 1062`（MySQL 的重复键错误码），转成自己的 `ErrUserDuplicateEmail`；repository 和 service 层各用一行 `var ErrUserDuplicateEmail = dao.ErrUserDuplicateEmail` 别名转发，Handler 只依赖 service 层的错误，不跨层引 dao 类型。〔W02-2 p34-35〕
+- 登录失败只返回一个统一的 `ErrInvalidUserOrPassword`："用户不存在"和"密码错误"分开提示，等于告诉攻击者哪些邮箱注册过，给了枚举的口子。〔W02-2 p39〕
+- 密码加密的位置四选一都有理由：service（业务概念）、repository（"加密存储"）、dao（数据库自身加密）、domain（User 自己管）；课程选 service，理由是它是业务逻辑但不是 domain 的职责。选定之后连带决定登录时在哪儿调 `CompareHashAndPassword`。〔W02-2 p30〕
+- 敏感信息防两类人：防研发（自己和同事）与防攻击者，密码连日志都不能打。〔W02-2 p29-30〕
+- 算法三级递进：裸 md5 哈希、加盐或多轮哈希、BCrypt/PBKDF2 这类随机盐算法。选择标准就一条：难破解，同一密码密文不同，防彩虹表。〔W02-2 p31〕
+- BCrypt 四个优点：不用自己生成盐、不用另存盐、cost 参数控加密成本、同文本结果不同；不可逆，只能 `CompareHashAndPassword` 比对。两个坑：密码超 72 字节会被静默截断，注册正则要加上限；cost=10 单次加密约 100ms 量级，登录接口要按这个延迟做预算。〔W02-2 p32-33〕
+- HTTP 无状态，所以登录要靠 Cookie 加 Session 记状态：Cookie 是浏览器本地的键值对，不安全，只放不关键的数据；Session 数据在服务端，浏览器只带一个 `sess_id`。认证是认 ID 不认人，ID 被偷就被冒充。Cookie 安全参数一句话版：Domain/Path 最小化、Max-Age 只留必要时间、HttpOnly 永远 true、Secure 生产永远 true、SameSite 尽量避免跨站；`sess_id` 放 Cookie 是最优解，禁 Cookie 的浏览器退而求其次放 Header 或查询参数。〔W02-2 p41-47〕
+- gin-contrib/sessions 两件套：`sessions.Sessions("ssid", store)` 中间件负责从 Cookie 解出 Session，`CheckLogin` 中间件里 `sessions.Default(ctx).Get("userId") == nil` 就 401，signup/login 路径豁免。注意 `cookie.NewStore([]byte("secret"))` 是把 Session 数据加密后存在 Cookie 本身的客户端存储，数据大会撞 4K 上限，多实例要换 redis store。〔W02-2 p49-51〕
+- 登录优化别上来就加缓存，压测先行。真实瓶颈里 bcrypt 的 100ms 量级延迟往往是第一位，属于第 11 节登录优化的内容。〔W02-2 p7〕
+
+### W16-1 评论系统未入正文的取舍与配套
+
+- 层级先选过一次：完整树形（嵌套任意深）还是两级简化（资源、评论、子评论），课程选完整树；两级的好处是删除和分页都简单（`DELETE WHERE parent=?`），代价是"评论的评论的评论"表达不了。〔W16-1 p6〕
+- 根节点在邻接表里用 `pid IS NULL` 或非法值 `-1` 都能表示；查询直接评论时用 `pid IS NULL` 过滤，这是 min_id 分页那行 SQL 里 `AND pid IS NULL` 的来历。〔W16-1 p7〕
+- Path 设计有两种解释约定：`path` 值含不含当前节点，含则父是倒数第二段，不含则父是最后一段；团队要统一，否则级联删除的 `LIKE` 前缀会写错。〔W16-1 p8〕
+- Nested Set 是深坑的根源在于写入：每个节点的 `nsleft/nsright` 是全局 DFS 序，插入一个节点要把所有比它大的编号加二，等价于改半张表。〔W16-1 p9-10〕
+- Closure Table 每个节点和每个祖先、每个后继各存一行，`TreePaths(ancestor, descendant)` 联合主键；深度 d 的链就有 d 行，数据量随深度线性爆炸。〔W16-1 p11-12〕
+- 添加评论本身是普通插入，另一种设计是"直接评论"和"回复"拆成两个接口（或只在 gRPC 层拆），但无论哪种都要始终维持 root 和 parent 两个关键字段，查询性能全靠它们。〔W16-1 p17〕
+- 异步写的代价要兑现给用户：写进 MQ 之后消费有延迟，用户发完评论可能查不到，前端要给"审核中/已发布"这样的过渡态；复合策略是平时直写、触发瓶颈才转异步。〔W16-1 p18〕
+- 大厂不用外键的真实理由：级联删除在分库分表后失效、外键锁传播拖垮并发、运维不可控；课程演示 GORM 的 `constraint:OnDelete:CASCADE` 但生产多为应用层删除。〔W16-1 p21-22〕
+- 查一级评论的子评论时，repository 层聚合即可；查子评论是可容错步骤，降级触发就跳过不查。用复杂子查询一条 SQL 拉全也能做到，但可读性太差，不值得。〔W16-1 p27〕
+- 加载更多的缓存命中率天然低，因为大多数人不点；用户点了一次就预加载下一页写缓存，因为点过的人大概率要看完全部。〔W16-1 p32〕
+- 读写分组部署：查 100 实例一个读组、增删 20 实例一个写组，客户端负载均衡各走各的；读组故障把部分流量导入写组，本质是分组加动态流量调度（`read_weight`/`write_weight` 可实现），代价是临时牺牲写吞吐。〔W16-1 p33〕
+- 热门资源才有缓存价值：长尾资源缓存是浪费内存还添穿透风险；热门靠热榜计算后经 Kafka 通知、评论服务监听更新加秒级定时刷新，可以再叠一层本地缓存。〔W16-1 p28〕
+
+省略未吸收：W02-2 的 docker-compose 起 MySQL（K6，环境搭建，非数据库知识）、模型标签清单细节（K5，上面已给出查文档的结论）；W16-1 的面试要点页（K22）。其余必读条目已融入正文或本块。
 
 ## 想深入去哪查
 

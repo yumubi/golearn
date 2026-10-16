@@ -551,6 +551,70 @@ func main() {
 
 这里没有现成例子：`dnsproxi-go` 没有跨资源事务，也没有多副本状态。勉强能类比的只有 `dnsproxi-go/tcp/server.go` 里 `serveConn` 的"错误一律关连接"：`DecodeFrame` 出错就 `return`，把连接关掉让客户端重试，这是"失败后把重试交给对方"的最小形态，谈不上一致性协议。练习：把 `Barrier`、`Relay`（outbox）、`CommitIndex` 抄进 `exercises/` 新建的包，各写一个失败注入测试。
 
+## 想深入：正文之外的干货
+
+### W15-1 支付系统：对接第三方支付
+
+- 模块划分：支付本身是对接第三方的支付网关，打赏是用支付实现的业务模块；大型应用再加账号模块管金额变动与收款信息，实践里还有反洗钱和税务审计。课程把打赏拆成 payment 加 reward 两个微服务。〔W15-1 p6〕
+- 渠道要不要抽象：支付渠道（微信、支付宝、银联）不需要统一接口抽象，因为支付方式是用户在前面必选的，全链路都知道选了谁；短信服务商可以在服务端轮换，才需要抽象接口。这是"选择方在谁手里"的经典设计题。〔W15-1 p7-8〕
+- 接口最小化：`mchid`、`appid`、`notify_url` 都是支付服务自己知道的配置，不该出现在 API 参数里；外部只传 description、out_trade_no、amount。提前为支付宝做通用化是过早抽象，将来字段变多再拆实现类组合复用。〔W15-1 p15-16〕
+- native 支付只涉及三处代码：下单接口创建订单、处理回调、可选的主动查询；Prepay 参数里 `out_trade_no` 是我方业务交易号，`notify_url` 是回调地址，响应的 `code_url` 前端转成二维码。〔W15-1 p12-14〕
+- 处理回调不要手动验签解密，坑多，直接用微信 SDK 的 NotifyHandler；Web 层负责把微信支付状态翻译成内部状态。〔W15-1 p22〕
+- 本地调试收不到回调：notify_url 必须是公网地址，标准解法是 nginx 多域名分发，test/dev/live 各一个域名，dev 转发到能回到本机的跳板机。〔W15-1 p20-21〕
+- PreReward 四步：查缓存二维码、建打赏记录（Status=Init）、调 NativePrePay（BizTradeNo=reward-rid）、缓存返回的二维码。缓存命中说明用户上次点了打赏又放弃，直接复用，少调一次支付服务；这步是纯优化，不缓存也行。〔W15-2 p8-9〕
+- 支付结果用 Kafka 广播：Payment 处理完微信回调、更新本地之后发事件，各业务方自己订阅；Reward 消费后只更新本地 DB，按 BizTradeNO 反解出 rid 更新状态。〔W15-2 p11〕〔W15-2 p14〕
+- 要不要统一支付接口：一开始就知道用户选了哪种方式（如只支持微信扫码），就不抽象，按方式直接写；需要"查询支付结果"这种不知道方式的通用能力才抽象。审视现有代码时按这个尺度抽共性和个性。〔W15-2 p27〕
+- 表设计从简：只存 Amt、Currency、Description、BizTradeNO、TxnID 这些必要字段；业务方传来的数据业务方自己存了就别重复存，非存不可的原始报文塞进 BLOB 备查。〔W15-1 p19〕
+- 回调进 MQ 可行但不提早：回调 QPS 与正向支付一样，payment-web 轻量解密撑得住；MQ 的多订阅者、重放调试收益要到多团队场景才显现。〔W15-1 p26〕
+
+### W15-2 打赏功能：消息、查询与记账
+
+- 用户怎么知道支付结果：支付时用户只跟微信交互，结果通知是异步的；前端轮询查询结果，失败立刻再查，超时或超次才报错。查询结果有三种可能：没收到回调、回调处理失败、成功。〔W15-2 p10〕
+- 查询走快慢两条路：快路径查本地 reward 表，已完结直接返回；本地状态未知时走慢路径去查 Payment 服务，回填本地再返回。降级时可以关掉慢路径保住 Reward 服务本身。〔W15-2 p16〕
+- 查询必须校验归属：把查询人的 uid 传给 Reward 服务核对 rid 是不是他打赏的，否则交易号可被枚举，越权看别人的打赏记录。〔W15-2 p15〕
+- 有序性只对有顺序语义的事件必要：打赏从 Init 到 Success 的纯状态更新天然容忍乱序（重复更新无害），支付和退款这类事件才需要生产者按业务 key 哈希分区（sarama 的一致性 CRC 分区器）。〔W15-2 p13〕
+- 发消息失败可以返回 nil：本地 DB 已经记下终态，Kafka 只是通知；因通知失败让微信回调整个流程重试反而危险。代价是必须有监控告警加异步补偿作业兜底。〔W15-2 p12〕
+- 记账归属三选一：打赏分（业务知道分成比例，课程选这个）、支付分（分账算支付流程一部分）、账号分（记账业务的一部分），没有显著优劣，选一个保持一致。〔W15-2 p20〕
+- 账号服务 Credit 接口一次带多笔账：平台抽成 10% 加作者 90% 两条 item；抽成为 0 也要记账，省一条 INSERT 会在对账时出差异，流水必须完整可审计。〔W15-2 p25〕
+- 流水表带 Biz 和 BizId 两个字段是 DEBUG 神技：打赏、支付、记账三个服务之间的对账和排查全靠这对业务键串联。〔W15-2 p23〕
+- 事务边界划在"更新余额加记流水"上：同一库就是一个本地事务；金融级的分库分表之后一笔账跨库，本地事务失效，只剩补偿加对账，别指望数据库救。〔W15-2 p24〕
+
+### C:dachang/distributed_transaction：DTM 的细节与坑
+
+- 所有模式共享"最终成功"兜底：二阶段消息的分支、SAGA 的补偿、TCC 的 Confirm/Cancel 都必须重试到成功，失败超阈值报警转人工。〔C:dachang/distributed_transaction/分布式事务模式.md:9-13〕
+- barrier 的并发语义靠数据库唯一键：事务未提交时，另一事务写相同 `gid-branchid-op` 会被唯一键锁阻塞；`insert ignore` 撞键不报错只给 warning，必须用 `RowsAffected>0` 判断是否真的插进去了。唯一键漏建，三个控制全部失效。〔C:dachang/distributed_transaction/exception/ap/barrier.go:9-23〕
+- 二阶段消息的 DoAndSubmitDB 把本地事务和 Submit 原子绑定：本地事务成功才插入 barrier 记录并 Submit；进程没来得及返回就宕机，dtm 回查 QueryPrepared，它一上来先插 rollback 记录，所以宕机默认按失败处理，业务方必须接受"宁可少转不可多转"。〔C:dachang/distributed_transaction/msg/ap/main.go:73-103〕
+- TCC 的代价是业务侵入：RM 要实现 Try/Confirm/Cancel 三接口加资源冻结字段；Try 全成才 Confirm，一失败全 Cancel；返回时 Try 已完成但 Confirm 通常没完，最终成功由 dtm 无限重试保证。TCC 只适合短事务：AP 重启后全局事务只能回滚不能继续，这点和 SAGA 不同。〔C:dachang/distributed_transaction/tcc/ap/main.go:60-194〕
+- XA 的坑：prepare 期间锁不释放，高并发热点必死；xa end 之后 prepare 之前同连接再读写报 XAE07；AP 在 prepare 后宕机，锁悬着，要人工 `xa recover` 裁决。RM 的 handler 必须用 ShouldBindJSON 而不是 Bind，XA 分支会被多次调用且有时没有请求体，Bind 会 400 中止让 dtm 误判失败。〔C:dachang/distributed_transaction/xa/rm/main.go:47-49〕
+- 分支可以并行编排：转账案例的两分支无依赖就并行跑，补偿也可以不分先后；dtm saga 默认顺序执行，SetConcurrent 才并行。〔C:dachang/distributed_transaction/exception/ap/main.go:188-231〕
+- 手写补偿的教程代码是 for 死循环加 Sleep，没有重试上限，生产必须加次数阈值、报警、人工介入。〔C:dachang/distributed_transaction/exception/ap/main.go:104-113〕
+- dtm 客户端怎么用：分支 handler 从请求 query 里取 gid、branch_id、op、trans_type 构造 Barrier（`dtmcli.BarrierFromQuery`），再用 `CallWithDB` 把业务包进 barrier 事务；分支返回值三态，nil 成功、ErrOngoing 框架重试、ErrFailure 触发补偿。〔C:dachang/distributed_transaction/saga/ap/main.go:59-126〕
+- TCC 在 RM 侧的样子：Try 调资源接口把金额挪进 `trading_balance` 冻结字段（带防负条件），Confirm 还原进真实余额，Cancel 反向解冻；AP 里 TccGlobalTransaction 串行 CallBranch。〔C:dachang/distributed_transaction/tcc/ap/main.go:60-194〕
+- XA 的代码形状：RM 用 `XaLocalTransaction` 包本地 SQL（xaID 是 gid 加 branchID），数据库自动两阶段；AP 用 XaGlobalTransaction 串行调各 RM，Prepare 成功就返回，commit 大概率还没完成。〔C:dachang/distributed_transaction/xa/rm/main.go:46-62〕
+- 手写 SAGA 的编排：AP 起全局 gid，分支先过 Barrier(action)（拦住说明已执行，直接成功）再调 RM 转账，本地事务成功 Commit 失败 Rollback；任一分支失败触发全部补偿，补偿先过 Barrier(compensate) 幂等，再查 action 占位判断空补偿，然后循环重试到成功。〔C:dachang/distributed_transaction/exception/ap/main.go:64-170〕
+
+### C:dachang/raft：教学版实现的工程细节
+
+- 投票规则三个拒绝一个升级：同任期已投别人拒绝、候选人任期更小拒绝、候选人日志不如自己新拒绝；对方任期更大则无条件升级任期、清空投票记录、降回 Follower 再投。任何 RPC 里发现对方任期更大，都走这条降级链。〔C:dachang/raft/server.go:403-422〕
+- Follower 拒绝投票时不重置选举计时器，否则真正合适的候选人永远选不上。〔C:dachang/raft/server.go:185-189〕
+- 新 Leader 当选后要立刻发一轮 AppendEntries（空日志也行），让其他 Candidate 尽快降级，不等心跳周期。〔C:dachang/raft/server.go:306-312〕
+- 日志按 term 加 index 双升序组织，查找用二分；AppendEntries 按 prevLogIndex 定位，term 匹配则截掉冲突尾部再追加，term 不一致连第 i 条一起截断并返回 false 让 Leader 回退重试。〔C:dachang/raft/log.go:127-166〕
+- Leader 为每个 Follower 记一个 prevLogIndex，新 Leader 乐观地初始化成自己的末尾，一轮响应后修正为对方实际位置；每次心跳最多带 100 条日志，追不上就分多轮。〔C:dachang/raft/server.go:255-295〕
+- 教学版日志只在内存，真实 Raft 必须先落盘再响应，否则宕机丢已提交日志。〔C:dachang/raft/log.go:20-21〕
+- 提交点的三道闸：日志条目找得到、Leader 只能提交本任期的 index、commitIndex 单调不回退；然后逐条应用到状态机。〔C:dachang/raft/server.go:378-400〕
+- 所有 RPC 投进同一个带缓冲 channel 在角色循环里串行处理，把并发问题变成顺序问题：Raft 状态迁移必须原子，简单正确优先于吞吐。Stop 时 handler 与主循环竞争 channel，发送前必须二次检查状态，否则 send on closed channel 会 panic。〔C:dachang/raft/rpc.go:128-133〕
+- 这个教学版验证过什么：7 节点集群随机停一台，等选主，发一次心跳发不完的 300 条日志，再重启宕机节点，5 秒后所有节点日志下标追平 300。注意磁盘持久化是注释掉的，真实实现必须先落盘再响应。〔C:dachang/raft/test/raft_test.go:29-72〕
+
+### C:dachang/etcd：租约与锁
+
+- 租约两式：KeepAlive 返回通道自动续约，长驻服务用它；KeepAliveOnce 手动续一次且剩余寿命清零，适合自己控制节奏的心跳场景。两者都必须赶在到期前调用，过期了只能重新 Grant 加 Put。〔C:dachang/etcd/etcd.go:59-161〕
+- 服务注册：key 按 `/service/grpc/<服务名>/<endpoint>` 设计只存 key 不存 value；注册时 Grant 租约加 Put，续约失败返回 ErrLeaseNotFound 就重注册；进程退出不主动反注册，最晚一个心跳周期后被发现宕机。〔C:dachang/etcd/service_registration_center/server/service_hub.go:54-96〕
+- 并发锁三式：TryLock 立即返回（他人持锁返回 ErrLocked）、Lock 阻塞到获得、带超时的 Lock 到期返回 DeadlineExceeded 放弃。Session 底层建租约，进程崩溃锁随会话过期自动释放，比 MySQL 唯一键锁可靠，代价是写延迟 3.4ms 级。〔C:dachang/etcd/etcd.go:163-265〕
+- Get 不存在的 key 不报错，用 `len(response.Kvs)==0` 判断；租约到期的键自动消失；`WithRange` 是前闭后开区间。〔C:dachang/etcd/etcd.go:36-37〕
+- 配置中心模式：启动时按 key 拉初始值进全局配置，再用 Watch 前缀监听事件通道热更新，只处理 PUT 事件；服务发现客户端用 Watch 刷新端点缓存，随机挑一个实例并按服务复用 grpc 连接。〔C:dachang/etcd/etcd_config.go:22-61〕〔C:dachang/etcd/service_registration_center/client/client.go:19-46〕
+
+注：正文已经展开而这里不再重复的：W15-1 的幂等重试返回旧结果、对账双层兜底、金额三存法、二维码复用（第 4 节），W15-2 的部分失败清单与三者对账（第 4 节），barrier 四步与 NPC（第 2 节），Raft 的选主、随机超时、多数派与提交点计算、心跳参数约束、etcd 对 Redis 的性能差（第 5 节）。〔W15-1 p25〕〔W15-1 p29-33〕〔W15-2 p28〕〔C:dachang/raft/config.go:7-24〕〔C:dachang/etcd/etcd_redis_test.go:104-123〕
+
 ## 想深入去哪查
 
 - 原材料：W15-1（支付流程、两种未知结果、对账、金额）、W15-2（打赏全流程、消息有序与幂等、记账与分账、部分失败识别）、C:dachang/distributed_transaction（四种模式、barrier 四步与并发细节）、C:dachang/raft（500 行实现，选主与日志复制）、C:dachang/etcd（etcd 对 Redis 基准）。

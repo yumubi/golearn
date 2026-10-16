@@ -5,7 +5,7 @@ title: 11 HTTP 与 gRPC：两种接口形态与它们共同的骨架
 # 11 HTTP 与 gRPC：两种接口形态与它们共同的骨架
 
 
-> 详细程度：深入 · 约 65 分钟
+> 详细程度：深入 · 约 75 分钟
 > 材料：TB09 W02-1 W03-1 W04-1 W04-2 W05-1 W05-2 W10-1 W13-2、C:go_basic/http C:go_basic/grpc C:go_basic/protoc、旧长版 `notes/p10-grpc.md` `notes/p8-fast-track.md`
 > 前置：04 接口与组合，10 分层与依赖注入
 
@@ -570,6 +570,101 @@ HTTP 侧的坑（超时只设一个、忘关 `resp.Body`、把 `http.ErrServerCl
 
 - `dnsproxi-go/metrics.go` 的 `metricsServer` 返回一个带 `ReadHeaderTimeout` 的 `http.Server`，是 HTTP 服务最小生产写法的例子（独立端口暴露 `/metrics`）。
 - 这里没有现成的 gRPC 例子，dnsproxi 走的是 UDP 和 TCP 上的 DNS 协议（见 24 节）。gRPC 的真实使用见练习包 `exercises/p10grpc` 和课程的微服务拆分（W10 系列）。
+
+
+## 想深入：正文之外的干货
+
+### TB09 标准库 Web 服务的组装术
+
+- ServeMux 的老规则是最长前缀匹配，模式 `/` 能兜住所有路径；1.22 之前它分不清方法、取不了路径参数，这就是当年要引 gorilla/mux 的全部原因。〔TB09 p4〕〔TB09 p13-14〕
+- 仿 `database/sql` 的工厂注册：factory 包用 `map[string]store.Store` 加 `sync.RWMutex` 管实例类型，`Register` 遇 nil 或重名 panic，`New` 按名返回；internal/store 在 init 里自注册，main 只需空导入 `_ "bookstore/internal/store"`。坑：忘了空导入，`factory.New("mem")` 直接 panic unknown provider，因为注册从未发生。〔TB09 p10-12〕
+- 惯用函数原型是"接受接口、返回具体类型"（`NewBookStoreServer(addr, s store.Store) *BookStoreServer`），返回的具体类型组合传入接口的能力；`ListenAndServe` 会阻塞，必须挪进独立 goroutine，用 errChan 把运行状态传回主 goroutine，再 select errChan 与 `time.After(1s)` 判断是否启动成功。〔TB09 p13-14〕〔TB09 p16-17〕
+- middleware 用闭包包装 `http.Handler` 而不是继承或配置表：Logging 记请求概要、Validating 校验 `Content-Type` 为 application/json，嵌套包裹后串到业务 handler 之前，横切逻辑与业务正交。〔TB09 p14-16〕
+- handler 的共性收尾：`json.Decoder` 解码请求体，调 Store 接口方法，出错用 `http.Error` 带状态码；响应用 `json.Marshal` 加 `Content-Type: application/json`。生产配置不硬编码，配置文件、命令行参数、环境变量是三种来源，标准库没有内置配置框架，社区常用 viper。〔TB09 p14-15〕〔TB09 p21〕
+
+### W02-1 gin 的路由、绑定与 CORS 细节
+
+- gin 路由三态：静态 `/hello` 完全匹配；参数路由 `/users/:name` 用 `Param("name")` 取，尾斜杠变体 `/users/daming/` 的参数值是 `daming/`；通配符 `/views/*.html` 的匹配值含斜杠，且 `*` 不能单独出现（`/users/*` 非法）。查询参数是另一回事，`/order?id=123` 用 `Query("id")`。〔W02-1 p13-16〕
+- 两条初学者原则：查数据用 GET 参数放 query，提交数据用 POST 参数放 body。〔W02-1 p15-18〕
+- Bind 按 Content-Type 决定反序列化方式，出错直接把错误响应写给前端（MustBind 语义），所以 `if err := ctx.Bind(&req); err != nil { return }` 之后不用再处理；要自定义错误提示就用 ShouldBind，它只返回 error。〔W02-1 p31〕
+- 注册请求的接数结构可以定义在 SignUp 方法内部：方法内部类除该方法外不可见，作者建议优先内部类。〔W02-1 p30〕
+- Go 内置 regexp 是 RE2 语法，不支持 `(?=...)` 前瞻断言，密码强度正则直接编译不了，要换 dlclark/regexp2；它是回溯引擎，`MatchString` 返回 `(bool, error)` 双值，忘了判 err 会把系统错误当"密码不合格"。〔W02-1 p35〕
+- 错误响应全用 200 加文案是教学简化，生产应区分 400（参数错）与 500（系统错）；课程自己预告后面再讨论 error 处理与状态码。〔W02-1 p36〕
+- CORS 三配置之外的坑：`AllowOriginFunc` 用 `strings.Contains(origin, "your_company.com")` 这种子串匹配有安全隐患（evil-your_company.com 也能过），生产用精确域名集合；`MaxAge` 12h 是让浏览器缓存预检结果。〔W02-1 p43-47〕
+- gin 启动日志的 trusted all proxies 警告是"未配置 SetTrustedProxies"的不安全默认，生产要设可信代理列表；端口占用（bind: address already in use）是启动失败最常见原因。〔W02-1 p7-8〕
+- PPT 用的 `github.com/gin-gonic/contrib` cors 已废弃，现行是 `github.com/gin-contrib/cors`，API 同为 `cors.New(cors.Config{...})`。
+
+### W03-1 Session 存储与限流的硬细节
+
+- memstore.NewStore 要传两个 key：authentication key（建议 32 或 64 位）和 encryption key，cookie/memstore/redis 三个实现都要传。〔W03-1 p7-10〕
+- `sess.Options` 的 MaxAge 有双重含义：既控 Cookie，又被 Redis 这类 store 用来控 Session 键值过期；只想"Cookie 过期"会漏掉数据侧过期。〔W03-1 p14-15〕
+- JWT vs Session 的账：JWT 免第三方存储、适合分布式、性能高（无 Redis 访问），缺点是 payload 可读、不能放敏感信息；混用方案是 token 只存 userId，敏感数据用 userId 组 key 去 Redis 取。〔W03-1 p30-31〕
+- 刷新失败只打日志不拒绝请求：刷新是锦上添花，把刷新失败当 401 会让正常用户随机掉线。〔W03-1 p27〕
+- 限流三问：对象用 IP（Web 端最好选择，MAC/设备号用不上，共享 IP 误伤靠阈值化解）；阈值标准答案是压测得来，无压测凭经验每秒 100 足够（人手速撑死每秒 1 个）；多实例必须 Redis 计数，负载均衡后请求不一定落同一台机器，本地计数会漏。〔W03-1 p38-42〕
+- token 泄露防护分层：HTTPS 防传输窃取（防不了本机病毒）、二次验证最有效但重、初步手段是 User-Agent 比对（签发时带进 claims，校验时不一样就 401），代价是误伤换浏览器或升级浏览器的用户。〔W03-1 p45-48〕
+
+### W04-1 缓存放哪、怎么降级
+
+- UserCache 屏蔽三件事：过期时间（15min 改一处）、key 结构（`user:info:%d`）、序列化协议（json 与 []byte 互转）；它属于"如何存储数据"，放 Repository 层，Service 无感知。〔W04-1 p13-16〕
+- Redis 故障时两种降级写法的对价：默认写法"cache.Get 有 error 就查 DAO 并回写"，可用性优先，数据库承压但业务还在；FindByIdV1 用 switch err，只有 ErrKeyNotExist 才查 DAO，隔离优先，数据库保住但本业务不可用。课程推荐前者。〔W04-1 p17-18〕
+- 回写缓存失败可忽略：缓存是优化不是数据源，回写失败下次再 miss；但完全忽略会掩盖 Redis 故障，生产要打点监控。〔W04-1 p17〕
+- wrk 三个对象的脚本差异：signup 用不同邮箱模拟注册，login 的 body 要改成自己注册的账号，profile 要手动登录后把 Bearer token 与 User-Agent 复制进 headers，否则 401 会把压测变成"测鉴权"。〔W04-1 p5-8〕
+
+### W04-2 验证码登录的补遗
+
+- 需求分析三板斧：参考竞品、功能与非功能分开（中小公司排序是安全性>扩展性>性能）、正常与异常流程分开想。〔W04-2 p5〕
+- 抽象由两个变化点决定：不同业务都要用验证码 + 可能换短信供应商；只按当下需求做简单抽象预留接口，别指望设计一个用几十年的接口。〔W04-2 p12〕〔W04-2 p17〕
+- 腾讯短信 API 五要素：手机号、appId、签名（标记谁发的）、模板 ID、模板参数；appId 与签名固定，初始化注入，所以 `Send(ctx, tplId, args, numbers...)` 里不用传。〔W04-2 p18-19〕
+- 业务逻辑下沉 lua 是为原子性牺牲可移植性：换 memcache 要重写脚本，CodeService 留薄封装是为了把替换成本控住。〔W04-2 p37〕
+- 错误信息模糊化是安全默认：三次失败后不提示"过于频繁失败"，防攻击者探测重试上限；前端限流可被脚本绕过，服务端限流才是根。〔W04-2 p26〕〔W04-2 p54〕
+
+### W05-1 OAuth2 的边界细节
+
+- 回调路由用 `Any` 方法注册：微信跳回可能是 GET，也防不同环境方法差异，比只注册 GET 稳。〔W05-1 p15〕
+- state 放 JWT 存 Cookie 而非 Redis：免存储依赖、天然随 Cookie 过期；放 Cookie 而非 Header 是因为微信回调直达后端，不经过前端代码。verifyState 三错即敌情：取不到 cookie、不是合法 JWT、state 对不上，任一 error 都视为有人搞鬼，且不细分类别返回，防攻击者探测失败原因。〔W05-1 p30-32〕
+- redirect_uri 域名必须预注册，微信侧硬校验，防任意回调劫持 code；本地开发要用内网穿透域名或测试公众号。〔W05-1 p9〕
+- access_token 有效期短是故意的：泄露影响面小；refresh_token 长期保存，要更谨慎。union_id 是跨产品主键，只存 open_id 会让同公司多产品认不出同一个自然人。〔W05-1 p20-22〕
+
+### W05-2 ssid 方案的工程细节
+
+- 长 token 用独立签名 key：短 token 的 key 泄露也伪造不了 refresh，两个 token 的权限域隔离。〔W05-2 p6〕
+- 登出是两道闸：`ClearToken` 先把长短 token 响应头置空字符串（让正常用户快速 401），再把 `users:ssid:{ssid}` SET 成 "n" 带 7 天过期（拦还在用旧 token 的客户端）；缺任何一道都放过一类人。ssid 的 TTL 要覆盖长 token 的最长寿命，否则登出有失效窗口。〔W05-2 p21〕〔W05-2 p25〕
+- Redis 崩溃降级方向是"跳过 ssid 校验"而不是拒绝服务：可用性优先于登出严格性；refresh 接口不降级，低频且安全敏感。〔W05-2 p19-20〕
+- 不要用 user id 当登出标识：登录时要删 id、还要处理"一边登录一边退出"的并发；ssid 每次登录唯一，无此二难。〔W05-2 p29〕
+- 布隆过滤器是面试方案：N 个哈希函数置位，判"一定不存在"准、"存在"有假阳性，仍要 Redis 兜底且本身靠 Redis 实现，改进有限。〔W05-2 p30-31〕
+- 重构收口：散在三个 handler 与 middleware 里的 JWT 逻辑内聚成 jwt 子包，定义 Handler 接口（ClearToken/SetLoginToken/SetJWTToken/CheckSession/ExtractTokenString）加 RedisHandler 实现；接口不直接经 ctx 写响应，返回值由调用方写前端。〔W05-2 p22-27〕
+
+### W10-1 微服务理论与 Protobuf 细节
+
+- 分而治之的账：两系统合并的复杂度大于两者之和（交互成本），拆分的收益是总体复杂度下降加单模块可理解；单体与微服务的运维基本单位是实例，16G 的单体拆成 4G 的模块；微服务 API 向后兼容才能独立演进；服务边界贴近组织架构能减少交流损耗（康威定律）。〔W10-1 p5-7〕
+- RPC 载体有 TCP（Dubbo 类大厂自研）、HTTP（gRPC）、UDP、MQ 封装四种，新协议多基于 HTTP；HTTP 微服务运维简单门槛低、适合异构，RPC 组件多要求高，外企与历史系统 HTTP 不少，微服务不等于 RPC。〔W10-1 p10-11〕
+- DDD 词汇速记：实体有 ID（邮箱可改不算标识）、值对象无 ID（价格金额）、聚合体是聚合根加值对象、聚合根是修改唯一入口、聚合体间只能 ID 引用；实体必有表，表不一定都是实体；仓库是聚合体的增删改查并屏蔽缓存与 DB；领域事件多来自聚合体数据变化，发 MQ 的消息就是领域事件；跨聚合的逻辑才用 Domain Service，CRUD 项目里它几乎没代码。〔W10-1 p16-23〕
+- Protobuf 的账面性能：序列化 0.7ms/0.4MB 对 JSON 的 1.7-4.3ms/1.9-2.8MB，反序列化 0.8ms 对 2.6-6.5ms；`sint` 类型作者视为垃圾设计，`oneof` 在 Go 里生成接口加类型断言（作者基本不用），enum 的 0 必须留给 Unknown（0 是 proto3 默认值，0 当业务值会混淆"未设置"与"合法值"）。〔W10-1 p29-31〕〔W10-1 p36-39〕
+- 工具链现状：protoc 加两个插件 protoc-gen-go 与 protoc-gen-go-grpc（GOPATH/bin 进 PATH），一条命令带两组 out/opt，go 与 go-grpc 都用 source_relative 相对输出；产物两个文件，纯结构体 pb.go 与含 gRPC 存根的 `_grpc.pb.go`。〔W10-1 p41-45〕
+- 服务端生成接口强制组合 `mustEmbedUnimplementedUserServiceServer`，这是向后兼容的手段：新加方法时旧实现不至于编译失败；另有不推荐的 Unsafe 接口。客户端每方法生成 `(ctx, in, ...grpc.CallOption)`。〔W10-1 p48-49〕
+- `grpc.Dial` 惰性连接：Dial 不立即建连，第一次 RPC 才连，测试里 ctx 超时要覆盖调用全程；旧 `WithInsecure` 已废弃，用 `grpc.WithTransportCredentials(insecure.NewCredentials())`。〔W10-1 p52〕
+
+### W13-2 负载均衡与重试的展开
+
+- 默认 pick_first 并非完全无用：单节点加 K8s Service 场景下它就是正确行为；多实例才必须显式配 round_robin，指定方式是 `WithDefaultServiceConfig` 传 JSON 串 `{"loadBalancingConfig":[{"round_robin":{}}]}`。JSON 手写易错，写错一个引号配置静默失效退回 pick_first，建议配置文件加单测校验。〔W13-2 p4-5〕
+- 官方加权轮询是客户端自算权重：按 QPS 与错误率实时算（QPS 高权重大、错误率高权重低），用 EDF 挑选，不需要注册中心传权重；要精确控制权重就自定义 Picker，权重经注册中心的 Metadata 传递（该字段已弃用，有的实现放 Address.Attributes，类型可能被 JSON 序列化成 string，必须确认）。〔W13-2 p9〕〔W13-2 p12-13〕
+- 自定义负载均衡只碰两个接口：PickerBuilder 的 Build 出 Picker，Picker 的 Pick 返回 PickResult，一般不用顶层的 Balancer 接口（要管连接池状态）；`PickResult.Done` 回调能拿到错误与延迟，是动态升降权的挂载点。算法经 `balancer.Register` 注册成进程级全局（匿名引入 weightedroundrobin 包触发 init 注册），不同服务要不同算法只能靠 service config 区分。〔W13-2 p11-14〕〔W13-2 p16〕
+- failover 的两个齿轮缺一不可：只有 retry 是反复撞死节点，只有 LB 剔除是单次失败就丢请求；retryPolicy 字段有 name（去 proto 生成产物里找方法名）、maxAttempts、initialBackoff/maxBackoff/backoffMultiplier（指数退避）、retryableStatusCodes（通常 UNAVAILABLE）。〔W13-2 p29-30〕
+- 两个框架参照：Kratos 默认平滑 WRR，负载均衡封装成 Selector（可传 filter 过滤节点），指定算法要 SetGlobalSelector；go-zero 默认写死 P2C（随机选 2 个节点挑负载低的），只能用原生 WithDefaultServiceConfig 覆盖。〔W13-2 p21-24〕
+- 面向业务的 LB 选择：本地缓存场景用哈希 LB 保证同 key 必命中同节点，否则缓存节点来回漂移导致重复加载加内存翻倍；客户端发现服务端触发熔断或限流，一段时间内不选它（failover 变体）。〔W13-2 p34-35〕
+
+### C:go_basic/http、C:go_basic/grpc、C:go_basic/protoc 的补充点
+
+- 服务端逐行 Flush 做流式响应：先设 Content-Length，断言 `w.(http.Flusher)` 后每行 Write 加 Flush 强制写到 TCP；客户端提前 Close 断开，服务端 Write 会报错退出，必须检查 err 并 break，否则 goroutine 忙等。不声明长度则走 chunked。〔C:go_basic/http/server/main.go:93-115〕
+- header key 写入自动正规化（tRAce-id 变 Trace-Id），大小写不敏感，读取用 `http.CanonicalHeaderKey`；同一 header 第二次 `SetCookie` 无效（header key 不可重复），客户端 `request.AddCookie` 可以加多个同名不同值，服务端解析出两个。〔C:go_basic/http/server/main.go:41-44〕〔C:go_basic/http/server/main.go:117-135〕
+- 客户端便捷方法 `http.Get/Post/PostForm/Head` 不能设 header，要设就用 NewRequest 加 `client.Do`，超时挂在 `http.Client{Timeout}`；生产应复用 Client 实例（自带连接池）。〔C:go_basic/http/client/main.go:200-227〕
+- Recv 循环里 `io.EOF` 是正常结束标志，其他错误才需要处理，把 EOF 当错误会误报。〔C:go_basic/grpc/server/student.go:60-72〕
+- gRPC 默认单条消息上限 Recv 4M（Send 默认 MaxInt32），传大对象要 `MaxCallRecvMsgSize` 显式调大；TLS 一行开启：服务端 `grpc.Creds(credentials.NewServerTLSFromFile(...))`，客户端 `NewClientTLSFromFile`，即使 insecure 也必须设 `WithTransportCredentials`。〔C:go_basic/grpc/server/main.go:52-68〕
+- 序列化三种格式：`proto.Marshal` 二进制最快且不可读，`protojson` 可读但性能最差分配最多，`prototext` 调试用；实测 proto 约 511ns 对 json 1026ns，protojson 1979ns 加 56 次分配。〔C:go_basic/grpc/idl/model/student_test.go:23-89〕
+- 多 proto 文件组织靠 `--proto_path` 多路径解析 import，裸文件名在多路径下有同名歧义，标准做法是 import 全路径 `google/protobuf/timestamp.proto` 并把 proto_path 指向 include 目录；跨包引用字段要带 proto package 名（`model.com.user`）；`--go_opt=Mmodel/user.proto=a/b/c/model` 改写生成代码的 import，目标必须与 go.mod 的 module 名一致，否则编译报 package not in std。Timestamp 这类 well-known 类型生成 `*timestamppb.Timestamp`。〔C:go_basic/protoc/dao/product.proto:8-12〕〔C:go_basic/protoc/model/user.proto:9-14〕〔C:go_basic/protoc/go.mod:1-2〕
+- 生成代码头部有版本锚定：`EnforceVersion(20)` 与 MaxVersion 双向断言生成器与运行库兼容，SupportPackageIsVersion9 要求 grpc v1.64 以上；遇到版本不匹配先看这里。〔C:go_basic/protoc/model/user.pb.go:1-24〕
+
+省略未吸收：TB09 的项目布局五要素与仿 database/sql 工厂已在 05 节讲过；W04-2 的 sql.NullString 与 JsonColumn 属于数据库主题（见 22 节）；W05-1 的 verifyState 实现细节、W10-1 的 DDD 八概念正文（仅留速记）与 W13-2 的 Kratos 作业属于框架与作业范畴；C 单元的模板渲染、Cookie 解析 API 细节与 bufconn 练习未收。
 
 ## 想深入去哪查
 
