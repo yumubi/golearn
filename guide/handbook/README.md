@@ -10,5 +10,6 @@
 | 规模与演进 | [17 数据迁移](17-migration.md) · [18 分布式一致性](18-consistency.md) · [19 微服务](19-microservices.md) · [20 注册发现与负载均衡](20-discovery-lb.md) · [21 搜索 Feed IM](21-search-feed-im.md) |
 | 交付与运行 | [22 容器与 Linux](22-containers-linux.md) · [23 部署与 K8s](23-deploy-k8s.md) |
 | 项目线 | [24 dnsproxi-go](24-dnsproxi.md) · [25 业务实战与 minifeed 蓝图](25-business-project.md) |
+| 路线与速查 | [26 学习路线](26-route.md) · [27 场景决策对照](27-decisions.md) |
 
-每节末尾的"想深入去哪查"指向原材料的单元与页码和旧长版 `notes/`，细节靠它们回查。01 到 25 节头部时长合计约 19 小时；26 节是按天拆分的路线。
+每节末尾的"想深入去哪查"指向原材料的单元与页码和旧长版 `notes/`，细节靠它们回查。01 到 25 节头部时长合计约 19 小时；26 节是按天拆分的路线，27 节按业务场景横对照各节的设计选择。

@@ -113,14 +113,14 @@ import os as _os
 if _os.path.isdir('work/text'):
     r = sh([sys.executable, '-I', 'scripts/check-cite-pages.py'])
     rec('手册出处标签页码有效', r.returncode == 0, (r.stdout + r.stderr).strip().splitlines()[-8:] if r.returncode else '')
-# 7.5 手册讲课体：01 到 23 全部跑示例（24/25 按 QUEUE 参数；26 是路线页无 Go 示例）
+# 7.5 手册讲课体：01 到 23 全部跑示例（24/25 按 QUEUE 参数；26 路线页、27 决策页无 Go 示例）
 LECT = {
     '22': ['--min-examples', '2'],   # 速通节，容器命令为主，正文只留 2 个可跑 Go 块
     '23': ['--min-examples', '1'],   # 速通节，头部声明不启集群，只 1 个可跑 Go 块
 }
 for f in sorted(glob.glob('guide/handbook/[0-2][0-9]-*.md')):
-    if os.path.basename(f)[:2] == '26':
-        continue  # 路线页，不是讲课体章节
+    if os.path.basename(f)[:2] in ('26', '27'):
+        continue  # 路线页与决策索引页，不是讲课体章节
     num = os.path.basename(f)[:2]
     if num in ('24', '25'):
         args = ['--min-lines', '200', '--max-lines', '450', '--min-examples', '0', '--profile', 'project']

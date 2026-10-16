@@ -45,6 +45,7 @@ export default defineConfig({
         items: [
           { text: '手册总览与目录', link: '/handbook/README' },
           { text: '26 七天学习路线', link: '/handbook/26-route' },
+          { text: '27 场景决策对照', link: '/handbook/27-decisions' },
           {
             text: '心智模型',
             collapsed: false,
