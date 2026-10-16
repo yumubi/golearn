@@ -359,7 +359,64 @@ JWT 不可变，"退出登录"没法把已签发的 token 变无效:多实例下
 
 两个细节最容易被糊弄过去。其一，**URL 由后端拼**而不是前端：state 要在后端校验，后端拼了改起来才方便。其二，state 防的是 CSRF 登录绑定攻击：攻击者先用自己的微信走一遍授权拿到 code，伪造页面诱导已登录用户点击，把攻击者的微信绑到受害者账号上；有 state（登录时发、回调时验）这条路就走不通。换回来的字段有两组：授权侧 access_token/expires_in/refresh_token，ID 侧 open_id/union_id。同一用户在 A、B 两个产品各有 open_id，union_id 全公司同一个，多产品账号打通靠它。你还能认出来：**微信的 access/refresh 就是长短 token 的原型**，自研双 token 方案就是从这里抄的作业。〔W05-1 p20-22〕
 
+### 短信验证码登录：一次"检查并写入"的原子化
+
+验证码登录是国内产品的默认登录方式，它的技术含量不在收发短信，在两条安全线和一次并发竞态。两条安全线：发码端控制频率（同号一分钟一条、验证码十分钟有效，外加系统限流兜底），校验端防暴力破解（验证通过即作废；失败三次作废；提示只说"不对"，不告诉对方还剩几次机会）。〔W04-2 p26〕竞态在发码端："检查这个号一分钟内发过没有"和"写入发送记录"是两步，两个请求同时检查都看到"没发过"，就双发短信，多花的是真金白银。这是分布式业务并发，进程内的 `sync.Mutex` 管不了别的实例，只能靠 Redis 单线程执行 lua 脚本，把检查和写入封成原子操作。〔W04-2 p30-31〕
+
+lua 脚本里 key 的剩余 TTL 就是状态机，三分支：不存在或冷却已过就写入验证码、过期 600 秒、计数键置 3；剩余 TTL 大于 9 分钟说明一分钟冷却还没过，拒绝；有 key 但没有过期时间属于异常状态，宁可拒绝服务也不猜。〔W04-2 p28〕〔W04-2 p32〕用锁模拟 Redis 的单线程语义跑一遍：
+
+```go
+package main
+
+import (
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+)
+
+var (
+	ErrTooMany   = errors.New("发送太频繁")
+	ErrKeyBroken = errors.New("key 异常,拒绝服务")
+)
+
+// store 模拟 Redis 执行 lua:检查与写入之间插不进别的命令。
+type store struct {
+	mu      sync.Mutex
+	codeTTL map[string]time.Duration
+}
+
+func (s *store) send(key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ttl, ok := s.codeTTL[key]
+	switch {
+	case ok && ttl == -1: // 有 key 无过期时间:疑似误操作,拒绝
+		return ErrKeyBroken
+	case !ok || ttl <= 9*time.Minute: // 没发过,或冷却已过
+		s.codeTTL[key] = 10 * time.Minute
+		return nil
+	default: // 冷却期内
+		return ErrTooMany
+	}
+}
+
+func main() {
+	s := &store{codeTTL: map[string]time.Duration{}}
+	fmt.Println(s.send("login:138"))
+	fmt.Println(s.send("login:138"))
+}
+```
+
+```text
+<nil>
+发送太频繁
+```
+
+校验端有个反直觉的细节：验证成功后不能删 key，而是把计数键置成 -1 作废，key 还在但永远校验不过。如果直接删掉，"删除后立刻再发一条"的绕过路径就打开了。〔W04-2 p34-35〕另一个是并发注册：新手机号首次登录，`FindOrCreate` 两个请求同时发现"没有这个用户"就双建账号，靠手机号唯一索引兜底，第二个插入失败转查询。〔W04-2 p45-46〕最后是业务隔离：登录、改密码、危险操作二次验证都用验证码，key 里必须带 biz 维度（`phone_code:$biz:$phone`），各业务冷却与有效期独立；验证码服务和短信发送服务也值得拆开，短信供应商可能从腾讯换成阿里，验证码逻辑不该跟着改。〔W04-2 p10-11〕〔W04-2 p27-28〕
+
 ### 压测登录：先测再优化
+
 
 登录优化最容易犯"上来就加缓存"。课程用 wrk 压注册/登录/Profile 三接口，定位到瓶颈是 bcrypt 的 CPU 耗时加数据库查询；给 Profile 读路径配了业务专属 UserCache（封装过期时间/key 结构/序列化协议），Repository 层组合 DAO+Cache 并做 Redis 故障降级；而登录本身是低频操作，**结论是不值得缓存**。先压测找到真瓶颈，再决定动哪里。优化顺序比优化手段重要。〔W04-1 p12〕〔W04-1 p14-15〕〔W04-1 p19〕
 
