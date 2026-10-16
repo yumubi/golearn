@@ -1,6 +1,6 @@
 # 23 部署与 Kubernetes：你描述要的状态，控制器负责逼近
 
-> 详细程度：速通 · 约 25 分钟
+> 详细程度：速通 · 约 30 分钟
 > 材料：W03-1 W03-2、C:go_frame/k8s、K:krm-backend-第八章 K:krm-backend K:krm-frontend · 旧长版：`notes/p26-deploy.md`
 > 前置：22 容器与 Linux 运行时
 > 说明：本节不启动集群，YAML 与 kubectl 命令都出自材料，没有在本机执行；能在本机验证的只有 Go 代码
@@ -208,9 +208,66 @@ K8s 自身的 API 是 HTTP，client-go 是它的 Go SDK。资料里的 krm 是�
 
 这里没有现成例子：`dnsproxi-go` 目前没有 K8s 清单，只有旧章里 `labs/compose` 的编排（`dnsproxi` 依赖 `httpkv` 的 healthcheck，`DNS_UPSTREAM: "upstream:15300"` 用服务名做主机名）。要搬上 K8s，按上面差异表的对应关系逐条换：`DNS_UPSTREAM` 这类环境变量放进 ConfigMap；UDP 监听端口用 Service 的 `protocol: UDP` 暴露；compose 的 `condition: service_healthy` 在 K8s 里大致对应探针与 InitContainer（具体写法材料没讲，未在本机验证）。
 
-## 想深入去哪查
+## 想深入:正文之外的干货
 
-- 原材料：W03-2（K8s 入门、PV 与 PVC、Ingress）、C:go_frame/k8s（kind 编排、HPA、节点标签）、K:krm-backend-第八章（client-go 后端）、K:krm-backend 与 K:krm-frontend（前端）。
-- 旧长版：`notes/p26-deploy.md`（compose 四个面的实测）。
-- W03-1 的多实例 Session 与限流，属于部署引发的代码问题，在 13 与 16 节展开。
-- kind 集群与 HPA 压测的材料只做了静态阅读，没有在本机执行。
+### W03-2 部署链上没展开的细节
+
+- 部署前置是先"减代码"：材料把 main 里的 MySQL、Redis 初始化全部注释掉，只留 gin 加一个 /hello，让 Web 能起、能监听 8080，再上 K8s。目标形态是一个 Service 配一个 replicas 为 3 的 Deployment。〔W03-2 p12-13〕
+- 镜像是两步产出的：先 `GOOS=linux` 交叉编译出 Linux 可执行文件，再 `docker build -t flycash/webook:v0.0.1 .` 打成带 tag 的镜像；课程把两步包成 `make docker`。〔W03-2 p14-15〕
+- K8s 的定位是"开源的容器编排平台，管容器的"，而且不限于 Docker 产出的容器；教学环境用 Docker Desktop 的 Enable Kubernetes 起单节点集群，配 kubectl，装不上可换 Rancher。〔W03-2 p5-9〕
+- selector 除 matchLabels 外还能写 matchExpressions，按表达式筛 Pod；template 的内容随 kind 变，在 Deployment 里就是创建 Pod 的模板。〔W03-2 p19-21〕
+- 材料的 webook Service 是 LoadBalancer 类型，注释明说"给 selector 筛出来的 Pod 做负载均衡"；apply 之后 K8s 发现状态和配置不一致，多了删、少了加。〔W03-2 p23-24〕
+- MySQL 的 Service 故意 port 3308 对 targetPort 3306，错开是避免撞上宿主机已占的 3306；连接串里写的始终是 Service 名 `webook-mysql:3308`，不是 Pod IP。〔W03-2 p29〕〔W03-2 p52〕
+- Pod 模板里跟存储有关的是两个字段：containers 的 volumeMounts 写挂到容器哪个目录，volumes 写挂的东西是什么，后者指向名为 mysql-storage 的卷，而这个卷由 mysql-pv-claim 这个 PVC 声明。〔W03-2 p30〕
+- PVC 用 `storageClassName: manual` 和 PV 配对，两边都写 manual 才绑得上；漏写或写错，PVC 会一直 Pending。〔W03-2 p31-33〕
+- Ingress 清单的字段：apiVersion 是 networking.k8s.io/v1，spec.ingressClassName 写 nginx（换别的 controller 就写对应名字），rules 的写法和 nginx 配置差不多，pathType 用 Prefix 做前缀匹配。〔W03-2 p48〕
+- ingress-nginx 本体用 helm 装，一条 `helm upgrade --install` 带上仓库地址和命名空间；之后装别的 K8s 软件也用它。〔W03-2 p47〕
+- nodePort 是硬约束：必须落在 30000 到 32767，写个小于 30000 的值 apply 直接报错，不是"能跑但不规范"。〔W03-2 p40-41〕
+- 前端这一版没进集群：改 webook-fe 的 axios baseURL 指向 localhost 就能连上 K8s 里的后端；启动成功的判据是 kubectl logs 里看到 GIN 路由注册和 Listening on :8080。〔W03-2 p53-54〕
+
+### W03-1 多实例部署引发的代码问题
+
+- Session 存储的选型随部署形态变：单机单实例用 memstore 就行，多实例必须选 redis，让每个实例都能访问同一份 Session；平时无脑选 redis。〔W03-1 p7-8〕
+- cookie、memstore、redis 三个存储实现都要传两个 key：authentication key 建议 32 或 64 位，加一把 encryption key；sess_id 永远放 Cookie，Session 里的数据（比如 user_id）才是 store 存的东西。〔W03-1 p7-10〕
+
+### C:go_frame/k8s kind 集群与 HPA 的实操细节
+
+- kind 的内部结构：一个 Docker 容器模拟一个 node，容器里的 systemd 托管 kubelet 和 containerd，kubelet 再拉起 kube-apiserver 和 etcd，本质是用 kubeadm 部署的。〔C:go_frame/k8s/deploy/操作手册.md:1-2〕
+- kind 场景镜像要手动流转：docker build 出 blog:v1.0.0 后必须 `kind load docker-image blog:v1.0.0 --name dqq` 灌进节点，清单里还要写 `imagePullPolicy: IfNotPresent`，否则 kubelet 默认重新去拉，本地镜像等于白灌。〔C:go_frame/k8s/deploy/操作手册.md:31-56〕〔C:go_frame/k8s/deploy/dep-blog.yaml:20〕
+- Service 的 ClusterIP 是个固定的虚拟 IP：不管 Pod 所在节点怎么变，集群内都用这个 IP 访问；port 和 targetPort 可以不同。〔C:go_frame/k8s/deploy/svc-blog.yaml:1-15〕
+- Ingress 的两条 Prefix 把 /blog、/lottery 分别转给 svc-blog、svc-lottery，另带 rewrite-target 注解；ingress controller 所在节点要先打 `ingress-ready=true` 标签，否则规则存在但流量不进。〔C:go_frame/k8s/deploy/ingress-nginx.yaml:1-25〕〔C:go_frame/k8s/deploy/操作手册.md:113-125〕
+- HPA 清单用的是 autoscaling/v1（现行已过渡到 autoscaling/v2，教学清单仍是 v1）：副本 2 到 5，目标 CPU 利用率 50%。验证闭环是 kubectl get hpa 先看到 TARGETS unknown，过一会儿变 0%，压测脚本死循环打 /blog 后 Pod 扩到 5 个，停了再缩回。〔C:go_frame/k8s/deploy/hpa-blog.yaml:1-14〕〔C:go_frame/k8s/deploy/操作手册.md:151-169〕
+- metrics-server 在自签证书的集群要加 `--kubelet-insecure-tls`，不然 HPA 拿不到指标，TARGETS 一直是 unknown。〔C:go_frame/k8s/deploy/操作手册.md:155-159〕
+- 节点标签决定调度：先 `kubectl label nodes dqq-worker hp=true` 给节点打标签，清单里 nodeSelector 写上这个键值，Pod 就只落在这个节点上。〔C:go_frame/k8s/deploy/dep-nginx.yaml:24-26〕
+- 服务代码两处配合：配置全走环境变量（os.Getenv 读 port，清单的 env 字段可以覆盖），GetLocalIP 遍历网卡取第一个私有 IPv4，容器里拿到的就是 Pod IP，页面直接把它显示出来，副本扩到几个就出现几个不同 IP。〔C:go_frame/k8s/blog/main.go:11-51〕
+- 材料的 Dockerfile 从单阶段（容器内 go build）演进成双阶段（构建层编出二进制，运行层只 COPY 产物），和 22 节的多阶段构建是同一个形状。〔C:go_frame/k8s/blog/Dockerfile:1-27〕
+
+### K:krm-backend-第八章 client-go 后端的更多机制
+
+- 后端启动靠 Go 的空白导入：`_ "krm-backend/controllers/initcontroller"` 触发 init()，在 main 之前把所有集群的 kubeconfig 从 Secret 装进内存 map；加载失败或元数据命名空间建不出来直接 panic，让故障前移到部署期，不带病运行。〔K:krm-backend-第八章/controllers/initcontroller/incluster.go:17-63〕
+- 配置层是 viper 的 SetDefault 加 AutomaticEnv，PORT、JWT 密钥、过期分钟、用户密码全走环境变量，和 22 节"容器里配置进环境"是同一件事。〔K:krm-backend-第八章/config/config.go:1-100〕
+- 集群建模成 Secret 的完整账：探活调 `Discovery().ServerVersion()`，取得到就是活的；Secret 的 name 是 clusterId，labels 做索引，annotations 放状态，StringData 存 kubeconfig。选 Secret 不选数据库，是为了复用 K8s 自己的 RBAC 和 etcd；代价是集群列表要靠 List Secrets 过滤，规模大了低效。〔K:krm-backend-第八章/controllers/cluster/addOrUpdate.go:15-79〕
+- 删除集群是删 Secret 加同步删内存 map；在途请求还握着旧 kubeconfig，会照常执行完，后续请求才拿 400。〔K:krm-backend-第八章/controllers/cluster/delete.go:27-35〕
+- JWTAuth 中间件的错误返回全是 HTTP 200 加 body 里的 401：前端拦截器只需判 data.status；代价是监控系统按 HTTP 状态码统计不到错误。〔K:krm-backend-第八章/middlerwares/middlewares.go:27-41〕
+- 删除接口支持 Force：Force 时 gracePeriodSeconds 为 0，绕过优雅终止直接强删，对卡在 Terminating 的资源有用，对正在写的 Pod 可能丢数据。〔K:krm-backend-第八章/controllers/controllers.go:126-133〕
+- 存在两条 client 路径：资源 CRUD 走 kubeutils（只要 kubeconfig 字符串），namespace 和 node 走 BasicInit 每请求现建 clientset；同一功能两条路，后人容易改错层。〔K:krm-backend-第八章/controllers/controllers.go:153-182〕
+- 教学 demo 把三处 label 的区别演示全了：对象自己的 labels、selector 的 matchLabels、Pod 模板的 labels，三处语义各不相同。〔K:krm-backend-第八章/client-go.go:17-176〕
+- 部署链：CGO_ENABLED=0 交叉编译单二进制，alpine 镜像，清单是 Deployment 加 NodePort，探针 tcpSocket 8080，requests 200m/256Mi、limits 1 核/1024Mi。〔K:krm-backend-第八章/README.md:46-96〕
+
+### K:krm-backend 与 K:krm-frontend 前端的取舍与坑
+
+- 两个前端是演进关系：krm-frontend 是基础版（集群、命名空间、节点、用户四组 CRUD），krm-backend 目录里是完整版，加了调度资源表单、Pod 管理和 YAML 预览；axios 拦截器、request 封装、路由守卫逐行一致。〔K:krm-frontend/src/config/index.js:1-30〕
+- 请求拦截器每次开 Loading 遮罩，GET 强制加时间戳参数防缓存，再从 localStorage 取 token 塞 Authorization 头；响应拦截器见 401 就删 token 跳登录页，业务代码零感知。〔K:krm-backend/src/api/index.js:13-64〕
+- 401 处理有个缺口：拦截器只认 HTTP 200 包装体里的 data.status 401，真正的 HTTP 层 401 落在 error 分支，只弹消息不登出，两条路径不一致。〔K:krm-backend/src/api/index.js:44-64〕
+- 资源创建表单的状态放 Pinia 全局单例 store（useItem），持有一份 Deployment 骨架（selector、replicas、strategy 默认 RollingUpdate 25%/25%），子组件直接改引用，免层层传 props；代价是离开页面不 reset，上次输入会残留到下一次。〔K:krm-backend/src/store/index.js:42-102〕
+- 卷类型有 6 种（hostPath、secret、configMap、nfs、emptyDir、pvc），用 markRaw 把组件映射表包起来，防止组件对象被 Vue 当响应式代理；探针表单对应 K8s 的 handler 字段，四个选项 exec、httpGet、tcpSocket、close，默认给 startupProbe，initialDelay 30 秒、timeout 2 秒、period 30 秒。〔K:krm-backend/src/view/components/scheduling/Volume.vue:9-45〕〔K:krm-backend/src/view/components/scheduling/container/Probe.vue:8-60〕
+- 提交时把表单拼成 clusterId、namespace 加 item 三件套，预览用 js-yaml 把对象转 YAML，先深拷贝去掉响应式再 dump。〔K:krm-backend/src/view/deployment/CreateOrEdit.vue:15-60〕
+- 前端部署链：npm build 出 dist，nginx alpine 镜像只装静态文件，清单是 Deployment 加 NodePort，liveness 和 readiness 都是 tcpSocket 80，requests 100m/256Mi、limits 1 核/512Mi；切环境只改 VITE_BASE_URL，镜像不用重建。〔K:krm-backend/README.md:80-168〕
+- API 端点按资源分组各成一个文件，URL 集中在 config 里（auth、user、cluster、node、namespace 五组），后端地址同样来自 VITE_BASE_URL，改一处即切环境。〔K:krm-frontend/src/config/index.js:4-27〕
+- 基础版有个现成的反面教材：集群选择器默认取 clusterList[0].id 没判空，集群列表为空直接 TypeError；InActive 禁选只在 UI 层，数据层没兜底。〔K:krm-frontend/src/view/components/ClusterNamespaceSelector.vue:63-71〕
+- 危险操作的确认强度不一：命名空间删除要输入名字确认，用户删除只弹确认框；同一产品里强度应当统一。〔K:krm-frontend/src/view/namespace/List.vue:60-90〕
+- labels 和 annotations 在表单里编辑成 key、value 数组，提交时 list2Object 合回对象；中间少同步一步就丢编辑，这是 reactive 对象与数组手动互转的代价。〔K:krm-frontend/src/utils/utils.js:1-32〕
+
+说明：有意省略的部分：W03-1 的 Session 刷新策略、JWT 结构与 CORS 配合、四种限流算法属认证与稳定性主题，分别在 11 节和 16 节展开；W03-2 的两条练习条目（副本数改动预测、ClusterIP 端口语义）正文语义已给足；krm 三端的 jwtutil 细节、路由注册清单、菜单与图标配置与部署无关，从略。
+
+## 想深入去哪查

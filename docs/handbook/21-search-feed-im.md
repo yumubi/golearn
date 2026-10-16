@@ -5,7 +5,7 @@ title: 21 搜索、Feed 与 IM 的设计套路
 # 21 搜索、Feed 与 IM 的设计套路
 
 
-> 详细程度:标准 · 约 35 分钟
+> 详细程度:标准 · 约 40 分钟
 > 材料:W16-2、W17-1、W17-2、W17-3、W19-1、W19-2、W20-1、W20-2、C:dachang/radic · 旧长版:无
 > 前置:13 缓存与消息队列、19 微服务拆分
 
@@ -296,6 +296,73 @@ func main() {
 ## 在项目里
 
 这里没有现成例子:`dnsproxi-go` 不涉及搜索、Feed、IM；minifeed 现有的 `user`、`post`、`counter`、`rank`、`auth` 也没有。25 节的蓝图规划了 `internal/feed`:推拉结合,阈值可配,`FeedService.OnPostCreated` 就是开头 `Publish` 的直译(取粉丝列表时多取一个来判断是否超阈值,超了只写发件箱,否则逐个写收件箱)。做完可以拿 k6 压一把:先压发帖接口,再压 Feed 读接口,给阈值一个自己的数。
+
+## 想深入:正文之外的干货
+
+这一小节收 8 个单元里正文没展开的干货,页码都出自 digest。
+
+### W17-1 ES 的实操层
+
+- 建索引靠 HTTP 的 PUT:settings 里定 `number_of_shards` 和 `number_of_replicas`,mappings 里逐字段定类型(email 给 text,phone 给 keyword,birthday 给 date)。主分片数建索引时就锁死,后续改不了,副本数随时能调;数据量估不准宁可先多分片,实在不行 reindex。〔W17-1 p15〕
+- 常用查询十来种就够了:match 全文、term 精确、range 范围、bool 把 must/must_not/should 组合起来,再加 match_phrase(保词序)、prefix、wildcard、fuzzy(fuzziness 控制模糊度)、nested、聚合。用的时候查文档,不必背。〔W17-1 p21-23〕
+- 最经典的新手坑是拿 term 查 text 字段:text 先分词,posting list 里存的是切出来的词,拿完整串做 term 是碰运气。要么字段就用 keyword,要么用 `field.keyword` 子字段,一个字段两种需求就靠它两头兼顾。〔W17-1 p21-22〕
+- Go 接入用 `github.com/elastic/go-elasticsearch/v8`,`Indices.Create` 建索引、`Index` 写文档、`Search` 查询,链式传 WithContext/WithBody;返回结果集的处理公认难用,官方 SDK 本质是构造 HTTP 请求,难用就自己封一层,或直接用 resty 拼请求。〔W17-1 p24-27〕
+
+### W17-2 平台化的补充
+
+- 用户索引里 email、phone 在公开平台不可搜,是隐私;toB 私有 IM 才需要拿手机号搜人。nickname 若只存 keyword,用户拿昵称搜人很难命中,昵称难读难记,得走 text 分词。〔W17-2 p9〕
+- 为什么不图省事用 multi_query 一次查所有字段:各业务可搜的字段和权重不同,统一的 multi 查询会把不该参与相关性的字段也卷进打分。Service 层按空格切词之后,到 DAO 里再 Join 回去,是同一件事的两半。〔W17-2 p14〕
+- 请求里可以预留一个 expression 字段做通用化,GitHub 搜索栏那种表达式就往这里放;web/bff 只透传,解析和执行都收在搜索服务自己手里。〔W17-2 p18〕
+- 写文档的 DAO 用 olivere/elastic 这类二次封装库,`Index().Index(name).Id(文章 ID).BodyJson(art)` 一行完成 Upsert;课程的原话是官方原生库过于垃圾。〔W17-2 p12〕
+
+### W17-3 标签自己的账
+
+- Tag 表防重名靠 uid+name 唯一索引;打标签是覆盖语义,事务里先删(条件带 uid+biz+biz_id 三元组,不同人打的标签互不干扰)再插,空列表直接返回,只插不删会累积历史标签。〔W17-3 p10〕〔W17-3 p14〕
+- 缓存标签值不值分场景:toC 用户打标签是低频行为,缓存命中率差;toB 用户量小、总量可控,全量预加载加本地缓存才划算。预加载分批(batch 100、单批 1 秒超时)查库,goroutine 并发写缓存,InitRepository 后用 goroutine 异步跑,同步执行会拖住启动。〔W17-3 p12-13〕
+- 标签进 ES 之前还有一条岔路:标签服务直推独立 tags_index(通用性最强)还是文章服务把标签并进自己的索引(查询只碰一个索引,简单),课程选前者。〔W17-3 p20〕
+- 相关性排序之上全是业务:字段权重和 boost 只是轻量手段,现实里还有充值、合作协议、平台倾向、政策法规;更重的诉求(收藏置顶)在应用层重排。〔W17-3 p19〕〔W17-3 p26,p32〕
+- 标签同步的推送低频,同步调用也可以;上 Kafka 的动机里保序占大头,同人同资源固定分区。〔W17-3 p22〕
+
+### W16-2 用户关系的细账
+
+- 关注/取关和点赞同款:唯一索引冲突时 OnConflict 把 status 更新回 Active,取关就是 Inactive 软删,行为流水留着可审计,再关注幂等;这条链路也能扔进 Kafka 异步化。〔W16-2 p12〕
+- 粉丝计数有两案。维护计数:关注时双向更新 A 的关注数和 B 的粉丝数,DB 事务、Redis TxPipeline 各保一次原子,拆开就是一成一败。Count 兜底:不建计数表,缓存 miss 就 Count 回写,省表但大表 Count 慢、且弱一致;要快照级精度(大 V 粉丝数)就选维护计数。〔W16-2 p14-16〕
+- Count 有两个顺手的优化:唯一索引已经去重,不用 COUNT DISTINCT;`WHERE follower=?` 走唯一索引,`WHERE followee=?` 命中不了,所以 followee 要单独建索引,这是中间表最常见的性能坑。〔W16-2 p17〕
+- Tablestore 真要用时有两个硬约束:Upsert 得用 UpdateRow 加 RowExistenceExpectation_IGNORE,不是 Insert;SQL 形态不支持参数化,只能拼串,业务参数进来就是注入面,表名列名必须白名单。作者的结论是收费加 API 难用,不到逼不得已别上。〔W16-2 p24-26〕
+- 特殊关注是个现成的扩展位:普通关注抽象出"类型/优先级",Feed 排序时特别关注优先展示,对应 B 站的全部/特别/悄悄三类。〔W16-2 p5〕
+
+### W19-1 Feed 的几处补刀
+
+- 发文章 Handler 有个小优化:先不查粉丝数,直接查粉丝列表开写,大多数作者是推模型根本触发不了阈值判断,取回来的列表顺手多取一个就能判阈值,25 节蓝图照抄的就是这个。〔W19-1 p34〕
+- 个性化字段不止 map 一种传法:string 是业务自解释格式(人类可读,平台不解析),bytes 是压缩二进制(人不可读);三者取舍就是可读性换灵活性。〔W19-1 p37〕
+- 查询有两个思路:Service 统一查(查关注列表拿 limit,发件箱收件箱 errgroup 并发查,Ctime 倒序,截到 limit)适合无业务差异的场景;Handler 各自查再聚合,排序策略就能按业务定制,代价是每加一个业务都要写查询。〔W19-1 p40-42〕
+- 事件分双元和广播:点赞、关注、评论回复都是"操作者对被操作者",走收件箱;只有"发表作品"这种广播事件才需要发件箱。判断一个事件推给谁,是 Handler 的核心职责。〔W19-1 p28,p32-34〕
+- 关注时间点会改变 Feed 内容:读扩散能看到关注之前的历史(发件箱里都在),写扩散只能看到关注之后(收件箱从那一刻起才有)。产品要哪种得先问清。〔W19-1 p13-16〕
+
+### W19-2 压测数字怎么读
+
+- 工具分场合:wrk 干快速 smoke,k6 才值得进 CI(脚本即用例,可复现可存档);k6 支持 HTTP/WebSocket/gRPC,脚本让 ChatGPT 代写基本无 bug。运行参数就三个:输出 `-o experimental-prometheus-rw`、duration、vus。〔W19-2 p4-5〕〔W19-2 p8〕
+- 图形要导入 Grafana 看板,dashboard ID 19665,数据源指到 Prometheus;设 N 个 vus,Grafana 里最大 vus 会到约 2N,那是 k6 的机制不是异常,容量判断看 QPS 拐点而不是 vus 数。〔W19-2 p9-10〕
+- 写扩散压测分百、千、万三档,千人档的参考数字:Peak RPS 约 1.25k,P99 约 106ms;读接口压 push、pull、混合三路乘数据量档位。混合读 10 万数据级时,课程那台本机撑一百多并发就速降,数字只做相对比较,容量结论要在目标环境复测。〔W19-2 p15-18〕
+
+### W20-1 协议与报文
+
+- IM 协议三选:XMPP 是开放 XML 标准,扩展性强,要跟别的 IM 互通时才考虑,影响力在衰退;WebSocket 是主流底座,全双工低延迟;WebRTC 专管浏览器音视频,P2P 直连。〔W20-1 p7-10〕
+- 升级请求的头要认全:Upgrade 加 Connection:Upgrade 是主角,Sec-WebSocket-Key 由服务端算出 Sec-WebSocket-Accept 回去(验签防篡改),Sec-WebSocket-Protocol 选子协议,Origin 头做跨域控制;之后才有 FIN/Opcode/Mask 那一套帧格式。〔W20-1 p22-25〕
+- gorilla/websocket 的 Upgrader 有几个值得调的选项:ReadBufferSize/WriteBufferSize、WriteBufferPool(缓冲池,避免每次分配,对象池的特例)、CheckOrigin(WS 的跨域是主动检测)、EnableCompression。服务端模式固定:Upgrade 之后一个 goroutine 源源读,ticker 定时写。〔W20-1 p31-33〕
+- 持久连接是容量黑洞:C10K 连接加频繁消息,内存和 fd 双压力;WS 持久连接单机表现并不好,缓冲池、压缩、合理心跳是标配。〔W20-1 p21〕〔W20-1 p33〕
+- seq 是前后端关联键,不是消息 ID:前端生成、连接内唯一,后端拿它告诉前端"你发的第几条"结果如何(成功/失败/审核中),后端自己的消息 ID 是另一回事。〔W20-1 p42〕
+- sync.Map 的 Range 回调 return true 是继续遍历、false 才中断;Hub 转发跳过自己时,这个返回值写反就只转发了一个人。〔W20-1 p35〕
+
+### W20-2 OpenIM 的接线细节
+
+- 三组件各管一段:OpenIMServer 是 IM 后端;APP Client 前端嵌 OpenIMSDK(存储、长连接、心跳、推送都归 SDK,业务只留逻辑和事件回调);APP Server 是业务后端,走 REST 跟 OpenIM 交互。常见诉求"站内私聊"就是后一种嵌入。〔W20-2 p5〕〔W20-2 p15〕
+- 部署走 openim-docker 的 make init,配 OPENIM_IP;Web 端和后台都拿这个 IP 访问,别用 localhost(消息推送、回调地址有小部分坑)。试用验证码 666666,聊天前要互加好友同意;管理后台 11002 端口,账号 chatAdmin。〔W20-2 p8-11〕
+- 监控两个金指标:messages/s 和 failures/s;Grafana 导入用 JSON model(复制 yaml 删 license),Prometheus 数据源写容器服务名(prometheus:9090),写 localhost 会因容器网络隔离连不上。〔W20-2 p12-14〕
+- 同步请求三件套:secret 从部署时的 config.yaml 读(进代码仓库就是安全事故),operationID 头必传且用 OTel trace ID(OpenIM 拿它串日志,丢了排查靠猜),响应 ErrCode 非 0 即失败。〔W20-2 p17〕
+- 注册是逐个 Sync 没有批量接口,消费者遍历 Data 一条条来;将来引入批量接口就是现成的优化点。〔W20-2 p18〕
+
+省略未收:W17-1 的 Docker 部署参数与 GET 索引、W16-2 的树形表规范与 COUNT 面试总结、W19-2 的安装命令、W20-2 的作业题;W21-1(42 条必读)不属本节 8 单元,全书另有安排。
 
 ## 想深入去哪查
 

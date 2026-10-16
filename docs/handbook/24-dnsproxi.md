@@ -233,6 +233,44 @@ DNS_LISTEN=:15353 DNS_UPSTREAM=127.0.0.1:15300 DNS_CACHE=1 \
 
 改造题（历史两题已落地，不要重复做）：缓存接受带 AD 标志的查询（判据放宽为 `flags2&^0x20`，提交 `ff5f72b`）；`main` 接上 `signal.NotifyContext` 优雅关停（提交 `68aedcd`）。**保留的改造题只有一道：去掉命中路径的应答拷贝，对照 `labs/experiments/hitpath-ab` 的基准**。提示：`cache.ReplyPool` 与 `cache.BufPool` 已经写好（语义契约见 `dnsproxi-go/cache/reply.go` 开头注释），`DNS_HITPATH_POOL=1` 就是这条路径，你的任务是用 `dnsq` 判断它在什么负载下值得切默认，以及给出"不值得"的数据也要。
 
+## 想深入:正文之外的干货
+
+上面正文只借了 TB36 到 TB38 的"定界"一角。这三讲是一整条 TCP 服务器线，下面把它独有的干货补齐，正文讲过的（流无边界、每连接一 goroutine 的形态）不再重复。
+
+### TB36：socket 编程模型与读写语义
+
+- 阻塞 I/O 下一个线程只能陪一个连接干等；非阻塞未就绪立即返回 EAGAIN，调用方通常轮询，单独用在生产上浪费 CPU；多路复用让一个线程挂起在一堆 socket 上，由内核通知哪个可读可写，是主流服务器的选择。〔TB36 p8-11〕
+- Go 的"阻塞"是表象：底层 socket 实际是非阻塞的，运行时拦截 EAGAIN，把 goroutine 挂到 netpoller（Linux 用 epoll、macOS 用 kqueue、Windows 用 iocp），可读可写时再唤醒。阻塞的只是 goroutine，不占线程。〔TB36 p11-12〕
+- 服务端固定套路是 Listen+Accept 循环加 `go handleConn(c)`；端口被占用时 Listen 直接报 bind: address already in use。客户端 Dial 会阻塞到连接成功或失败，严格时限用 DialTimeout。〔TB36 p12-15〕
+- backlog 队列是隐藏的坑：服务端 accept 不及时，客户端 Dial 会阻塞排队；服务端一直不 accept，macOS 上约 1 分多钟、Ubuntu 约 2 分多钟才超时，长度由 somaxconn 等内核参数决定。〔TB36 p14-15〕
+- 连接建立后，两边内核各有一对发送/接收缓冲区。写阻塞不是死锁：对端收缓冲和本端发缓冲都满时 Write 才阻塞，服务端读走一段就恢复。〔TB36 p19-20〕
+- 读操作有四态：无数据阻塞、有部分数据立即返回（要 10 只到 2 也不等）、缓冲够则填满、设了 SetReadDeadline 就超时返回。deadline 是绝对时间，不重设则之后所有读全部超时，取消要传 time.Time{}。〔TB36 p16-18〕
+- 写操作有部分写入：服务端中途关掉，客户端又补写了 24108 字节才报 broken pipe，这 24108 字节没到达对端，得自己留着重发。写超时同理，不重设就一直超时。Read/Write 永远要综合 n 和 err 判断。〔TB36 p21-22〕
+- 运行时用 fdMutex 串行化同一 fd 的读写：单次 write 写完整业务包是安全的，拆成多次写则不保证连续；并发读不重叠，但 buf 给小了会把一个业务包撕给两个 goroutine。〔TB36 p22-26〕
+- 对端关闭后，读会先吐完剩余数据再给 io.EOF；但全双工下你这边 Write 仍可能"成功"，数据只是进了本机内核缓冲，永远到不了对方。发现对端关了就收尾自己的 socket，继续写没有意义。〔TB36 p26〕
+
+### TB37：Frame 与 Packet 两层抽象
+
+- 教学协议字段就三个：totalLength 定边界，commandID 分类型（0x01/0x02 请求、0x81/0x82 响应，iota 加偏移两组常量），ID 是每连接上的流水号，请求响应用同一个号配对；请求带 payload，响应换成 result（0 成功 1 失败）。〔TB37 p2-3〕
+- 业务层眼里不该有字节流，只有一条条 Frame；Frame 靠头上的 totalLength 相互隔离，Frame 的 payload 才是业务要的 Packet（头是 commandID，Body 是 ID 与数据）。〔TB37 p4-5〕
+- 编解码器接口 StreamFrameCodec 只认 io.Writer/io.Reader，不认 net.Conn：测试时用 bytes.Buffer 冒充连接，不需要真实网络。Encode 用 binary.Write 写大端 int32 长度再写 payload，短写报 ErrShortWrite；Decode 先读 4 字节长度再 io.ReadFull 读正文，短读报 ErrShortRead。〔TB37 p6-8〕
+- 三条实现注意：收发两端统一大端；binary.Read/Write 按参数宽度动字节（int32 就是 4 字节）；不设 deadline 时 io.ReadFull 会一直读满，只有 EOF 或 ErrUnexpectedEOF 才提前返回。不用 io.ReadFull 而单次 Read，短读会让解析错位。〔TB37 p8〕
+- 覆盖率怎么上去：ReturnErrorWriter/ReturnErrorReader 包装器按"第 N 次调用"返回错误，逼 Encode/Decode 走进 binary.Write、io.ReadFull 各错误分支，frame 包覆盖率到 90% 以上。只测正常分支等于没测编解码器。〔TB37 p8-11〕
+- 包级 Decode 取第一个字节当 commandID，switch 分发到各类型的 Decode；Encode 反向用 type switch 定 commandID 再 bytes.Join 拼包。教学示例 Submit.Decode 不校验 body 长度，不足 8 字节直接越界 panic，抄代码时记得补。〔TB37 p12-14〕
+- 服务端 handleConn 的调用结构是 read frame、frame decode、handle packet、packet decode、ack encode、frame encode、write ack，出错就 return 断连接，日志里的 frame decode error: EOF 是客户端正常退出，不是故障。〔TB37 p14-16〕
+- 客户端收应答的 goroutine 用 SetReadDeadline 1 秒加 continue 轮询 quit 通道，才能从阻塞的 Read 里跳出来响应退出通知；这个"超时当轮询"的手法在写守护 goroutine 时很常用。〔TB37 p17-19〕
+
+### TB38：从基准到 bufio 与 sync.Pool
+
+- 优化循环固定四步：建基准、剖析找瓶颈、改代码、和基准比，不达标就带着新指标再来一轮。基准分两种：原生 benchmark 适合局部算法，程序整体用"度量指标加图形化面板"。〔TB38 p2-3〕
+- 观测设施是 Prometheus+Grafana 三容器（prometheus、grafana、node-exporter 采主机指标），scrape_interval 5s；node-exporter 面板不用手搭，import 官方 ID 1860 就有。〔TB38 p3-8〕
+- 速率指标要用 Counter 计数、Grafana 里配 rate() 表达式（如 rate(req_recv_total[15s])）才算出每秒处理量，直接取 Counter 值没有意义；Gauge 才是瞬时快照。埋点位置错了速率就失真：ReqRecvTotal 在解码成功后加，RspSendTotal 在回写响应后加。〔TB38 p10-11〕
+- 4 核 8G 上的第一版基准约 18.5w/s。pprof 用空导入 net/http/pprof 加单独 goroutine 监听 6060 接入；CPU 采样原理是每 10ms 发一次 SIGPROF 中断记下所有 goroutine 的函数栈，出现最多的函数通常就是瓶颈。〔TB38 p14-16〕
+- 火焰图里最大的方框是 Syscall，调用者全是网络 read/write：net.Conn 直接当 io.Reader，哪怕只读 1 字节也是一次系统调用。加 bufio.Reader/Writer 把读写攒进内存缓冲，压到 27w/s，提升 45%。代价是写侧必须 defer Flush，忘了就把响应闷在缓冲里。〔TB38 p17-20〕
+- 第二刀切堆分配：pprof 的 allocs profile 里 top 按 flat 列排（函数自身分配的字节数，cum 是含调用方的累计），packet.Decode 以 38MB 居首，list 进去定位到 `s := Submit{}` 一行。〔TB38 p20-21〕
+- sync.Pool 复用 Submit：Decode 里 `SubmitPool.Get().(*Submit)`，归还点放在 handlePacket 处理完之后；27w/s 再涨到 29.2w/s。用完不归还优化就失效，归还后不清字段就是脏数据。〔TB38 p22-24〕
+- dnsproxi 的正文把这些当结论用了（每查询临时 socket 是瓶颈、hitpath-ab 的省拷贝实验、`cache.ReplyPool`），这八条是它们的出处推理链。省略的只有 TB38 里 Prometheus+Grafana+node-exporter 的 docker-compose 部署步骤和 TB36 的 2020 官方调查背景，属搭环境与背景材料，手册 22 节与 15 节另有覆盖。
+
 ## 想深入去哪查
 
 - 旧长版：`notes/p6-capstone-dnsproxi.md`（G1 到 G6 完整复盘，含 Rust 对照）、`notes/p17-dnsproxi-metrics.md`、`notes/p18-dnsproxi-slog.md`（日志手艺）、`notes/p34-tcp-server-dns-over-tcp.md`（TCP 成帧与截断的全部细节）。
