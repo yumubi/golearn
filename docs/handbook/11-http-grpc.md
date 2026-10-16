@@ -5,8 +5,8 @@ title: 11 HTTP 与 gRPC：两种接口形态与它们共同的骨架
 # 11 HTTP 与 gRPC：两种接口形态与它们共同的骨架
 
 
-> 详细程度：深入 · 约 55 分钟
-> 材料：TB09 W02-1 W03-1 W04-1 W05-1 W05-2 W10-1 W13-2、C:go_basic/http C:go_basic/grpc C:go_basic/protoc、旧长版 `notes/p10-grpc.md` `notes/p8-fast-track.md`
+> 详细程度：深入 · 约 65 分钟
+> 材料：TB09 W02-1 W03-1 W04-1 W04-2 W05-1 W05-2 W10-1 W13-2、C:go_basic/http C:go_basic/grpc C:go_basic/protoc、旧长版 `notes/p10-grpc.md` `notes/p8-fast-track.md`
 > 前置：04 接口与组合，10 分层与依赖注入
 
 ## 先看一个反直觉的现象
