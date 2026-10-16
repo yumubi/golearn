@@ -245,10 +245,10 @@ after: /hello
 client sees X-Note: set-before-write
 ```
 
-`before` 打印在 handler 之前、`after` 在之后，说明中间件确实"包"住了 handler；`X-Note` 在 `WriteHeader` 之前设置所以客户端能读到。这套"处理函数加包装"的骨架，是 gRPC 拦截器在 HTTP 里的对应物，第五部分会看到两边只是签名不同。
+`before` 打印在 handler 之前、`after` 在之后，说明中间件确实"包"住了 handler；`X-Note` 在 `WriteHeader` 之前设置所以客户端能读到。这套"处理函数加包装"的骨架，是 gRPC 拦截器在 HTTP 里的对应物，第六部分会看到两边只是签名不同。
 
 
-## 四、认证：从 Session 到长短 token
+## 三、认证：从 Session 到长短 token
 
 中间件是鉴权的挂载点，但鉴权本身教什么？这一节把登录态的完整生命周期讲完：怎么建立（Session/JWT）、怎么维持（过期与刷新）、怎么登出（无状态的代价）、第三方登录怎么接（OAuth2）。〔W03-1 p2〕
 
@@ -356,20 +356,20 @@ func main() {
 
 JWT 不可变，"退出登录"没法把已签发的 token 变无效:多实例下登出请求落实例 0、后续请求落实例 1，任何单机手段都拦不住。唯一根治是外部记录：Redis 里记一组**不可用**的 ssid（UUID，登录时同时签进长短两个 token），登出时 `SET ssid` 进去，登录校验和 refresh 都查它。记"不可用"而不是"可用"，因为退出比登录低频得多，黑名单几百条，白名单上百万条。〔W05-2 p14-15〕
 
-黑名单只解决"主动登出"，没解决"token 被盗"。方案是长短双 token：access token 短（几十分钟），高频携带易泄露；refresh token 长（7 天）且只在登录和刷新两个低频场景出现，不易泄露。前端拿到 401 就调 refresh 接口换新短 token，登录校验中间件里的自动续期逻辑删掉。**refresh 的价值恰恰在于它低频**；要是放在中间件里每次请求自动换发，那就和续期没区别，白做了。长 token 也泄露的缓解：把 User-Agent 等登录时信息签进去，或每次刷新轮换长 token，都只能缓解。〔W05-2 p3-8〕
+黑名单只解决"主动登出"，没解决"token 被盗"。方案是长短双 token：access token 短（几十分钟），高频携带易泄露；refresh token 长（7 天）且只在登录和刷新两个低频场景出现，不易泄露。前端拿到 401 就调 refresh 接口换新短 token，登录校验中间件里的自动续期逻辑删掉。**refresh 的价值恰恰在于它低频**；要是放在中间件里每次请求自动换发，那就和续期没区别，白做了。长 token 也泄露的缓解：把 User-Agent 等登录时信息签进去，或每次刷新轮换长 token，都只能缓解。〔W05-2 p3-8〕〔W05-2 p10〕
 
 ### OAuth2 扫码：第三方登录是授权的特例
 
-微信扫码登录本质是 OAuth2 授权码流程，三步：跳微信的授权页（后端拼 URL）、用户扫码确认、微信带着 `code` 回调你注册的 `redirect_uri`，后端再拿 `code+appid+secret` 换 `access_token`，最后 open_id 走 FindOrCreateByWechat 建账号。拼 URL 的五个参数：appid、redirect_uri（必须是注册时填的域名）、response_type=code、scope=snsapi_login、state（随机 UUID）。〔W05-1 p4-16〕
+微信扫码登录本质是 OAuth2 授权码流程，三步：跳微信的授权页（后端拼 URL）、用户扫码确认、微信带着 `code` 回调你注册的 `redirect_uri`，后端再拿 `code+appid+secret` 换 `access_token`，最后 open_id 走 FindOrCreateByWechat 建账号。拼 URL 的五个参数：appid、redirect_uri（必须是注册时填的域名）、response_type=code、scope=snsapi_login、state（随机 UUID）。〔W05-1 p4-12〕〔W05-1 p15-16〕〔W05-1 p23〕
 
 两个细节最容易被糊弄过去。其一，**URL 由后端拼**而不是前端：state 要在后端校验，后端拼了改起来才方便。其二，state 防的是 CSRF 登录绑定攻击：攻击者先用自己的微信走一遍授权拿到 code，伪造页面诱导已登录用户点击，把攻击者的微信绑到受害者账号上；有 state（登录时发、回调时验）这条路就走不通。换回来的字段有两组：授权侧 access_token/expires_in/refresh_token，ID 侧 open_id/union_id。同一用户在 A、B 两个产品各有 open_id，union_id 全公司同一个，多产品账号打通靠它。你还能认出来：**微信的 access/refresh 就是长短 token 的原型**，自研双 token 方案就是从这里抄的作业。〔W05-1 p20-22〕
 
 ### 压测登录：先测再优化
 
-登录优化最容易犯"上来就加缓存"。课程用 wrk 压注册/登录/Profile 三接口，定位到瓶颈是 bcrypt 的 CPU 耗时加数据库查询；给 Profile 读路径配了业务专属 UserCache（封装过期时间/key 结构/序列化协议），Repository 层组合 DAO+Cache 并做 Redis 故障降级；而登录本身是低频操作，**结论是不值得缓存**。先压测找到真瓶颈，再决定动哪里。优化顺序比优化手段重要。〔W04-1 p2〕
+登录优化最容易犯"上来就加缓存"。课程用 wrk 压注册/登录/Profile 三接口，定位到瓶颈是 bcrypt 的 CPU 耗时加数据库查询；给 Profile 读路径配了业务专属 UserCache（封装过期时间/key 结构/序列化协议），Repository 层组合 DAO+Cache 并做 Redis 故障降级；而登录本身是低频操作，**结论是不值得缓存**。先压测找到真瓶颈，再决定动哪里。优化顺序比优化手段重要。〔W04-1 p12〕〔W04-1 p14-15〕〔W04-1 p19〕
 
 
-## 五、gin 在标准库之上补了什么
+## 四、gin 在标准库之上补了什么
 
 标准库解决的是"路由器加 handler 模型"，gin 补的是路由注册的便利和参数处理：参数绑定与校验（`Bind` 系列）、路由分组、中间件链、更顺手的响应方法。它的核心类型是 `gin.Context`，一个对象同时承担读请求和写响应，日常打交道最多的就是它。〔W02-1 p6〕〔W02-1 p10〕`gin.Default()` 自带 Logger 和 Recovery 两个中间件，`gin.New()` 是裸引擎。
 
@@ -379,7 +379,7 @@ JWT 不可变，"退出登录"没法把已签发的 token 变无效:多实例下
 
 标准库和 gin 怎么选：服务简单、想少依赖，1.22 以后的 `ServeMux` 够用；团队已经熟悉 gin 或者需要它的绑定校验时选 gin。两边的 handler 都能套进同样的"中间件等于包装函数"思路，没有谁更"正确"。
 
-## 六、gRPC：契约先行
+## 五、gRPC：契约先行
 
 选型上，资料给的口诀是"遇事不决选 gRPC"：利用 HTTP/2 的双向流，支持流控、压缩，跨语言，社区强。〔W10-1 p26〕（该页还写了"基于 QUIC"，这是错的，gRPC 跑在 HTTP/2 上。）"契约先行"指先写 `.proto`（接口描述语言，平台无关），再用编译器生成各语言的客户端和服务端代码；序列化用 Protobuf，二进制格式，课程的说法是序列化速度和压缩效率在同类协议里名列前茅。〔W10-1 p27-29〕
 
@@ -464,7 +464,7 @@ resp:hi
 4. **生成代码的命令已经变了**：课程里的 `--go_out=plugins=grpc` 是旧写法，现行是独立的 `protoc-gen-go-grpc` 插件配 `--go-grpc_out`。〔C:go_basic/grpc/idl/service/student_service.proto:46-47〕
 5. **`go_package` 必须带 `.` 或 `/`**：分号前是输出路径，分号后是包名。〔W10-1 p34〕〔C:go_basic/grpc/idl/model/student.proto:5〕
 
-## 七、HTTP 还是 gRPC
+## 六、HTTP 还是 gRPC
 
 | 维度 | HTTP/JSON | gRPC |
 |---|---|---|
