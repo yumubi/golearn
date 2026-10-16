@@ -182,16 +182,21 @@ if declared:
     bad = [f'{f}: 写 {a}+{b}, 实测 {real[0]}+{real[1]}' for f, a, b in declared if (a, b) != real]
     rec('基线包数声明与实测一致', not bad, '; '.join(bad))
 
-# 10.6 手册单元覆盖对账：work/digest 里每个 W 单元必须被某节「材料」行声明（范围式如「W02-1 到 W21-1」展开比对）
+# 10.6 手册单元覆盖对账:work/text 的 W 单元必须被某节「材料」行声明;work/digest 与 text 必须一一对应
 import glob as _glob
 if os.path.isdir('work/digest') and os.path.isdir('guide/handbook'):
     allw = sorted(os.path.basename(f)[:-4] for f in _glob.glob('work/text/W*.txt'))
+    dig = sorted(os.path.basename(f)[:-3] for f in _glob.glob('work/digest/W*.md'))  # .md 3 字符
+    only_t = [u for u in allw if u not in dig]
+    only_d = [u for u in dig if u not in allw]
+    rec('work/digest 与 work/text 单元一一对应', not only_t and not only_d,
+        f'text-only: {only_t}; digest-only: {only_d}' if only_t or only_d else '')
     mat = {}
     for f in sorted(_glob.glob('guide/handbook/[0-2][0-9]-*.md')):
         head = '\n'.join(open(f, encoding='utf-8').read().splitlines()[:8])
         m = re.search(r'材料[:：](.+)', head)
         units = re.findall(r'(W\d+-\d+[b]?|WX-sms)', head) if m else []
-        # 范围声明「W02-1 到 W21-1 全部周次」：25 节特例，全量声明
+        # 范围声明「W02-1 到 W21-1 全部周次」:25 节特例,全量声明
         if m and re.search(r'W02-1\s*到\s*W21-1', m.group(1)):
             units = allw
         for u in units:

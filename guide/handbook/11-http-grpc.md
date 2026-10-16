@@ -240,7 +240,7 @@ after: /hello
 client sees X-Note: set-before-write
 ```
 
-`before` 打印在 handler 之前、`after` 在之后，说明中间件确实"包"住了 handler；`X-Note` 在 `WriteHeader` 之前设置所以客户端能读到。这套"处理函数加包装"的骨架，是 gRPC 拦截器在 HTTP 里的对应物，第六部分会看到两边只是签名不同。
+`before` 打印在 handler 之前、`after` 在之后，说明中间件确实"包"住了 handler；`X-Note` 在 `WriteHeader` 之前设置所以客户端能读到。这套"处理函数加包装"的骨架，是 gRPC 拦截器在 HTTP 里的对应物，第五部分会看到两边只是签名不同。
 
 
 ## 三、认证：从 Session 到长短 token
