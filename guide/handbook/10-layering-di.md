@@ -1,7 +1,7 @@
 # 10 分层、依赖注入与配置：服务代码怎么长成可替换的零件
 
 > 详细程度：深入 · 约 60 分钟
-> 材料：W04-3 W05-3 W04-6 W02-2 W04-1、C:go_frame/dependency_injection、旧长版 `notes/p5-deepsearch.md`
+> 材料：W04-3 W05-3 W04-6 W02-2 W04-1 W06-2、C:go_frame/dependency_injection、旧长版 `notes/p5-deepsearch.md`
 > 前置：04 接口与组合
 
 ## 先看一个奇怪的问题
@@ -87,6 +87,10 @@ mem: 0 login: memory repo: user 138 not found
 
 - **领域对象和数据库行分开定义**。`domain.User` 是业务概念，`dao.UserRow` 直接映射表行，两者在 repository 里互相转换。表结构变了，只会波及 dao 和 repository 的转换代码，不会一路烧到 service。〔W02-2 p20〕
 - **缓存放在 repository 层**。缓存属于"如何存数据"的范畴，service 对它无感知，构造函数同时收 dao 和 cache 两个依赖。〔W04-1 p16〕
+
+分层的另一个实战价值：**业务规则集中到 domain 和 service**。课程发帖模块的状态管理是标准形状：文章状态常量定义在 domain 层（Unknown=0/Unpublished=1/Published=2/Private=3），注意**零值不做有意义的状态**：Go 的结构体零值是 0，新建对象还没设状态时自动是 Unknown，天然安全。Service 层统一设状态（edit 一律设 Unpublished，发表走独立接口），Web 层完全不关心状态，DAO 的转换函数负责领域状态到存储 uint8 的映射。〔W06-2 p4-5〕
+
+"发表"要同时写制作库与线上库，withdraw（撤回）走 DAO 层事务双表更新，同步位置三选的取舍标准见 14 节 TDD 小节。跨库无事务时的补偿（Saga/TCC/outbox）是 18 节一致性话题。〔W06-2 p2〕
 
 ```go
 package main
