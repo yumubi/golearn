@@ -1,7 +1,7 @@
 # 12 数据库：连接池、事务纪律与 ORM 的取舍
 
 > 详细程度：标准 · 约 50 分钟
-> 材料：W02-2、C:go_basic/database、C:go_frame/orm、旧长版 `notes/p9-database.md` `notes/p11-sqlc-goose.md` `notes/p12-sqlc-pgx.md`
+> 材料：W02-2、W16-1、C:go_basic/database、C:go_frame/orm、旧长版 `notes/p9-database.md` `notes/p11-sqlc-goose.md` `notes/p12-sqlc-pgx.md`
 > 前置：10 分层与依赖注入
 
 ## 先看一个"连上了"的假象
@@ -335,7 +335,22 @@ GetUser(999): true
 
 选哪条路？课程的实际做法是 **GORM 作 dao 层的实现，上面套 repository 抽象**（10 节的三层结构），这样换成 sqlc 或别的存储时，上层不动。〔W02-2 p14-15〕新项目从 SQL 出发的话，sqlc 加 goose 的组合更干净：`migrations/`、`queries/*.sql`、`sqlc.yaml` 三件套，`sqlc generate` 一步生成。
 
-## 五、迁移：表结构是服务器状态，不在代码里
+## 五、树形评论：四种建模，选一种
+
+前面都在讲"一张平表怎么读写"。评论是关系建模的进阶题：它天然是树（可被回复），查询是高并发场景（打开资源必加载），删的是子树。同样的树，四种建模差别巨大：〔W16-1 p7-12〕
+
+| 建模 | 形状 | 查子节点 | 评价 |
+|---|---|---|---|
+| 邻接表 | `pid` 指父主键 | `WHERE pid=?` | 最常见；推荐 |
+| 分段 Path | `path` 列存 `a/b/c` | `LIKE 'a/%'` | 索引下推后尚可，Like 有上限 |
+| Nested Set | `nsleft/nsright` 存 DFS 序 | 区间查询 | 插入要改半张表，难维护 |
+| Closure Table | 另一张 `TreePaths(祖先,后继)` | 直接查 | 数据量爆炸 |
+
+课程按三层查询场景选型：资源首页第一页评论、每条评论的前几条回复、点"更多"加载整棵回复。核心操作是"查某节点的子节点"，邻接表一条 `WHERE pid=?` 解决,其余三种要么查询别扭要么写入昂贵，落选。表上再补一个 **RootID 冗余列**（回复与它所属的根评论同值），"加载更多回复"就从递归遍历退化成 `WHERE root_id=? AND id<? ORDER BY id DESC LIMIT ?`,一次查询出整棵回复列表；分页不用 offset（offset 有并发漂移），用 min_id keyset。索引三件：Uid（查自己的评论）、Biz+BizID 复合（按资源查）、PID（查子节点）。〔W16-1 p15-19〕
+
+删除子树的两条路：手动级联（循环"找父=当前 id 的行再删"，几层就几次；path 建模可 `DELETE WHERE path LIKE` 一条搞定）与 GORM 外键 `OnDelete:CASCADE` 交给数据库。写量大的平台（Kafka 异步削峰在 13 节展开）和热门/非热门分级限流是评论系统的并发配套，属于 16 节稳定性话题，这里记住数据形状就够。〔W16-1 p13-14〕〔W16-1 p18〕
+
+## 六、迁移：表结构是服务器状态，不在代码里
 
 代码能随 `git checkout` 回到任意版本，表结构不行：它是数据库服务器上的状态，改了就是改了。两台机器、两个同事、一条上线流水线，都要把表结构推到同一个形状。办法是把每次变更写成一个带序号的 SQL 文件，数据库里留一张表记录"已经跑到第几个"，goose 就是这么做的。
 
@@ -355,7 +370,8 @@ GetUser(999): true
 4. 事务里只用 `tx`，事务要短，隔离级别显式写。
 5. NULL 三策略：`sql.Null*`（看 `Valid`）、指针（nil 即无）、SQL 里 `COALESCE`；`ErrNoRows` 在 `Scan` 才冒出，`errors.Is` 判断。
 6. GORM 快但接口收 `interface{}`，同参不同型（`Updates` 的 struct/map 之分）；sqlc 以 SQL 为真相源生成类型安全代码。
-7. 表结构是服务器状态，用带序号的迁移文件管理；严格公司走 SQL 评审，小团队用 `AutoMigrate` 起步。
+7. 树形评论用邻接表加 RootID 冗余：查子节点 `WHERE pid=?`，"更多回复"退化为 root_id 上的 keyset 分页；四种建模里它是查询、写入、删除的综合最优。
+8. 表结构是服务器状态，用带序号的迁移文件管理；严格公司走 SQL 评审，小团队用 `AutoMigrate` 起步。
 
 ## 常见坑
 
