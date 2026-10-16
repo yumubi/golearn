@@ -351,9 +351,9 @@ GetUser(999): true
 | Nested Set | `nsleft/nsright` 存 DFS 序 | 区间查询 | 插入要改半张表，难维护 |
 | Closure Table | 另一张 `TreePaths(祖先,后继)` | 直接查 | 数据量爆炸 |
 
-课程按三层查询场景选型：资源首页第一页评论、每条评论的前几条回复、点"更多"加载整棵回复。核心操作是"查某节点的子节点"，邻接表一条 `WHERE pid=?` 解决,其余三种要么查询别扭要么写入昂贵，落选。表上再补一个 **RootID 冗余列**（回复与它所属的根评论同值），"加载更多回复"就从递归遍历退化成 `WHERE root_id=? AND id<? ORDER BY id DESC LIMIT ?`,一次查询出整棵回复列表；分页不用 offset（offset 有并发漂移），用 min_id keyset。索引三件：Uid（查自己的评论）、Biz+BizID 复合（按资源查）、PID（查子节点）。〔W16-1 p15-19〕
+课程按三层查询场景选型：资源首页第一页评论、每条评论的前几条回复、点"更多"加载整棵回复。核心操作是"查某节点的子节点"，邻接表一条 `WHERE pid=?` 解决，其余三种要么查询别扭要么写入昂贵，落选。表上再补一个 **RootID 冗余列**（回复与它所属的根评论同值），"加载更多回复"就从递归遍历退化成 `WHERE root_id=? AND id<? ORDER BY id DESC LIMIT ?`，一次查询出整棵回复列表；分页不用 offset（offset 有并发漂移），用 min_id keyset。索引三件：Uid（查自己的评论）、Biz+BizID 复合（按资源查）、PID（查子节点）。〔W16-1 p15-19〕〔W16-1 p26〕〔W16-1 p30-31〕
 
-删除子树的两条路：手动级联（循环"找父=当前 id 的行再删"，几层就几次；path 建模可 `DELETE WHERE path LIKE` 一条搞定）与 GORM 外键 `OnDelete:CASCADE` 交给数据库。写量大的平台（Kafka 异步削峰在 13 节展开）和热门/非热门分级限流是评论系统的并发配套，属于 16 节稳定性话题，这里记住数据形状就够。〔W16-1 p13-14〕〔W16-1 p18〕
+删除子树的两条路：手动级联（循环"找父=当前 id 的行再删"，几层就几次；path 建模可 `DELETE WHERE path LIKE` 一条搞定）与 GORM 外键 `OnDelete:CASCADE` 交给数据库。写量大的平台（Kafka 异步削峰在 13 节展开）和热门/非热门分级限流是评论系统的并发配套，属于 16 节稳定性话题，这里记住数据形状就够。〔W16-1 p18〕〔W16-1 p19-21〕
 
 ## 六、迁移：表结构是服务器状态，不在代码里
 
@@ -452,4 +452,5 @@ func main() {
 ## 想深入去哪查
 
 - GORM：W02-2（CRUD、软删除、钩子、三层分层、密码加密与 BCrypt）、`C:go_frame/orm`（`PrepareStmt`、读写分离、钩子、索引提示）。标准库：`C:go_basic/database`（`Exec`/`Query`/事务/批量插入/sqlbuilder）。
+- 树形评论：W16-1 全文（四种建模、RootID 冗余、加载更多与 min_id 分页、级联删除与外键）。
 - 旧长版：`notes/p9-database.md`（连接池实测、隔离级别、pgx 原生）、`notes/p11-sqlc-goose.md`（迁移、sqlc 生成）、`notes/p12-sqlc-pgx.md`（PG 类型、批量写入）。

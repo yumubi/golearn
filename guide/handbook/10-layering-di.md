@@ -90,7 +90,7 @@ mem: 0 login: memory repo: user 138 not found
 
 分层的另一个实战价值：**业务规则集中到 domain 和 service**。课程发帖模块的状态管理是标准形状：文章状态常量定义在 domain 层（Unknown=0/Unpublished=1/Published=2/Private=3），注意**零值不做有意义的状态**：Go 的结构体零值是 0，新建对象还没设状态时自动是 Unknown，天然安全。Service 层统一设状态（edit 一律设 Unpublished，发表走独立接口），Web 层完全不关心状态，DAO 的转换函数负责领域状态到存储 uint8 的映射。〔W06-2 p4-5〕
 
-"发表"要同时写制作库与线上库，withdraw（撤回）走 DAO 层事务双表更新，同步位置三选的取舍标准见 14 节 TDD 小节。跨库无事务时的补偿（Saga/TCC/outbox）是 18 节一致性话题。〔W06-2 p2〕
+"发表"要同时写制作库与线上库，withdraw（撤回）走 DAO 层事务双表更新，同步位置三选的取舍标准见 14 节 TDD 小节。跨库无事务时的补偿（Saga/TCC/outbox）是 18 节一致性话题。〔W06-2 p6〕〔W06-2 p8-9〕
 
 ```go
 package main
@@ -520,4 +520,5 @@ func main() {
 - 依赖注入与面向接口：W04-3 全文（wire 用法、缺陷、接口抽取顺序）；`C:go_frame/dependency_injection`（手写装配 vs wire 并排）。
 - 装饰器与 failover：W04-6（限流装饰器、failover V1 V2、健康判定、tpl 安全治理）。
 - 配置：W05-3（viper 初始化、整体绑定、etcd 远程配置、监听变更）。
+- 发帖模块的状态与同步：W06-2（domain 状态常量与零值、publish 双库、withdraw DAO 事务、制作库与线上库）。
 - 旧长版：`notes/p5-deepsearch.md`（deepsearch 的 DI 骨架）。
