@@ -47,13 +47,15 @@ def main():
     muts = json.load(open('scripts/mutations.json', encoding='utf-8'))
     want = set(sys.argv[1:])
     bad = 0
+    ran = 0
     for m in muts:
         if want and m['id'] not in want:
             continue
         res = run_one(m)
         bad += res != 'KILLED'
+        ran += 1
         print(f"{m['id']:28s} {res}")
-    print(f'--- {len(muts)} 条, 未被杀死 {bad}')
+    print(f'--- {ran} 条, 未被杀死 {bad}')
     sys.exit(1 if bad else 0)
 
 
