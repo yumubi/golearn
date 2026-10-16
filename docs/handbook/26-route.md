@@ -25,13 +25,13 @@ title: 26 学习路线：七天速通，然后靠项目补细节
 |---|---|---|---|---|
 | 1 | 01 节、02 节、03 节、04 节 | 建立 Go 的世界观，会读写日常代码 | `exercises/p1_5basics` 的 `TestSliceGrow`（约 20）、`exercises/p30` 的 `TestNilErrorTrap` 与 `TestMethodSetMatrix`（约 25） | 能解释为什么指针类型能赋给接口而值类型不能；能说出 nil 接口陷阱的成因 |
 | 2 | 05 节、06 节、07 节、08 节 | 错误、并发、运行时的范式 | `exercises/p3conc` 的 `TestPool` 与 `TestFirstOrTimeout`（约 25）、`exercises/p14pipe` 的 `TestPipeline`（约 15）、`exercises/p31sched` 的 `TestWorkerPool` 与 `TestNilChannelSelect`（约 25） | 写出一个带 context 取消和 errgroup 的 pipeline，`-race` 干净；能解释 goroutine 泄漏怎么出现 |
-| 3 | 09 节、10 节、11 节、12 节 | 泛型取舍，服务分层、DI、HTTP 与数据库 | `exercises/p33gen` 的 `TestConstraintNotType`（约 15）、`exercises/p5deep` 的 `TestProvideInvoke` 与 `TestGracefulShutdown`（约 25）、`exercises/p9db` 的 `TestTxAtomicity` 与 `TestNullStrategies`（约 25） | 能画出 handler、service、repository 的依赖方向，说出每层依赖的是接口还是实现 |
-| 4 | 13 节、14 节、15 节 | 缓存与消息、测试策略、可观测 | `exercises/p21test` 的 `TestBackoffTable` 与 `TestRetryVirtualTime`（约 25）、`exercises/p15slog` 的 `TestCtxRequestID`（约 15） | 能说清缓存穿透、击穿、雪崩各自的对策；会写表驱动加 fake 的测试 |
+| 3 | 09 节、10 节、11 节、12 节 | 泛型取舍，服务分层、DI、HTTP 与数据库（11 节含认证：Session、JWT、长短 token、OAuth2） | `exercises/p33gen` 的 `TestConstraintNotType`（约 15）、`exercises/p5deep` 的 `TestProvideInvoke` 与 `TestGracefulShutdown`（约 25）、`exercises/p9db` 的 `TestTxAtomicity` 与 `TestNullStrategies`（约 25） | 能画出 handler、service、repository 的依赖方向，说出每层依赖的是接口还是实现；能说出 JWT 为什么登不掉、长短 token 怎么解决 |
+| 4 | 13 节、14 节、15 节 | 缓存与消息、测试策略（14 节含 TDD 全流程与双写同步位置三选）、可观测 | `exercises/p21test` 的 `TestBackoffTable` 与 `TestRetryVirtualTime`（约 25）、`exercises/p15slog` 的 `TestCtxRequestID`（约 15） | 能说清缓存穿透、击穿、雪崩各自的对策；会写表驱动加 fake 的测试；能说出双写要在哪一层同步、什么条件下必须同库不同表 |
 | 5 | 16 节、17 节、18 节 | 稳定性与一致性：这是后端工程里最值钱的一块 | 读 `dnsproxi-go/tcp/server.go` 的 `MaxInFlight` 丢帧限流，对比 `main.go` 里 worker pool 的阻塞式背压，再改造 | 能手写令牌桶与三态熔断的状态转移；能说出 Saga、TCC、outbox 各自的适用场景 |
 | 6 | 19 节、20 节、21 节 | 微服务治理、注册发现、搜索与 Feed 的套路 | 无单独练习，重做各节的内存版小例子 | 能解释"先模块化再进程化"的拆分顺序；能说出推模型和拉模型的取舍 |
 | 7 | 22 节、23 节、24 节、25 节 | 运行环境，读完 dnsproxi-go，按 minifeed 阶段 1 到 4 读懂一版正确答案 | 跑通 `dnsproxi-go` 的全部测试（本来就是绿的），做完 24 节的第一个改造，对照 25 节的表读 `minifeed/` 的阶段 1 到 4 骨架 | 能不看文档画出 dnsproxi 的请求路径，并指出每个范式在哪个文件；能说出 minifeed 阶段 5（关注与 Feed）你会先写哪张表 |
 
-第 1 到 4 天每天 3 到 4 节加约 1 小时练习：第 1 天头部时长约 2.4 小时（30+30+35+50 分钟），第 2 天约 3.2 小时，第 3 天约 3.3 小时，第 4 天约 2.75 小时。
+第 1 到 4 天每天 3 到 4 节加约 1 小时练习：第 1 天头部时长约 2.4 小时（30+30+35+50 分钟），第 2 天约 3.2 小时，第 3 天约 3.4 小时（11 节吸收了认证后变长），第 4 天约 2.75 小时。
 第 5 到 7 天读得慢一点是正常的：第 5 天的三节都是"深入"档（约 3 小时），17 到 19 节的信息密度最大；第 6 天约 2.25 小时；第 7 天 22 到 25 节头部时长约 1.75 小时，是全表最轻的一天，但走读 dnsproxi 与 minifeed 骨架的时间不受头部时长约束，留足半天。01 到 25 节头部时长合计约 18.5 小时（见下面"如果时间更紧"的裁法）。
 
 之后进入项目线，这才是真正的学习：

@@ -175,6 +175,23 @@ if declared:
     real = (test_pkgs('.'), test_pkgs('dnsproxi-go'))
     bad = [f'{f}: 写 {a}+{b}, 实测 {real[0]}+{real[1]}' for f, a, b in declared if (a, b) != real]
     rec('基线包数声明与实测一致', not bad, '; '.join(bad))
+
+# 10.6 手册单元覆盖对账：work/digest 里每个 W 单元必须被某节「材料」行声明（范围式如「W02-1 到 W21-1」展开比对）
+import glob as _glob
+if os.path.isdir('work/digest') and os.path.isdir('guide/handbook'):
+    allw = sorted(os.path.basename(f)[:-4] for f in _glob.glob('work/text/W*.txt'))
+    mat = {}
+    for f in sorted(_glob.glob('guide/handbook/[0-2][0-9]-*.md')):
+        head = '\n'.join(open(f, encoding='utf-8').read().splitlines()[:8])
+        m = re.search(r'材料[:：](.+)', head)
+        units = re.findall(r'(W\d+-\d+[b]?|WX-sms)', head) if m else []
+        # 范围声明「W02-1 到 W21-1 全部周次」：25 节特例，全量声明
+        if m and re.search(r'W02-1\s*到\s*W21-1', m.group(1)):
+            units = allw
+        for u in units:
+            mat.setdefault(u, []).append(os.path.basename(f))
+    miss = [u for u in allw if u not in mat]
+    rec('W 单元全部被手册节声明', not miss, f'未进任何手册节: {", ".join(miss)}' if miss else '')
 bad = []
 for f in changed('.go'):
     for i, line in enumerate(open(f).read().splitlines(), 1):
