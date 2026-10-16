@@ -485,6 +485,41 @@ load once
 - **信号接入**：`main.go` 的 `main` 用 `signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)` 接住信号，`Run` 里那条优雅关停路径因此真正用得上。
 - **后台任务的退出顺序**：`dnsproxi-go/cache/expire.go` 的 `RunExpirer(done, cfg)` 把主动老化 goroutine 收进同一个 `WaitGroup`，它要等 `done` 关闭才退出；`main.go` 把 `close(done)` 封装成 `stopExpirer`，在 `wg.Wait()` **之前**调用。顺序反了就互等死锁：`Run` 等 `wg`，expirer 等 `done`，而 `done` 若挂在 `Run` 返回时才关，谁也等不到谁。这是 `WaitGroup` 与通道互等的典型形态。
 
+## 想深入：正文之外的干货
+
+### TB35 goroutine 池的完整实现
+
+- 池化的成本账要算全：百万 goroutine 光栈就是 2GB（每个 2KB），调度器的处理器消耗还随数量同步上涨。池化就是把 M 个任务调度到 N 个 goroutine 上重用，生产级的实现也就千行左右。〔TB35 p2-3〕
+- 连续栈的隐藏代价：Go 1.4 起栈不够用就分配一块更大的连续内存，把旧栈整体拷过去，换来的是 1.3 分段栈 hot split 问题的消失；代价是 grow 之后即便不再需要也不收缩，大栈一直闲置到 goroutine 退出。06 节对"不收缩"有精确化：只在 GC 扫描且用量不足四分之一时才减半。〔TB35 p2〕
+- 教学版池刻意只用 channel+select，不碰 Mutex、RWMutex、Cond：active 是带缓冲 channel，当 worker 计数器用（就是 06 讲的计数信号量），run 循环里 `p.active <- struct{}{}` 可写就创建 worker，写满就停，某个 worker 退出腾出空位再补。〔TB35 p3-6〕
+- 对外只有三个 API：New 建池并启动管理 goroutine，Free 停掉所有 worker，Schedule 提交 `type Task func()`；run 的管理循环是 for+select 监视 quit 与 active，这是 Go 的惯用法。〔TB35 p5-8〕
+- active 额度的归还有两处，且 worker 没有"正常退出"路径：收到 quit 退出时 `<-p.active` 归还一次，panic 被 defer+recover 捕获后同样归还再退出；除这两者外 worker 永不退出，所以 defer 里不做无条件归还。〔TB35 p7-8〕〔TB35 p19〕
+- 池销毁后再提交：Schedule 的 select 先检视 quit，有信号就返回哨兵错误 ErrWorkerPoolFreed，调用方拿到的是错误而不是 panic。〔TB35 p8-9〕
+- demo1 定义的预期行为：capacity=5 提交 10 个睡 3 秒的任务，5 个 worker 各领一个排队做完；Free 之后要等所有 worker 把手里的任务执行完，进程才退出。〔TB35 p9-11〕
+- 功能选项的出处与默认值：Rob Pike 2014 年的《自引用函数与选项设计》，`type Option func(*Pool)`，WithBlock 与 WithPreAllocWorkers 都是返回闭包的函数；默认 block=true（池满时 Schedule 阻塞）、preAlloc=false（按需建 worker）。〔TB35 p11-12〕
+- 按需创建的机关：preAlloc=false 时 run 阻塞在读 tasks 上，第一个到达的 task 只是触发信号，run 把它 returnTask 扔回 tasks 再去建 worker，active 写满后才进入常规调度。留言区有人以为 Sleep 2 秒能让 run 先把 worker 建好，作者的答复是不会：run 不处理 task。〔TB35 p13〕〔TB35 p20〕
+- 池满的两个分支：Schedule 先非阻塞尝试往 tasks 写，落到 default 再按 block 选项决定阻塞提交还是返回 ErrNoIdleWorkerInPool；demo2（不预建、不阻塞）里大量任务直接报 no idle worker in pool，这是调度不确定性的正常表现。这套实现是演示项目，不能直接用于生产。〔TB35 p14-17〕
+
+### TB09 Web 服务实战的启动与组装
+
+- 启动探测：`ListenAndServe` 会阻塞，必须放进独立 goroutine，再用 errChan 把运行状态传回主 goroutine；启动函数 select errChan 与 `time.After(1s)`，一秒内没等到错误就当启动成功。这是"启动失败要快速反馈"与"不能无限阻塞等待"之间的权衡。〔TB09 p16-17〕
+- 教程里的存储工厂就是第七节"RWMutex 包 map"的实战样本：factory 包用 map[string]store.Store 加 sync.RWMutex 管理实例类型，Register 注册（nil 或重名直接 panic），New 按名取实例。〔TB09 p10-11〕
+- 注册靠 init 自注册：internal/store 在 init 里调 `factory.Register("mem", &MemStore{...})`，main 只需空导入 `_ "bookstore/internal/store"`。坑：忘了这个空导入，注册从未发生，`factory.New("mem")` 到运行时才 panic unknown provider。〔TB09 p12〕〔TB09 p22〕
+- 惯用函数原型：接受接口参数、返回具体类型（`NewBookStoreServer(addr string, s store.Store) *BookStoreServer`），让返回的具体类型组合传入接口的能力。〔TB09 p13-14〕
+- main 包是主要模块初始化与组装的场所：`factory.New("mem")` 建存储实例，`NewBookStoreServer(":8080", s)` 建 HTTP 服务实例并把存储实例注入。〔TB09 p9〕
+- 这一讲的起点是最小 HTTP 服务：`http.HandleFunc` 注册处理函数、`http.ListenAndServe` 启动监听，处理函数原型固定为 `func(w http.ResponseWriter, r *http.Request)`。〔TB09 p3-4〕
+- middleware 是"接受 http.Handler 返回 http.Handler"的通用处理函数（Logging 记请求概要、Validating 校验 Content-Type 为 application/json），嵌套包裹后串到业务 handler 之前，横切逻辑不用在每个 handler 里重复实现。〔TB09 p14-16〕
+
+### C:go_basic/concurrence 与 C:dachang/concurrence 的补充点
+
+- 双协程池对照：Simple 版是共享 tasks chan 加 N 个 worker for-range，close 即停、WaitGroup 收尾。RoutinePool 版给每个 worker 配容量 1 的 tasks chan，Submit 轮转提交，可能轮到空 worker。再用 CAS 状态机防重复 run 和 close。〔C:dachang/concurrence/routine_pool.go:16-154〕
+- 泄漏抓现行：`runtime.NumGoroutine()` 看趋势，挂上 net/http/pprof 后访问 /debug/pprof/goroutine 能看到每个泄漏 goroutine 卡在哪一行；现场是 1ms 超时等 5ms 的 rpc，子 goroutine 卡在无缓冲发送上，每请求泄一个。〔C:dachang/concurrence/main/routine_leaky.go:19-59〕
+- 连接对象可以放心共享：net.Conn、sql.DB、gorm.DB、grpc.ClientConn 都能多 goroutine 共用，不用外面包锁；其中 net.Conn 的标准库承诺是各一个读方和一个写方。〔C:dachang/concurrence/concurrent_connection/client/tcp/main.go:1-65〕
+- 信号量的额度必须归还：QpsLimit 每次处理先取令牌，处理完要在 defer 里还（`<-qps`），取还不对称，额度越漏越少。〔C:go_basic/concurrence/qps_limit.go:10-19〕
+- 三级流水线的实盘形状：单协程 walkDir 遍历文件名入 fileList，15 个读协程逐行进 lineBuffer，5 个处理协程 atomic 求和；上游 close 后下游 for-range 退出，逐级 Wait+close 收敛；另起 Ticker 定时打印两级缓冲的堆积量，用它指导并发度调整。〔C:go_basic/concurrence/deal_file.go:79-124〕
+
+省略未吸收：TB09 的 ServeMux 与 gorilla/mux 已被 Go 1.22 标准库的方法加路径模式取代，归 11 节。TB09 的面向接口 Store 设计归 04 节。TB35 的 go.mod replace 本地引用归 02 节。C 单元的自旋锁与文件并发写维持"想深入去哪查"里声明的边界。Gosched 与 Goexit 归 08 节调度，recover 只捕本协程 05 与 06 节已讲，Cond 与 RWMutex 矩阵归 06 节。
+
 ## 想深入去哪查
 
 - 原材料：TB35（goroutine 池的完整实现：创建、worker 管理、提交调度、功能选项）；TB09（优雅退出的 signal.Notify + Shutdown）；`C:dachang/concurrence`（超时四法、优雅退出、泄漏现场、手写 Once 与分段锁）；`C:go_basic/concurrence`（context、协程池与限流）。

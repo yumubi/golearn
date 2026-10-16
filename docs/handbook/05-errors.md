@@ -408,8 +408,42 @@ custom:  :80 1s 0
 - **包装链**：`dnsproxi-go/main.go` 的 `Run` 里对解析监听、绑定、读包失败都用 `fmt.Errorf("...: %w", err)`，调用者看到的是 `listen :5353: ...` 这样的完整因果。
 - **goroutine 入口 recover 与 defer 清理**：同一个 `Run` 里为每个查询启动的 goroutine（`handleQuery` 的调用处），开头 `defer func() { if r := recover(); r != nil { ... } }()` 并记日志，防止单个查询的 panic 杀死整个代理；`dnsproxi-go/cache/expire.go` 里 `defer t.Stop()` 与 `defer close(stats)` 紧挨着申请处。
 
+## 想深入:正文之外的干货
+
+### TB18 控制结构的完整规则
+
+- 分支与循环的取舍遵循"一件事情仅有一种做法"：分支保留 if 与 switch-case（填平了 C 里每个 case 都要写 break 的坑，case 还能用表达式列表合并同逻辑分支），循环只留 for 一种，C 的 while 与 do-while 都被去掉。顺序、分支、循环三大基本控制结构能构造任意算法，做减法不损失表达能力。〔TB18 p1-2〕
+- if 的三条硬规则：左大括号与 if 同行（gofmt 强制统一）；布尔表达式整体不加括号；表达式求值结果必须是布尔类型，不像 C 那样拿整数当条件。〔TB18 p2-3〕
+- 优先级陷阱记一个案例：`a && b != true` 等价于 `a && (b != true)`，不是 `(a && b) != true`，因为 != 的优先级高于 &&。作者自己承认从 C 时代就记不住优先级，他的办法是给每个子表达式加小括号，消除心智负担。〔TB18 p4-6〕
+- if 自用变量（`if v, ok := m[k]; ok`）的声明与条件用分号分隔，作用域仅限 if 语句的各级隐式代码块（含 else if 与 else），外部不可访问；惯用法换来行数少、隔离性好，但与短变量声明结合是变量遮蔽的重灾区，03 节的作用域规则在这里最容易踩。〔TB18 p7-8〕
+- 三种形式的可读性排序是单分支 > 二分支 > 多分支，日常应减少多分支；真要写多分支，把命中概率高的条件放前面性能最好（表达式按命中概率降序排列）。留言区一条判断值得记住：快乐路径适合错误判断，单纯"选一个值"的场景用 switch-case 更自然。〔TB18 p11〕〔TB18 p14〕
+
+### TB22 错误设计的来路与两个标准库样本
+
+- Go 的错误处理继承自 C：整型返回值作错误状态标识，0 成功、非 0 失败，调用者按值比较选路径。这套机制的好处是错误显式、是普通值，易调试易测试，契合 Go 哲学，所以被沿用。〔TB22 p2〕
+- C 的痛点是单返回值被迫"一值多用"：`fprintf` 的返回值既表字符数又表负数错误码，返回字符串时更难融合，只能靠输出参数或自定义结构体，做法不统一。Go 用多返回值把错误状态与返回信息拆开，惯例把 error 放在返回值列表末尾，`fmt.Fprintf` 的 `(n, err)` 就是 C `fprintf` 的解耦版。〔TB22 p2-3〕
+- error 接口带来三大好处：统一错误类型（跨包跨项目可读、策略统一）、错误是值（可比较可传递，检视体验与 C 一致）、易扩展（自定义类型携带上下文）。error 接口是错误值提供者与检视者之间的契约，具体上下文与接口解耦，体现"正交"理念。〔TB22 p6〕
+- 需要更多上下文时的范本是 `net.OpError`：携带 Op、Net、Source、Addr、Err 五个字段，标准库内部用类型断言检视 `oe.Op == "read"` 来分类网络读错误。正文策略 4 的 `errors.As` 取字段就是这条路的通用化。〔TB22 p5-6〕
+- `errors.As` 匹配成功后存进第二参数的是链中最深处的原始错误值，对取出值再与原始错误判 `==` 会得到 true；这正是"用 errors.As 替代类型断言"的原因：断言只看最外层动态类型。〔TB22 p12-13〕
+- 策略 2 在标准库的原始用例是 `http.Server.Serve` 对 Accept 错误做 `ne.Temporary()` 判断后 sleep 重试；如今 `Temporary()` 已标注 Deprecated，但"按行为特征分支"的思路由 `Timeout()` 延续。〔TB22 p14〕
+
+### TB23 defer 与 panic 的补充细节
+
+- 不是什么都能直接 defer：自定义函数与方法无条件支持（有返回值会在调度执行时自动丢弃）；内置函数里 close、copy、delete、print、println、recover、panic 可以直接 defer，而 append、cap、len、make、new 这些有返回值的直接 defer 会编译错 `defer discards result`，要用匿名函数包一层。〔TB23 p14-16〕
+- `net/http` 连接 goroutine 的 recover 有个细节：`err != ErrAbortHandler` 才打印栈。ErrAbortHandler 是服务器故意用来中止连接的内部哨兵，静默吞掉不算错误；自己写 recover 时可借鉴"有意的 panic 不告警"这个模式。〔TB23 p6-7〕
+- defer 必须在 panic 触发之前注册才会执行：panic 之后才写的 defer 来不及进栈，接不住当前这次 panic。留言区把三条铁律收成一句话：defer 要在 panic 前、recover 只能在 defer 中调、recover 只救本协程。〔TB23 p22-23〕
+
+### TBX09 工程化写法的三个补遗
+
+- pkg/errors 对准的需求有两点，官方 error 当年只满足第一点半：附加信息（可嵌套的描述）与附加堆栈（知道出错的具体代码行）。课程例子里 sub1、sub2 两个包返回同名的 "diff error"，标准库版本在 main 里无法分辨是哪一层抛的；换成 pkg/errors 后 `fmt.Printf("%+v", err)` 直接打印到 sub2.go 第 7 行。〔TBX09 p2-6〕
+- 打印堆栈的机制是借 fmt 的特性：fmt 打印 error 前检查对象是否实现 `Formatter` 接口（单个 `Format(f State, c rune)` 方法），实现了就走它。pkg/errors 的构造函数封装 `fundamental{msg, stack}` 结构实现该接口，verb 为 v 且带 + 标志时打印 msg 加堆栈，v 或 s 只打 msg，q 打转义信息。这就是只有 `%+v` 才带堆栈的原因。〔TBX09 p6-7〕
+- 作者的应用建议是应用层用它换堆栈、库层慎选（避免传染依赖）；正文第三节的收束是 wrapping 普及后回归 `%w` 链，两个结论不冲突：一个是当年的工程惯例，一个是后来的演进。〔TBX09 p2-7〕
+- 同一单元还有两个与错误处理主线无关的技巧：slice 初始化能预估容量就用 `make([]int, 0, 5)` 补全 cap，避开 growslice 的扩容搬迁（机制细节归 03 节切片扩容）；多段参数解析逻辑用裸大括号分块，块内 err 每次直接 `:=` 新建，不用纠结前面定义过没有，块内变量不泄漏到外部，IDE 还能按块折叠，读者按需进入。〔TBX09 p8-10〕〔TBX09 p15-17〕
+
+省略未吸收：TBX09 的 growslice 机制细节与 03 节切片扩容重复（此处只留结论）；TB18 的 switch 改进与复杂条件写法（与错误处理主线无涉）及正文笔误辨析（已失去意义）；TB22 两个依赖网络环境的标准库实例（需 mock 改造）；TB23 与正文重复的留言问答。其余必读条目已全部融入正文或本块。
+
 ## 想深入去哪查
 
 - 原材料：TB18（控制结构与快乐路径）、TB22（四种错误策略，含 `net.OpError`、`json.UnmarshalTypeError` 实例）、TB23（panic、recover、defer 机制与性能）、TBX09（`pkg/errors` 原理、Option 写法）。
 - 旧长版：`notes/p2_5-idiom.md` 的"错误链""提前返回"，`notes/p1_5-basics.md` 的"defer""panic 与 recover"，`notes/p19-ecosystem.md` 的 functional options。
-- 不在这一节：`pkg/errors` 的 `Formatter` 实现细节〔TBX09 p6-7〕、`defer` 的底层结构与开放编码，遇到再查。
+- 不在这一节：`defer` 的底层结构与开放编码，遇到再查。

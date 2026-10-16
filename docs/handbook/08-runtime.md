@@ -303,6 +303,63 @@ BenchmarkPool-10           	  460200	      2439 ns/op	      24 B/op	       1 all
 
 `dnsproxi-go/cache/reply.go` 的 `BufPool` 是 `sync.Pool`，在命中路径里复用 4KB 应答缓冲，回避每次命中分配；`dnsproxi-go/main.go` 的 `handleQuery` 命中分支 `Get`、写回、`Put`，同 goroutine 用完即还。这是第六节"降低分配"的真实落地，开关是配置里的 `HitPathPool`。
 
+## 想深入：正文之外的干货
+
+下面把四个单元的原材料里、正文没讲到的运行时机制压成条目，页码保留，读完不必再翻 PDF。
+
+### TB31 并发方案与 goroutine 的成本模型
+
+- 并行是执行期概念：同一时刻多个任务的代码在多个核上跑，多核是并行的必要条件；并发是把程序拆成可独立执行部分的结构设计，单核上并发设计也不会并行。Go 的惯例是结构设计阶段就优先做并发设计，资源增配时应用不改结构就能吃满新算力。〔TB31 p3-5〕〔TB31 p6-7〕
+- 线程模型的两大不足是运行时调度器的动机：一是复杂，创建容易退出难（detach、join、取消点），共享内存加锁易死锁；二是难规模化，线程资源占用与切换代价不小、不能大量创建，网络服务只能少量线程配 epoll/kqueue 多路复用，钩子回调心智负担大。〔TB31 p5-6〕
+- goroutine 换规模化的完整清单有四条：初始栈仅 2K；上下文切换在用户态完成；语言层面 `go` 关键字创建、退出即回收销毁；语言内置 channel 通信原语。〔TB31 p6〕
+- 生命周期三条：`go` 后面跟具名函数或闭包都行，但拿不到 goroutine id，官方刻意不让你依赖；函数返回即退出，返回值被直接忽略，要结果只能用 channel 传回；main goroutine 退出等于整个应用退出。〔TB31 p7-8〕
+- 传统线程间通信靠 OS 原语，最常用共享内存加锁或原子操作，设计时要规划线程模型、同步机制、内存管理、防死锁，难写难读难维护。Go 借 Tony Hoare 的 CSP 模型：输入输出是基本编程原语，并发程序是用输入输出原语连接起来的 P 的集合。〔TB31 p8-9〕
+- CSP 里的 P 在 Go 中对应 goroutine，channel 就是那对输入输出原语，把 goroutine 组合连接；选型惯例是整体默认 CSP，复杂业务层尤其如此，局部性能敏感区或保护结构体内部状态才用 sync 的锁与原子操作。〔TB31 p9-10〕
+
+### TB32 调度器演进与抢占的实现
+
+- 调度问题的转化：OS 眼里只有线程、根本不知道 goroutine 存在，调度全靠 runtime 完成；goroutine 竞争的"CPU"资源就是操作系统线程，切换不陷入内核。〔TB32 p2〕
+- G-M 模型（Go 1.0）的四大问题就是加 P 的理由：单一全局锁管所有 G 操作、G 在 M 间来回传递推高调度延迟、每个 M 自带内存缓存占用高且局部性差、syscall 频繁阻塞解除阻塞线程。〔TB32 p3〕
+- GOMAXPROCS 限制的是调度器可见的"处理器"（P）数量，不是线程数上限；阻塞场景下 M 自动增减，线程数可以超过它。〔TB32 p3-4〕
+- 文件 I/O 分两种待遇：Go 1.9 的文件 poller 对可 pollable 的文件描述符（管道、socket 等）像 netpoller 一样只阻塞 G；常规文件不支持 pollable，照样阻塞 M、照样涨线程。〔TB32 p5-6〕
+- 字段级的分工：P 的核心资产是 256 格的 runq 队列加 runnext 插队位，还挂着 mcache；M 有 g0 调度栈和 curg，绑定 P 后循环"取 G、切栈执行、goexit 清理"；M 不保留 G 状态，这是 G 能跨 M 调度的基础。〔TB32 p6-8〕
+- sysmon 每 20us 到 10ms 巡检一轮，除正文三件事外还释放闲置超 5 分钟的 span、把积压的 netpoll 结果入队；它以 g0 形式运行、不绑 P，因此不允许写屏障。〔TB32 p8-9〕
+- 协作式抢占的落地路径：G 跑满 forcePreemptNS（10ms）时 retake 置 preempt 标志，并把 stackguard0 改成 stackPreempt，把抢占折叠进每次函数调用都走的栈溢出检查，G 下次调用函数就被摘下；1.2 的埋点函数是 runtime.morestack_noctxt，1.14 起改用信号直接打断、不再依赖埋点。〔TB32 p5〕〔TB32 p9-10〕
+- 系统调用返回后 G 要重新抢 P：抢不到就标记 runnable 排队等待，原来那个挂起的 M 继续睡。〔TB32 p11〕
+- Vyukov 2014 年的 NUMA-aware 调度器草案至今未列入开发计划；G-M 已废弃，学调度认 G-P-M 就够。〔TB32 p6〕
+
+### TB33 channel 的运行时语义
+
+- channel 是复合类型：声明必须带元素类型，未赋值即 nil；赋初值唯一办法是 make，没有字面值语法。发送 `ch <- v`、接收 `v := <-ch`，读写绝大多数放在不同 goroutine。〔TB33 p2-3〕
+- 无缓冲 channel 的运行时实现里真没有缓冲区：收发双方 goroutine 都在场通信才成立，单方面操作即挂起；同一个 goroutine 里既发又收，直接 fatal error: all goroutines are asleep - deadlock!。〔TB33 p3-4〕
+- 带缓冲 channel 是异步队列：未满发送、非空接收都不阻塞；满了发送挂起，空了接收挂起。〔TB33 p4-5〕
+- 单向类型是最便宜的权限文档：`make(chan<- int)` 只发、`make(<-chan int)` 只收，反向操作是编译错误；惯例写在函数签名里限制操作权。〔TB33 p5-6〕
+- close 的完整语义：close 后所有等待接收的操作立即返回，`v, ok := <-ch` 靠 ok 判关闭，for range 随 close 结束；惯例发送端负责关闭，因为接收端无法安全判断是否已关闭，而向已关闭 channel 发送会 panic。〔TB33 p6-7〕
+- select 的底座语义：同时操作多个 channel，case 可收可发，default 在所有 case 都无法通信时执行；没有 default 且全部阻塞时整个 select 阻塞。〔TB33 p7-8〕
+- 信号类惯用法的运行时形态：一对一完成信号用 `chan struct{}`；close 一个无缓冲 channel 就是 1 对 n 广播，所有阻塞的接收者同时醒。〔TB33 p8-11〕
+- 锁与信号量的惯用法：替代锁是让一个后台 goroutine 独占状态、把自增转化为一次 channel 接收；计数信号量用当前元素个数表示活动 goroutine 数、容量表示最大并发数，发送是获取、接收是释放。〔TB33 p11-13〕〔TB33 p16-17〕
+- 性能量级：带缓冲收发显著快于无缓冲（原材料 Go 1.17 实测：1 对 1 无缓冲 199.7/194.5 ns/op，容量 100 的带缓冲 53.06/51.33；10 发 10 收无缓冲 3779/4190，带缓冲 966.4/969.4，数字看量级），goroutine 越多越慢、容量适当能提速；需要优先级、权重、持久化就换专业 MQ，channel 不背这些。〔TB33 p13-16〕
+- `len(ch)` 的边界：无缓冲恒 0，带缓冲是未读元素数；多 goroutine 共同收发时拿 len 判空判满是竞态。select+default 的 trySend/tryRecv 把判定与收发合成一次事务、不阻塞，代价是改变 channel 状态；不改变状态的无阻塞侦测没有通用方法，只有"多发送单接收判 len>0"与"多接收单发送判 len<cap"两个特定场景可用。〔TB33 p18-22〕
+- nil channel 收发皆永久阻塞，select 永不选中它；反过来"从已关闭 channel 接收永不阻塞"会让 select 反复选中关闭分支刷零值，comma-ok 判 !ok 后把该路置 nil，分支即永久失效。〔TB33 p22-25〕
+- default 防阻塞的标准库用例：time/sleep.go 的 sendTime 用 select 加 default 无阻塞发送当前时间，送不出去就放弃。〔TB33 p26〕
+- 超时与心跳的运行时成本：定时器由 Go 运行时维护、不是 OS 定时器，代价低但每次 `time.After` 都新建一个，原材料提醒大量创建时要 Stop 回收（Go 1.23 起未被引用的 timer 可被 GC，见 06 的修正）；心跳用 `time.NewTicker` 的 `.C` 按间隔持续产事件，用完 `defer Stop()`，否则心跳事件持续产生。〔TB33 p26-28〕
+
+### TBX10 分配器与 GC 的实现细节
+
+- GC 成为 CPU 杀手有实证：内存缓存上亿 kv 时，GC 的 CPU 占用可冲到 90% 以上。正文说"性能的主要杠杆是减少分配次数"，案例就是它。〔TBX10 p4-5〕
+- 三个参与者的接力：编译器自动调用 runtime.newobject；allocator 有富余就从本地预分配结构划一块返回指针，没有就 mmap 向 OS 申请；collector 扫描 allocator 维护的数据结构，回收的内存最终经 madvise 归还 OS。〔TBX10 p5-6〕
+- 四级路径对应 CPU 缓存的 L1 到 L4：mcache.tiny、mcache.alloc、mheap.mcentral、mheap.arenas；small 类没有本地 tiny 缓存、其余同 tiny，large 直接走页分配器。页分配器从 freelist 到 treap 再到 radix，判定能否满足分配从 O(N) 进化到 O(1)。〔TBX10 p8-9〕
+- mspan 是分配的记账单位：arena 切成 8KB page，一个或多个 page 组成 mspan，mspan 按 size class 切成等大的 element；mspan 分 scan 与 noscan（内含指针与否）；分配就是把 allocBits 对应位拨成 1。〔TBX10 p9-11〕
+- 选型互补：并发标记清扫解决不了内存碎片，tcmalloc 的 size class 恰好部分缓解，两者相得益彰；但 tcmalloc 也有碎片，源码里搜 max waste 能看到浪费上限。〔TBX10 p11〕
+- 标记的工程细节：扫描从 .bss、.data 和 goroutine 栈这些根出发；mark worker 从本地工作队列 gcw 弹对象、把子对象 push 回去，队列满就向全局队列转移；对象图的交叉引用靠 isMarked 判断剪枝防重复标记，置标记位用 atomic.Or8 保证并发安全。〔TBX10 p15〕〔TBX10 p18-20〕
+- 协助标记内部是一套记账还账系统；经验阈值：GC 的 CPU 超过 25% 会触发大量协助、直接伤延迟。〔TBX10 p20-21〕〔TBX10 p32〕
+- 写屏障只有写没有读：进入标记前的 STW 里把 runtime.writeBarrier.enabled 置 true，之后堆上指针修改前会多调一次 runtime.gcWriteBarrier。别和并发编程的 memory barrier 混淆：一个是插入的代码片段，一个是内存序指令。〔TBX10 p24-26〕
+- 混合屏障的实现与 proposal 有出入：栈颜色判断成本太高，官方选了更简单的"指针断开时老对象和新对象都标灰"；屏障把两个指针推进 P 的 wbBuf，攒满才转全局队列。正文留的"特定条件"就是它。〔TBX10 p26-30〕
+- 回收侧比标记简单：进程常驻两个特殊 goroutine，sweep.g 清扫死对象、合并空闲页，scvg.g 负责向 OS 归还内存（dlv 里可见 GC sweep wait 与 GC scavenge wait）；sweep 用标记期生成的 bitmap 覆盖分配 bitmap，槽位全空的 mspan 直接还页，最后 scvg 一路 madvise 归还 OS。〔TBX10 p30-32〕
+- 优化对号入座：无分代就降低指针数量，协助标记重就压分配量；简单场景 `sync.Pool` 够用，复杂场景考虑 offheap 这类"欺骗 GC"的方案，dgraph 是现成例子。〔TBX10 p32〕
+
+省略说明：TB31#K15 与 TB33#K20 是留言区思考题、无知识增量；TB32#K13 的双死循环思考题已由本节抢占实验实测覆盖；TBX10#K1 的 C 悬垂指针动机已由本节开场覆盖，均未重复收录。
+
 ## 想深入去哪查
 
 - 调度：TB32 全讲（含抢占与 sysmon）；GC 与分配：TBX10 全讲；goroutine 与 channel 的使用：TB31、TB33。

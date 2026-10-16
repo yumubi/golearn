@@ -495,6 +495,48 @@ func main() {
 - **atomic**：`dnsproxi-go/tcp/server.go` 的 `serveConn` 用 `atomic.Int64` 记录单连接在飞查询数，只同步一个整数，不需要锁。
 - **sync.Once**：同文件的 `streamConn.Close` 用 `sync.Once` 保证底层连接只 `Close` 一次，让 `Close` 成为幂等操作。
 
+## 想深入：正文之外的干货
+
+### TB31 并发方案背后的设计账
+
+- Go 选 goroutine 而不是 OS 线程，账要两边一起算：线程模型创建容易退出难，detach/join/取消点样样要管，线程栈还得手工设定；共享内存加锁的通信方式易错易死锁；最难的是规模化，线程资源占用与切换代价都不小，网络服务只能靠少量线程加 epoll/kqueue 多路复用扛住连接，回调写法心智负担大。goroutine 把这三笔账一起消掉。〔TB31 p5-6〕
+- CSP 是 Tony Hoare 的模型：并发程序就是一组 P（顺序处理逻辑），用输入输出原语连接起来。Go 里 P 对应 goroutine，channel 就是那个输入输出原语，channel 将各 goroutine 组合成程序。它既是并发参考模型，也是程序组织方法。〔TB31 p9〕
+- goroutine 之间的共享内存没有自动保护：和线程一样存在数据竞争，访问同一块内存必须自己加 channel 或 sync 原语，这是"默认 CSP、局部低级同步"两个模型并存的根源。〔TB31 p7〕
+
+### TB32 调度器：从 G-M 到 G-P-M 的一路补丁
+
+- G-M 模型（Go 1.0）有四个毛病：一把全局互斥锁管所有 G 的操作；G 在 M 之间传递导致调度延迟；每个 M 一份内存缓存，占用高、局部性差；系统调用频繁阻塞解除阻塞线程的额外损耗。Go 1.1 的 G-P-M 就是冲着这四点来的：P 的本地运行队列加 work stealing 消掉全局锁，沿用至今。〔TB32 p3-4〕
+- M 不保留 G 的状态，所以 G 能在 M 之间自由迁移；P 的核心资产是容量 256 的本地 runq 加一个 runnext。〔TB32 p7-8〕
+- sysmon 是运行时的兜底监控线程：不需要绑定 P，以 g0 形式运行，每 20us 到 10ms 巡检一次，职责包括释放闲置 5 分钟的 span、超过 2 分钟强制 GC、把 netpoll 结果入队、给运行超 10ms 的 G 发抢占信号、收回被系统调用阻塞的 P。〔TB32 p8-9〕
+- 抢占的实现细节：`forcePreemptNS = 10ms`，`retake` 发现超时就置 `gp.preempt = true` 并把 `stackguard0` 改成 `stackPreempt`，把抢占折叠进常规的栈溢出检查，G 下次函数调用时被移出运行态。〔TB32 p9-10〕
+- 混淆点澄清：`GOMAXPROCS` 是 P（逻辑处理器）的数量上限，不是线程数上限，阻塞场景下 M 的数量可以超过它，运行时自动增减。〔TB32 p3-4〕
+
+### TB33 channel 语义的边角与基准事实
+
+- channel 没有字面值语法，唯一赋初值的方法是 `make`，未赋值默认 nil；它是复合类型，声明必须给元素类型。空结构体 `struct{}` 当信号类型，是因为它不占空间。〔TB33 p2-3〕
+- 单向类型是编译期权限控制：`make(chan<- int)` 只发送、`make(<-chan int)` 只接收，反向操作直接编译错误。带缓冲在缓冲区未满时发送不阻塞、非空时接收不阻塞，这就是"异步队列"的实现基础。〔TB33 p4-6〕
+- channel 收发的基准结论（Go 1.17/i5，量级仍有参考价值）：一对一收发无缓冲约 200 ns/op，容量 100 的带缓冲约 50 ns/op，带缓冲明显占优；goroutine 数量越多速度越降，适当加大容量能提性能。但 channel 无优先级、无权重、无持久化，需求超出就要换专业 MQ。〔TB33 p13-16〕
+- "不改变 channel 状态的无阻塞侦测"没有通用方法：select+default 一定会收走或写入一个元素。len 判定零副作用但有竞态，只在"多发送单接收"（接收方 len>0 判有）和"多接收单发送"（发送方 len<cap 判可发）两个特定场景可用。〔TB33 p19-22〕
+- select 的 case 里可以同时有收和发，还能带 comma-ok 判关闭；没有 default 且所有 case 都阻塞时，整个 select 阻塞。〔TB33 p7-8〕
+- 时间相关 channel 的大量使用给运行时与 GC 带来压力：Timer 用完要及时 Stop；高频场景用 Ticker 或复用 Timer，不要反复 `time.After`。〔TB33 p27-28〕
+
+### TB34 共享变量：锁的内部与选型数字
+
+- Mutex 内部只有 state 和 sema 两个字段，零值就是未锁定状态，所以锁可以零值可用、无须初始化；复制一个 Mutex 就是复制这两个整型字段，原变量与副本从此各管各的，同步失效。锁处于锁定状态时复制副本再加锁，加锁的 goroutine 会永久阻塞。〔TB34 p5-6〕
+- Mutex 的两条使用原则：临界区尽量短，减少别人等待的时间；一定记得 Unlock，配合 defer 兜底，忘解锁会导致局部甚至整个程序死锁。〔TB34 p7〕
+- RWMutex 基准里的关键数字：读锁耗时恒定在 40ns 左右，写锁随并发数恶化（32 核时 86ns）；Mutex 在并发小时最快（16ns），并发大了竞争加剧。原子读 0.24 到 0.74ns，约为读锁的 200 倍，且并发增大还有提升空间。〔TB34 p8-10,16-18〕
+- atomic 是 channel 与 sync 原语的实现基础，由硬件指令直接支持：`SwapInt64` 就是对 x86_64 `XCHGQ` 指令的汇编封装；普通 `a++` 是 LOAD/ADD/STORE 三条可中断指令，原子操作是不可中断的指令级"事务"。〔TB34 p14-15〕
+- Cond 的适用面比 Mutex/RWMutex 窄得多：没有 Cond 就得连续轮询条件，goroutine 活着但没进展，白耗资源；Broadcast 唤醒后条件可能已被别人改变，所以必须 `for !cond { Wait() }` 重新判定。channel 加 sync 原语已覆盖绝大多数同步需求。〔TB34 p10-14〕
+
+### TB35 goroutine 池：成本账与最小实现的骨架
+
+- 池化的出发点是一笔内存账：2KB 栈乘一百万就是 2GB，加上调度消耗随 goroutine 数量增长；"每连接一个 goroutine"的惯例在规模化后撑不住，解法是把 M 个任务重用到 N 个 goroutine 上。〔TB35 p2〕
+- 连续栈（Go 1.4 起）把 Go 1.3 分段栈的 hot split 问题换成了另一个代价：栈增长靠分配更大块连续内存并整体拷贝，之后即便不再需要也不收缩，空间长期闲置到 goroutine 退出。〔TB35 p2〕
+- 最小可行池完全用 channel 拼出来，三部分是精髓：`active` 带缓冲 channel 当 worker 计数器（就是 06 讲的计数信号量，可写则创建 worker，写满就停，worker 退出腾出空位再补）；`tasks` 无缓冲传任务，worker 全忙时 `Schedule` 阻塞，背压直接反馈给提交方；`quit` channel 广播退出。〔TB35 p3-4〕
+- worker 的 panic 防护是配套动作：`defer recover` 捕获任务 panic 后，要 `<-p.active` 释放计数、`wg.Done`，然后退出重建；只 recover 不放行，池会慢慢漏空。〔TB35 p7-8〕
+
+省略未吸收：TB31 K1 单核时代调度单元的历史铺垫；TB32 K13 思考题与 NUMA-aware 调度器未立项的草案；TB33 K12 基准的精确数值表（数字随硬件浮动，量级结论已留）；TB34 E6 的汇编摘录；TB35 的池 API 细节（K6 结构体字段、K7 容量校验、K10 哨兵错误 ErrWorkerPoolFreed、K12 功能选项、K13-K15 选项版改造与 demo）由 07 节 worker pool 一节承接，这里只留成本账与骨架，K11 的 demo 输出与 go.mod replace 细节一并省去。
+
 ## 想深入去哪查
 
 - 原材料：TB31（CSP 与 goroutine 基础）、TB32（调度器演进与抢占，基于较老的 Go 版本，以结构为准）、TB33（channel 与 select 全部惯用法及基准）、TB34（sync 与 atomic 的选型基准）、TB35（goroutine 池，下一节会用到）。
