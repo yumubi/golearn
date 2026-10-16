@@ -107,6 +107,12 @@ r = sh([sys.executable, '-I', 'scripts/audit-claims.py'])
 tail = '\n'.join(l for l in r.stdout.splitlines() if 'MISSING' in l and 'MISSING 0' not in l or l.startswith('  MISSING'))
 rec('notes 引用对账（路径/测试名/反向遗漏）无 MISSING', r.returncode == 0, tail)
 
+
+# 7.6 手册页码标签:单元存在、页码在提取范围、疑似目录页(该页正文 <4 行)告警
+import os as _os
+if _os.path.isdir('work/text'):
+    r = sh([sys.executable, '-I', 'scripts/check-cite-pages.py'])
+    rec('手册出处标签页码有效', r.returncode == 0, (r.stdout + r.stderr).strip().splitlines()[-8:] if r.returncode else '')
 # 7.5 手册讲课体：01 到 23 全部跑示例（24/25 按 QUEUE 参数；26 是路线页无 Go 示例）
 LECT = {
     '22': ['--min-examples', '2'],   # 速通节，容器命令为主，正文只留 2 个可跑 Go 块
