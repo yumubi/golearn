@@ -1,7 +1,7 @@
 # 11 HTTP 与 gRPC：两种接口形态与它们共同的骨架
 
-> 详细程度：标准 · 约 45 分钟
-> 材料：TB09 W02-1 W10-1 W13-2、C:go_basic/http C:go_basic/grpc C:go_basic/protoc、旧长版 `notes/p10-grpc.md` `notes/p8-fast-track.md`
+> 详细程度：深入 · 约 55 分钟
+> 材料：TB09 W02-1 W03-1 W04-1 W05-1 W05-2 W10-1 W13-2、C:go_basic/http C:go_basic/grpc C:go_basic/protoc、旧长版 `notes/p10-grpc.md` `notes/p8-fast-track.md`
 > 前置：04 接口与组合，10 分层与依赖注入
 
 ## 先看一个反直觉的现象
@@ -240,9 +240,131 @@ after: /hello
 client sees X-Note: set-before-write
 ```
 
-`before` 打印在 handler 之前、`after` 在之后，说明中间件确实"包"住了 handler；`X-Note` 在 `WriteHeader` 之前设置所以客户端能读到。这套"处理函数加包装"的骨架，是 gRPC 拦截器在 HTTP 里的对应物，第四部分会看到两边只是签名不同。
+`before` 打印在 handler 之前、`after` 在之后，说明中间件确实"包"住了 handler；`X-Note` 在 `WriteHeader` 之前设置所以客户端能读到。这套"处理函数加包装"的骨架，是 gRPC 拦截器在 HTTP 里的对应物，第五部分会看到两边只是签名不同。
 
-## 三、gin 在标准库之上补了什么
+
+## 四、认证：从 Session 到长短 token
+
+中间件是鉴权的挂载点，但鉴权本身教什么？这一节把登录态的完整生命周期讲完：怎么建立（Session/JWT）、怎么维持（过期与刷新）、怎么登出（无状态的代价）、第三方登录怎么接（OAuth2）。〔W03-1 p2〕
+
+### Session：状态存在服务端
+
+登录成功后服务端建一张会话，会话 ID 放进 Cookie，会话数据（user_id 之类）存在服务端存储里。gin-contrib/sessions 的存储实现有 cookie、memstore、redis、gorm 等一排，选型一句话：**单机随便，多实例必须选 redis**，否则实例 0 签发的会话实例 1 认不得。sess_id 永远放 Cookie，Session 数据才是 store 里存的东西，别搞混。〔W03-1 p6-8〕
+
+过期策略有四种：每次访问都刷（性能差）、快过期才刷、固定间隔刷、长短 token。前三种都能用「登录校验中间件顺手刷新」实现，第四种在下面讲。固定过期时间的问题很具体：设 10 分钟，9:59 还能用、10:01 就被踢,这对持续活跃的用户反而体验差。〔W03-1 p16-18〕
+
+### JWT：把状态签进 token
+
+JWT 是三段式：header.payload.signature，前两段是 base64 的 JSON，第三段是对前两段的 HMAC 签名。它的哲学和 Session 正相反：**状态不在服务端，由签名保证不可篡改**。用标准库就能把签发与校验的全过程走一遍：
+
+```go
+package main
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+)
+
+func sign(parts []string, key []byte) string {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(strings.Join(parts, ".")))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func issue(userID int64, ttl time.Duration, key []byte) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	payload, _ := json.Marshal(map[string]any{
+		"uid": userID,
+		"exp": time.Now().Add(ttl).Unix(),
+	})
+	p := base64.RawURLEncoding.EncodeToString(payload)
+	return header + "." + p + "." + sign([]string{header, p}, key)
+}
+
+// validate 返回 uid。任何一段被改过，HMAC 都对不上。
+func validate(token string, key []byte) (int64, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return 0, fmt.Errorf("格式不对")
+	}
+	want := sign(parts[:2], key)
+	if !hmac.Equal([]byte(want), []byte(parts[2])) {
+		return 0, fmt.Errorf("签名不符")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return 0, err
+	}
+	var claims struct {
+		UID int64 `json:"uid"`
+		EXP int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(raw, &claims); err != nil {
+		return 0, err
+	}
+	if time.Now().Unix() > claims.EXP {
+		return 0, fmt.Errorf("已过期")
+	}
+	return claims.UID, nil
+}
+
+func main() {
+	key := []byte("test-key-32-bytes-long-xxxxxxxx")
+	token := issue(42, time.Minute, key)
+	fmt.Println("段数:", len(strings.Split(token, ".")))
+
+	uid, err := validate(token, key)
+	fmt.Printf("正常校验: uid=%d err=%v\n", uid, err)
+
+	parts := strings.Split(token, ".")
+	ev, _ := base64.RawURLEncoding.DecodeString(parts[1])
+	forged := strings.Replace(string(ev), `"uid":42`, `"uid":100`, 1)
+	parts[1] = base64.RawURLEncoding.EncodeToString([]byte(forged))
+	_, err = validate(strings.Join(parts, "."), key)
+	fmt.Println("篡改后:", err)
+
+	_, err = validate(token, []byte("another-key-32-bytes-long-xxxxx"))
+	fmt.Println("换密钥:", err)
+
+	expired := issue(42, -time.Second, key)
+	_, err = validate(expired, key)
+	fmt.Println("过期:", err)
+}
+```
+
+```text
+段数: 3
+正常校验: uid=42 err=<nil>
+篡改后: 签名不符
+换密钥: 签名不符
+过期: 已过期
+```
+
+四行输出就是 JWT 的全部性质：payload 只是 base64 不是加密（谁都能解开看），但改一个字节签名就废；换密钥等于全量登出；过期是 payload 里的一个时间戳比较。课程接 gin 时用 `golang-jwt/jwt/v5` 的原始 API 而不是插件，因为插件把签发校验包起来反而看不清机制；token 走 `x-jwt-token` 响应头下发、`Authorization: Bearer` 上送，CORS 要相应放行 `AllowHeaders: Authorization` 和 `ExposeHeaders: X-Jwt-Token`，否则浏览器读不到。〔W03-1 p24-30〕
+
+### 登出：无状态的代价
+
+JWT 不可变，"退出登录"没法把已签发的 token 变无效:多实例下登出请求落实例 0、后续请求落实例 1，任何单机手段都拦不住。唯一根治是外部记录：Redis 里记一组**不可用**的 ssid（UUID，登录时同时签进长短两个 token），登出时 `SET ssid` 进去，登录校验和 refresh 都查它。记"不可用"而不是"可用"，因为退出比登录低频得多，黑名单几百条，白名单上百万条。〔W05-2 p14-15〕
+
+黑名单只解决"主动登出"，没解决"token 被盗"。方案是长短双 token：access token 短（几十分钟），高频携带易泄露；refresh token 长（7 天）且只在登录和刷新两个低频场景出现，不易泄露。前端拿到 401 就调 refresh 接口换新短 token，登录校验中间件里的自动续期逻辑删掉。**refresh 的价值恰恰在于它低频**；要是放在中间件里每次请求自动换发，那就和续期没区别，白做了。长 token 也泄露的缓解：把 User-Agent 等登录时信息签进去，或每次刷新轮换长 token，都只能缓解。〔W05-2 p3-8〕
+
+### OAuth2 扫码：第三方登录是授权的特例
+
+微信扫码登录本质是 OAuth2 授权码流程，三步：跳微信的授权页（后端拼 URL）、用户扫码确认、微信带着 `code` 回调你注册的 `redirect_uri`，后端再拿 `code+appid+secret` 换 `access_token`，最后 open_id 走 FindOrCreateByWechat 建账号。拼 URL 的五个参数：appid、redirect_uri（必须是注册时填的域名）、response_type=code、scope=snsapi_login、state（随机 UUID）。〔W05-1 p4-16〕
+
+两个细节最容易被糊弄过去。其一，**URL 由后端拼**而不是前端：state 要在后端校验，后端拼了改起来才方便。其二，state 防的是 CSRF 登录绑定攻击：攻击者先用自己的微信走一遍授权拿到 code，伪造页面诱导已登录用户点击，把攻击者的微信绑到受害者账号上；有 state（登录时发、回调时验）这条路就走不通。换回来的字段有两组：授权侧 access_token/expires_in/refresh_token，ID 侧 open_id/union_id。同一用户在 A、B 两个产品各有 open_id，union_id 全公司同一个，多产品账号打通靠它。你还能认出来：**微信的 access/refresh 就是长短 token 的原型**，自研双 token 方案就是从这里抄的作业。〔W05-1 p20-22〕
+
+### 压测登录：先测再优化
+
+登录优化最容易犯"上来就加缓存"。课程用 wrk 压注册/登录/Profile 三接口，定位到瓶颈是 bcrypt 的 CPU 耗时加数据库查询；给 Profile 读路径配了业务专属 UserCache（封装过期时间/key 结构/序列化协议），Repository 层组合 DAO+Cache 并做 Redis 故障降级；而登录本身是低频操作，**结论是不值得缓存**。先压测找到真瓶颈，再决定动哪里。优化顺序比优化手段重要。〔W04-1 p2〕
+
+
+## 五、gin 在标准库之上补了什么
 
 标准库解决的是"路由器加 handler 模型"，gin 补的是路由注册的便利和参数处理：参数绑定与校验（`Bind` 系列）、路由分组、中间件链、更顺手的响应方法。它的核心类型是 `gin.Context`，一个对象同时承担读请求和写响应，日常打交道最多的就是它。〔W02-1 p6〕〔W02-1 p10〕`gin.Default()` 自带 Logger 和 Recovery 两个中间件，`gin.New()` 是裸引擎。
 
@@ -252,7 +374,7 @@ client sees X-Note: set-before-write
 
 标准库和 gin 怎么选：服务简单、想少依赖，1.22 以后的 `ServeMux` 够用；团队已经熟悉 gin 或者需要它的绑定校验时选 gin。两边的 handler 都能套进同样的"中间件等于包装函数"思路，没有谁更"正确"。
 
-## 四、gRPC：契约先行
+## 六、gRPC：契约先行
 
 选型上，资料给的口诀是"遇事不决选 gRPC"：利用 HTTP/2 的双向流，支持流控、压缩，跨语言，社区强。〔W10-1 p26〕（该页还写了"基于 QUIC"，这是错的，gRPC 跑在 HTTP/2 上。）"契约先行"指先写 `.proto`（接口描述语言，平台无关），再用编译器生成各语言的客户端和服务端代码；序列化用 Protobuf，二进制格式，课程的说法是序列化速度和压缩效率在同类协议里名列前茅。〔W10-1 p27-29〕
 
@@ -337,7 +459,7 @@ resp:hi
 4. **生成代码的命令已经变了**：课程里的 `--go_out=plugins=grpc` 是旧写法，现行是独立的 `protoc-gen-go-grpc` 插件配 `--go-grpc_out`。〔C:go_basic/grpc/idl/service/student_service.proto:46-47〕
 5. **`go_package` 必须带 `.` 或 `/`**：分号前是输出路径，分号后是包名。〔W10-1 p34〕〔C:go_basic/grpc/idl/model/student.proto:5〕
 
-## 五、HTTP 还是 gRPC
+## 七、HTTP 还是 gRPC
 
 | 维度 | HTTP/JSON | gRPC |
 |---|---|---|
@@ -370,6 +492,7 @@ HTTP 侧的坑（超时只设一个、忘关 `resp.Body`、把 `http.ErrServerCl
 2. `TimeoutHandler` 超时后，处理函数里怎么知道要停？
 3. 客户端流和双向流的客户端各自要调哪个方法结束？
 4. 为什么 `grpc.NewClient` 创建成功不代表服务可达？
+5. 为什么"登录校验中间件里自动换发新短 token"等于没做长短 token？
 
 **答案**
 
@@ -377,6 +500,7 @@ HTTP 侧的坑（超时只设一个、忘关 `resp.Body`、把 `http.ErrServerCl
 2. `TimeoutHandler` 超时后取消请求的 `r.Context()`，处理函数里 select `r.Context().Done()` 会收到 `context deadline exceeded`，据此停下不再白干。
 3. 客户端流的客户端用 `CloseAndRecv()` 发完并一次性收服务端的汇总响应；双向流的客户端用 `CloseSend()` 声明不再发，然后继续 `Recv` 收剩余消息。服务端两个都不需要主动关闭。
 4. `grpc.NewClient` 是惰性连接，创建时不拨号，第一次 RPC 才真正建立连接；所以创建成功只代表参数合法，服务端是否可达要到第一次调用才见分晓。
+5. 因为 refresh 的安全价值就在低频：它只该在登录和 401 刷新两个场景出现。放进中间件每次请求都换发，攻击者盗到一个短 token 照样能一直续命，和自动续期没有区别，refresh token 反而多暴露了一次。
 
 练习包：`exercises/p10grpc` 的 `TestUnary`、`TestServerStreamWatch`、`TestClientStreamBulkSet`、`TestBidiChat`（四种流，用内存里的 bufconn 跑真协议栈）、`TestConcurrentUnary`。〔实测〕`go test -race -count=1 ./exercises/p10grpc/...` 通过。
 
@@ -390,4 +514,5 @@ HTTP 侧的坑（超时只设一个、忘关 `resp.Body`、把 `http.ErrServerCl
 - 标准库服务与中间件：TB09，`C:go_basic/http`（响应顺序、流式响应、Cookie、三种路由）。
 - gin：W02-1（路由、参数绑定、校验、CORS、middleware）。
 - gRPC 与 protobuf：W10-1（选型、IDL、Protobuf 语法）、`C:go_basic/grpc`（四种流、拦截器链、TLS、序列化性能）、`C:go_basic/protoc`（`go_package`、多 `proto_path`）、W13-2（负载均衡与重试）。
+- 认证：W03-1（Session 存储与刷新、JWT 结构与 CORS 配合）、W05-2（长短 token 与 ssid 登出）、W05-1（OAuth2 扫码与 state）、W04-1（wrk 压测登录与 UserCache 降级）。
 - 旧长版：`notes/p10-grpc.md`、`notes/p8-fast-track.md`。
