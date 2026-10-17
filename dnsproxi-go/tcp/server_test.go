@@ -363,13 +363,13 @@ func TestClientHalfResponse(t *testing.T) {
 // TestZeroLenFrame 0 长度帧过线：解码成功、handler 收到 0 字节 query。
 // 语义上等价 UDP 的 short 包（handleQuery 12 字节头校验会丢弃），成帧层不拦。
 func TestZeroLenFrame(t *testing.T) {
-	var mu sync.Mutex
-	zeroSeen := false
+	zeroSeen := make(chan struct{}, 1)
 	h := &fakeHandler{respOf: func(q []byte) []byte {
-		mu.Lock()
-		defer mu.Unlock()
 		if len(q) == 0 {
-			zeroSeen = true
+			select {
+			case zeroSeen <- struct{}{}:
+			default:
+			}
 			return nil // 0 字节查询不回包（等价 UDP short 分支静默丢）
 		}
 		return q
@@ -385,9 +385,9 @@ func TestZeroLenFrame(t *testing.T) {
 	if _, err := c.RoundTrip(qmsg(6, "still-alive")); err != nil {
 		t.Fatalf("conn unusable after zero frame: %v", err)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if !zeroSeen {
+	select {
+	case <-zeroSeen:
+	case <-time.After(2 * time.Second):
 		t.Fatal("zero-length frame never reached handler")
 	}
 }
