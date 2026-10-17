@@ -8,25 +8,25 @@
 | # | 场景 | 节 | 状态 | runId | 提交 |
 |---|---|---|---|---|---|
 | 1 | SC-pay 支付打赏与回调 | 18 | 已落盘(双审 16/16,修订 1 轮) | handbook-batch-mvbtdj1z-1jtewp | 26781e4 |
-| 2 | SC-ledger 记账与转账 | 18/17 | 已完整(随 SC-pay 批次核 K15/K18) | | |
-| 3 | SC-migrate 迁移与调度 | 17 | 已完整 | | |
-| 4 | SC-smscode 验证码与短信 | 11/16 | 已完整 | | |
-| 5 | SC-auth 认证 | 11 | 已完整 | | |
-| 6 | SC-post 发帖与双库 | 10/14 | 已完整 | | |
-| 7 | SC-comment 评论与计数 | 12/13 | 已完整 | | |
-| 8 | SC-cache 缓存 | 13 | 已完整 | | |
-| 9 | SC-mq 消息队列 | 13 | 已完整 | | |
-| 10 | SC-rank 榜单与定时 | 13/20 | 已完整 | | |
-| 11 | SC-tolerance 第三方容错 | 16/10 | 已完整 | | |
+| 2 | SC-ledger 记账与转账 | 18/17 | 已落盘(oxz0hb needs_rework 三轮后手动补齐 K15 语义/K16 拆表/K19 幂等遗留,ledger2 双审增量合并;ab70c19) | handbook-batch-mvbv0ptk-oxz0hb, handbook-batch-mvc1p0zt-n28ogw | 5c5726e, ab70c19 |
+| 3 | SC-migrate 迁移与调度 | 17 | 预审认为完整,待独立复核 | | |
+| 4 | SC-smscode 验证码与短信 | 11/16 | 预审认为完整,待独立复核 | | |
+| 5 | SC-auth 认证 | 11 | 预审认为完整,待独立复核 | | |
+| 6 | SC-post 发帖与双库 | 10/14 | 已完整(ao0bef 双审 reviewed,after 与当前文件一致,无新增量;14 节 8 条已落盘 4f0dc6b) | handbook-batch-mvbv6wa4-ao0bef | 4f0dc6b |
+| 7 | SC-comment 评论与计数 | 12/13 | 预审认为完整,待独立复核 | | |
+| 8 | SC-cache 缓存 | 13 | 预审认为完整,待独立复核 | | |
+| 9 | SC-mq 消息队列 | 13 | 预审认为完整,待独立复核 | | |
+| 10 | SC-rank 榜单与定时 | 13/20 | 预审认为完整,待独立复核 | | |
+| 11 | SC-tolerance 第三方容错 | 16/10 | 预审认为完整,待独立复核 | | |
 | 12 | SC-follow 关注与 Feed | 21/25 | 已落盘(双审 6/6,修订 1 轮) | handbook-batch-mvbtk2wc-qrnxm3 | bf6bc40 |
-| 13 | SC-search 搜索与标签 | 21 | 已完整 | | |
-| 14 | SC-im IM | 21 | 已完整 | | |
-| 15 | SC-msvc 微服务拆分 | 19 | 已完整 | | |
-| 16 | SC-disc-lb 发现与负载均衡 | 20 | 已完整 | | |
-| 17 | SC-obs 可观测性 | 15 | 已完整 | | |
-| 18 | SC-deploy 部署 K8s | 23 | 已完整 | | |
-| 19 | SC-dns DNS 项目 | 24 | 已完整 | | |
-| 20 | SC-lang 语言基础 | 01-09 | 已完整(SC-generics 落盘后未归并单元清零) | handbook-batch-mvbtkrau-i1rssy | adb431a |
+| 13 | SC-search 搜索与标签 | 21 | 预审认为完整,待独立复核 | | |
+| 14 | SC-im IM | 21 | 预审认为完整,待独立复核 | | |
+| 15 | SC-msvc 微服务拆分 | 19/25 | 预审认为完整,待独立复核 | | |
+| 16 | SC-disc-lb 发现与负载均衡 | 20 | 预审认为完整,待独立复核 | | |
+| 17 | SC-obs 可观测性 | 15 | 预审认为完整,待独立复核 | | |
+| 18 | SC-deploy 部署 K8s | 22/23 | 预审认为完整,待独立复核 | | |
+| 19 | SC-dns DNS 项目 | 24 | 预审认为完整,待独立复核 | | |
+| 20 | SC-lang 语言基础 | 01-09 | 预审认为完整,待独立复核(仅 09 节经批次 adb431a) | handbook-batch-mvbtkrau-i1rssy | adb431a |
 | 21 | SC-rpc 手写迷你 RPC | 11 | 已落盘(双审 12/12,零 issue) | handbook-batch-mvbtb2jz-1jtewp | 1900419 |
 | 22 | SC-generics-ds 泛型数据结构 | 09 | 已落盘(双审 12/12) | handbook-batch-mvbtkrau-i1rssy | adb431a |
 | 23 | SC-generics-alias 泛型别名 Go1.24 | 09 | 已落盘(同批次) | handbook-batch-mvbtkrau-i1rssy | adb431a |
