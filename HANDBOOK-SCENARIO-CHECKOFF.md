@@ -12,7 +12,7 @@
 | 3 | SC-migrate 迁移与调度 | 17 | 预审认为完整,待独立复核 | | |
 | 4 | SC-smscode 验证码与短信 | 11/16 | 预审认为完整,待独立复核 | | |
 | 5 | SC-auth 认证 | 11 | 预审认为完整,待独立复核 | | |
-| 6 | SC-post 发帖与双库 | 10/14 | 已完整(ao0bef 双审 reviewed,after 与当前文件一致,无新增量;14 节 8 条已落盘 4f0dc6b) | handbook-batch-mvbv6wa4-ao0bef | 4f0dc6b |
+| 6 | SC-post 发帖与双库 | 10/14 | 已完整(ao0bef 双审 reviewed 无新增量;14 节 W04-3 批次 mvbzq049 八条 K9-K16 双审通过,内容已在库) | handbook-batch-mvbv6wa4-ao0bef, handbook-batch-mvbzq049-3dqt17 | 4f0dc6b |
 | 7 | SC-comment 评论与计数 | 12/13 | 已落盘(mvbv6t5c 12 节课件实战七章八条双审通过,em-dash 改写后落盘;bfaa710) | handbook-batch-mvbv6t5c-ljbnv7 | bfaa710 |
 | 9 | SC-mq 消息队列 | 13 | 预审认为完整,待独立复核 | | |
 | 10 | SC-rank 榜单与定时 | 13/20 | 预审认为完整,待独立复核 | | |
