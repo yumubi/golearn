@@ -239,6 +239,9 @@ DNS_LISTEN=:15353 DNS_UPSTREAM=127.0.0.1:15300 DNS_CACHE=1 \
 
 ### TB36：socket 编程模型与读写语义
 
+- 解决实际问题的固定循环是三步：理解问题，从问题里识别技术点；技术预研与储备，摸清背景、原理、能解决与不能解决什么、优点与不足；设计与实现收尾。问题越难、认知越弱，循环的轮数越多才收敛，这是实战篇三讲的总方法，本节就是照它走完的一轮。〔TB36 p2-3〕
+- 选域的依据：Go 官方 2020 用户调查里 Web 编程第一、网络编程第四，作者据此从网络编程里选了实战题。网络编程通常只关注 TCP/IP 模型最上两层，传输层的 TCP/UDP 与应用层；socket 是传输层暴露给用户的编程接口，直接基于 socket 定义应用层协议是最常见的网络编程形式。〔TB36 p3-5〕
+- 定界模式与流无边界正文已讲（见"一、请求路径"），这里补 K3 的另一半通信模型：教学协议是典型的请求/响应，连接由客户端发起，之后一请求一响应交替进行，直到客户端主动断开；dnsproxi 的 TCP 口上就是一条连接里这样的一串请求响应对。〔TB36 p6-7〕
 - 阻塞 I/O 下一个线程只能陪一个连接干等；非阻塞未就绪立即返回 EAGAIN，调用方通常轮询，单独用在生产上浪费 CPU；多路复用让一个线程挂起在一堆 socket 上，由内核通知哪个可读可写，是主流服务器的选择。〔TB36 p8-11〕
 - Go 的"阻塞"是表象：底层 socket 实际是非阻塞的，运行时拦截 EAGAIN，把 goroutine 挂到 netpoller（Linux 用 epoll、macOS 用 kqueue、Windows 用 iocp），可读可写时再唤醒。阻塞的只是 goroutine，不占线程。〔TB36 p11-12〕
 - 服务端固定套路是 Listen+Accept 循环加 `go handleConn(c)`；端口被占用时 Listen 直接报 bind: address already in use。客户端 Dial 会阻塞到连接成功或失败，严格时限用 DialTimeout。〔TB36 p12-15〕
@@ -265,11 +268,13 @@ DNS_LISTEN=:15353 DNS_UPSTREAM=127.0.0.1:15300 DNS_CACHE=1 \
 - 优化循环固定四步：建基准、剖析找瓶颈、改代码、和基准比，不达标就带着新指标再来一轮。基准分两种：原生 benchmark 适合局部算法，程序整体用"度量指标加图形化面板"。〔TB38 p2-3〕
 - 观测设施是 Prometheus+Grafana 三容器（prometheus、grafana、node-exporter 采主机指标），scrape_interval 5s；node-exporter 面板不用手搭，import 官方 ID 1860 就有。〔TB38 p3-8〕
 - 速率指标要用 Counter 计数、Grafana 里配 rate() 表达式（如 rate(req_recv_total[15s])）才算出每秒处理量，直接取 Counter 值没有意义；Gauge 才是瞬时快照。埋点位置错了速率就失真：ReqRecvTotal 在解码成功后加，RspSendTotal 在回写响应后加。〔TB38 p10-11〕
+- 面板怎么建：node-exporter 那种现成看板直接 import，自家的指标要在 tcp-server-demo 仪表板里手动建三个 panel（req_recv_rate、rsp_send_rate、client_connected）；client_connected 直接取度量值，两个速率 panel 必须配 rate 表达式，如 rate(tcp_server_demo2_req_recv_total[15s])，返回 15 秒窗口内的每秒速率，这才是"服务端处理性能"的读法。〔TB38 p12-13〕
+- 第一版基准怎么定：压测器由 demo1 的 client 改造而来（demo2/cmd/client）；压测前提是硬件条件一致，同一台 4 核 8G CentOS 先启 server 再启 client，跑几分钟后看 Grafana 曲线，约 18.5w/s 就记为第一个基准，后续 bufio 27w/s、sync.Pool 29.2w/s 都以它为参照。dnsproxi 的压测纪律（先修 dnsq 自己的 bug、同机互打）是这条基准方法论的落地版。〔TB38 p13-14〕
 - 4 核 8G 上的第一版基准约 18.5w/s。pprof 用空导入 net/http/pprof 加单独 goroutine 监听 6060 接入；CPU 采样原理是每 10ms 发一次 SIGPROF 中断记下所有 goroutine 的函数栈，出现最多的函数通常就是瓶颈。〔TB38 p14-16〕
 - 火焰图里最大的方框是 Syscall，调用者全是网络 read/write：net.Conn 直接当 io.Reader，哪怕只读 1 字节也是一次系统调用。加 bufio.Reader/Writer 把读写攒进内存缓冲，压到 27w/s，提升 45%。代价是写侧必须 defer Flush，忘了就把响应闷在缓冲里。〔TB38 p17-20〕
 - 第二刀切堆分配：pprof 的 allocs profile 里 top 按 flat 列排（函数自身分配的字节数，cum 是含调用方的累计），packet.Decode 以 38MB 居首，list 进去定位到 `s := Submit{}` 一行。〔TB38 p20-21〕
 - sync.Pool 复用 Submit：Decode 里 `SubmitPool.Get().(*Submit)`，归还点放在 handlePacket 处理完之后；27w/s 再涨到 29.2w/s。用完不归还优化就失效，归还后不清字段就是脏数据。〔TB38 p22-24〕
-- dnsproxi 的正文把这些当结论用了（每查询临时 socket 是瓶颈、hitpath-ab 的省拷贝实验、`cache.ReplyPool`），这八条是它们的出处推理链。省略的只有 TB38 里 Prometheus+Grafana+node-exporter 的 docker-compose 部署步骤和 TB36 的 2020 官方调查背景，属搭环境与背景材料，手册 22 节与 15 节另有覆盖。
+- dnsproxi 的正文把这些当结论用了（每查询临时 socket 是瓶颈、hitpath-ab 的省拷贝实验、`cache.ReplyPool`），这些是它们的出处推理链。省略的只有 TB38 的 Prometheus+Grafana+node-exporter docker-compose 部署步骤，属搭环境材料，手册 22 节与 15 节另有覆盖。
 
 ## 想深入去哪查
 

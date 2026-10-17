@@ -233,6 +233,8 @@ K8s 自身的 API 是 HTTP，client-go 是它的 Go SDK。资料里的 krm 是�
 ### W03-1 多实例部署引发的代码问题
 
 - Session 存储的选型随部署形态变：单机单实例用 memstore 就行，多实例必须选 redis，让每个实例都能访问同一份 Session；平时无脑选 redis。〔W03-1 p7-8〕
+- 多副本上线后最先被打穿的接口是注册和登录:它们对任何人开放、每个请求都要查库,攻击者不用拿到什么权限就能把它刷挂;限流是这类入口最常见的保护手段,阈值与实现细节在 11 节和 16 节展开。〔W03-1 p35-36〕
+- JWT 的三段结构(Header.Payload.Signature)属于登录认证主题,11 节已完整展开;部署视角只需要一句:token 无状态、任何副本都能独立校验,多副本部署不依赖会话粘性。〔W03-1 p22-23〕
 - cookie、memstore、redis 三个存储实现都要传两个 key：authentication key 建议 32 或 64 位，加一把 encryption key；sess_id 永远放 Cookie，Session 里的数据（比如 user_id）才是 store 存的东西。〔W03-1 p7-10〕
 
 ### C:go_frame/k8s kind 集群与 HPA 的实操细节
@@ -273,6 +275,6 @@ K8s 自身的 API 是 HTTP，client-go 是它的 Go SDK。资料里的 krm 是�
 - 危险操作的确认强度不一：命名空间删除要输入名字确认，用户删除只弹确认框；同一产品里强度应当统一。〔K:krm-frontend/src/view/namespace/List.vue:60-90〕
 - labels 和 annotations 在表单里编辑成 key、value 数组，提交时 list2Object 合回对象；中间少同步一步就丢编辑，这是 reactive 对象与数组手动互转的代价。〔K:krm-frontend/src/utils/utils.js:1-32〕
 
-说明：有意省略的部分：W03-1 的 Session 刷新策略、JWT 结构与 CORS 配合、四种限流算法属认证与稳定性主题，分别在 11 节和 16 节展开；W03-2 的两条练习条目（副本数改动预测、ClusterIP 端口语义）正文语义已给足；krm 三端的 jwtutil 细节、路由注册清单、菜单与图标配置与部署无关，从略。
+- 补页码引用:W03-2 p2 是该单元的一句话总览(声明式 YAML 部署整套 webook:Pod/Deployment/Service、MySQL PV/PVC、Redis NodePort、nginx Ingress、编译标签切配置),逐项机制正文一至四节均已展开,不另立条目。说明：有意省略的部分：W03-1 的 Session 刷新策略、JWT 结构与 CORS 配合、四种限流算法属认证与稳定性主题，分别在 11 节和 16 节展开；W03-2 的两条练习条目（副本数改动预测、ClusterIP 端口语义）正文语义已给足；krm 三端的 jwtutil 细节、路由注册清单、菜单与图标配置与部署无关，从略。
 
 ## 想深入去哪查
