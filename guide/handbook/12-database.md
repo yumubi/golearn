@@ -510,6 +510,8 @@ func main() {
 - gin-contrib/sessions 两件套：`sessions.Sessions("ssid", store)` 中间件负责从 Cookie 解出 Session，`CheckLogin` 中间件里 `sessions.Default(ctx).Get("userId") == nil` 就 401，signup/login 路径豁免。注意 `cookie.NewStore([]byte("secret"))` 是把 Session 数据加密后存在 Cookie 本身的客户端存储，数据大会撞 4K 上限，多实例要换 redis store。〔W02-2 p49-51〕
 - 登录优化别上来就加缓存，压测先行。真实瓶颈里 bcrypt 的 100ms 量级延迟往往是第一位，属于第 11 节登录优化的内容。〔W02-2 p7〕
 
+- 三层落地的透传骨架：repository 层 `UserRepository.Create` 先做类型转换（domain → dao 结构体）再调 `UserDAO.Insert`；`Insert` 内一行 `db.WithContext(ctx).Create(&u).Error`。先让调用链通起来，再逐层填业务。〔W02-2 p18〕
+
 ### W16-1 评论系统未入正文的取舍与配套
 
 - 层级先选过一次：完整树形（嵌套任意深）还是两级简化（资源、评论、子评论），课程选完整树；两级的好处是删除和分页都简单（`DELETE WHERE parent=?`），代价是"评论的评论的评论"表达不了。〔W16-1 p6〕
@@ -523,9 +525,13 @@ func main() {
 - 查一级评论的子评论时，repository 层聚合即可；查子评论是可容错步骤，降级触发就跳过不查。用复杂子查询一条 SQL 拉全也能做到，但可读性太差，不值得。〔W16-1 p27〕
 - 加载更多的缓存命中率天然低，因为大多数人不点；用户点了一次就预加载下一页写缓存，因为点过的人大概率要看完全部。〔W16-1 p32〕
 - 读写分组部署：查 100 实例一个读组、增删 20 实例一个写组，客户端负载均衡各走各的；读组故障把部分流量导入写组，本质是分组加动态流量调度（`read_weight`/`write_weight` 可实现），代价是临时牺牲写吞吐。〔W16-1 p33〕
-- 热门资源才有缓存价值：长尾资源缓存是浪费内存还添穿透风险；热门靠热榜计算后经 Kafka 通知、评论服务监听更新加秒级定时刷新，可以再叠一层本地缓存。〔W16-1 p28〕
+- 评论限流按资源热度分开：热门 400/s、非热门 100/s 各自限流；降级时只查热门资源的评论，非热门直接给空态。〔W16-1 p29〕
+### W06-2 状态映射与 Mongo 索引
 
-省略未吸收：W02-2 的 docker-compose 起 MySQL（K6，环境搭建，非数据库知识）、模型标签清单细节（K5，上面已给出查文档的结论）；W16-1 的面试要点页（K22）。其余必读条目已融入正文或本块。
+- 状态映射：领域状态最真实，存储里的状态是衍生/辅助；DAO 层直接写 `uint8` 魔法值可接受但不优雅，集中定义更好。〔W06-2 p10〕
+- Mongo 建唯一索引一行：`col.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: ..., Options: options.Index().SetUnique(true)})`，键按业务最常用的查询条件选。〔W06-2 p26〕
+
+省略未吸收：W02-2 的 docker-compose 起 MySQL（K6，环境搭建，非数据库知识）、模型标签清单细节（K5，上面已给出查文档的结论）；W16-1 的面试要点页（K22）；W06-2 的 p2 为单元概览页，内容已由正文与本块覆盖。其余必读条目已融入正文或本块。
 
 ## 想深入去哪查
 

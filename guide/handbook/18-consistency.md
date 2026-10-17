@@ -6,7 +6,7 @@
 
 ## 先看一笔永远对不上的账
 
-用户打赏作者 1 块钱，系统里有三个环节要动：打赏模块记一笔打赏、支付服务记一笔支付、账号服务给作者加钱。跑一天下来对账，三种对不上都有：
+用户打赏作者 1 块钱，系统里有三个环节要动：打赏模块记一笔打赏、支付服务记一笔支付、账号服务给作者加钱（资料里是读者发起、webook 记录并调第三方、第三方完成支付、创作者最终提现这条链，〔W15-1 p4〕〔W15-2 p5〕）。跑一天下来对账，三种对不上都有：
 
 - 打赏记录显示成功，支付服务里查不到这笔钱：创建支付订单的请求超时了，钱可能付了也可能没付。
 - 支付成功，作者账户没加钱：支付到记账之间那条消息丢了。
@@ -560,6 +560,9 @@ func main() {
 - 接口最小化：`mchid`、`appid`、`notify_url` 都是支付服务自己知道的配置，不该出现在 API 参数里；外部只传 description、out_trade_no、amount。提前为支付宝做通用化是过早抽象，将来字段变多再拆实现类组合复用。〔W15-1 p15-16〕
 - native 支付只涉及三处代码：下单接口创建订单、处理回调、可选的主动查询；Prepay 参数里 `out_trade_no` 是我方业务交易号，`notify_url` 是回调地址，响应的 `code_url` 前端转成二维码。〔W15-1 p12-14〕
 - 处理回调不要手动验签解密，坑多，直接用微信 SDK 的 NotifyHandler；Web 层负责把微信支付状态翻译成内部状态。〔W15-1 p22〕
+- PreReward 的入参来自打赏这一业务动作：Biz（article）、BizId（文章 ID）、BizName、TargetUid（作者）、Uid（打赏人）、Amt；NativePrePay 时把 `BizTradeNo` 填成 `reward-rid`，支付侧因此能反解出打赏记录 ID。〔W15-2 p6〕
+- 课程只支持微信扫码一种支付方式，是刻意的假设：多方式时用户选金额的同时选方式，Web 按方式调不同的 reward 接口，前面的幂等与对账设计不受影响。〔W15-2 p7〕
+- 账号服务的 Credit 接口一次请求带多笔账：`CreditRequest{biz, bizId, items[]}`，每条 `CreditItem{account, account_type, amt, currency, uid}`；一个业务拆几笔账要在接口里定义清楚，账号服务是对账、统计、报表的核心。〔W15-2 p21〕
 - 本地调试收不到回调：notify_url 必须是公网地址，标准解法是 nginx 多域名分发，test/dev/live 各一个域名，dev 转发到能回到本机的跳板机。〔W15-1 p20-21〕
 - PreReward 四步：查缓存二维码、建打赏记录（Status=Init）、调 NativePrePay（BizTradeNo=reward-rid）、缓存返回的二维码。缓存命中说明用户上次点了打赏又放弃，直接复用，少调一次支付服务；这步是纯优化，不缓存也行。〔W15-2 p8-9〕
 - 支付结果用 Kafka 广播：Payment 处理完微信回调、更新本地之后发事件，各业务方自己订阅；Reward 消费后只更新本地 DB，按 BizTradeNO 反解出 rid 更新状态。〔W15-2 p11〕〔W15-2 p14〕
@@ -586,7 +589,6 @@ func main() {
 - 二阶段消息的 DoAndSubmitDB 把本地事务和 Submit 原子绑定：本地事务成功才插入 barrier 记录并 Submit；进程没来得及返回就宕机，dtm 回查 QueryPrepared，它一上来先插 rollback 记录，所以宕机默认按失败处理，业务方必须接受"宁可少转不可多转"。〔C:dachang/distributed_transaction/msg/ap/main.go:73-103〕
 - TCC 的代价是业务侵入：RM 要实现 Try/Confirm/Cancel 三接口加资源冻结字段；Try 全成才 Confirm，一失败全 Cancel；返回时 Try 已完成但 Confirm 通常没完，最终成功由 dtm 无限重试保证。TCC 只适合短事务：AP 重启后全局事务只能回滚不能继续，这点和 SAGA 不同。〔C:dachang/distributed_transaction/tcc/ap/main.go:60-194〕
 - XA 的坑：prepare 期间锁不释放，高并发热点必死；xa end 之后 prepare 之前同连接再读写报 XAE07；AP 在 prepare 后宕机，锁悬着，要人工 `xa recover` 裁决。RM 的 handler 必须用 ShouldBindJSON 而不是 Bind，XA 分支会被多次调用且有时没有请求体，Bind 会 400 中止让 dtm 误判失败。〔C:dachang/distributed_transaction/xa/rm/main.go:47-49〕
-- 分支可以并行编排：转账案例的两分支无依赖就并行跑，补偿也可以不分先后；dtm saga 默认顺序执行，SetConcurrent 才并行。〔C:dachang/distributed_transaction/exception/ap/main.go:188-231〕
 - 手写补偿的教程代码是 for 死循环加 Sleep，没有重试上限，生产必须加次数阈值、报警、人工介入。〔C:dachang/distributed_transaction/exception/ap/main.go:104-113〕
 - dtm 客户端怎么用：分支 handler 从请求 query 里取 gid、branch_id、op、trans_type 构造 Barrier（`dtmcli.BarrierFromQuery`），再用 `CallWithDB` 把业务包进 barrier 事务；分支返回值三态，nil 成功、ErrOngoing 框架重试、ErrFailure 触发补偿。〔C:dachang/distributed_transaction/saga/ap/main.go:59-126〕
 - TCC 在 RM 侧的样子：Try 调资源接口把金额挪进 `trading_balance` 冻结字段（带防负条件），Confirm 还原进真实余额，Cancel 反向解冻；AP 里 TccGlobalTransaction 串行 CallBranch。〔C:dachang/distributed_transaction/tcc/ap/main.go:60-194〕
@@ -613,7 +615,7 @@ func main() {
 - Get 不存在的 key 不报错，用 `len(response.Kvs)==0` 判断；租约到期的键自动消失；`WithRange` 是前闭后开区间。〔C:dachang/etcd/etcd.go:36-37〕
 - 配置中心模式：启动时按 key 拉初始值进全局配置，再用 Watch 前缀监听事件通道热更新，只处理 PUT 事件；服务发现客户端用 Watch 刷新端点缓存，随机挑一个实例并按服务复用 grpc 连接。〔C:dachang/etcd/etcd_config.go:22-61〕〔C:dachang/etcd/service_registration_center/client/client.go:19-46〕
 
-注：正文已经展开而这里不再重复的：W15-1 的幂等重试返回旧结果、对账双层兜底、金额三存法、二维码复用（第 4 节），W15-2 的部分失败清单与三者对账（第 4 节），barrier 四步与 NPC（第 2 节），Raft 的选主、随机超时、多数派与提交点计算、心跳参数约束、etcd 对 Redis 的性能差（第 5 节）。〔W15-1 p25〕〔W15-1 p29-33〕〔W15-2 p28〕〔C:dachang/raft/config.go:7-24〕〔C:dachang/etcd/etcd_redis_test.go:104-123〕
+注：正文已经展开而这里不再重复的：W15-1 的打赏参与方与全流程（开头已收）与幂等重试返回旧结果、对账双层兜底、金额三存法、二维码复用（第 4 节），W15-2 的 PreReward 参数与单一支付方式、Credit 接口结构（本节收）、部分失败清单与三者对账（第 4 节），barrier 四步与 NPC（第 2 节），Raft 的选主、随机超时、多数派与提交点计算、心跳参数约束、etcd 对 Redis 的性能差（第 5 节）。〔W15-1 p4〕〔W15-1 p25〕〔W15-1 p29-33〕〔W15-2 p5-7〕〔W15-2 p21〕〔W15-2 p28〕〔C:dachang/raft/config.go:7-24〕〔C:dachang/etcd/etcd_redis_test.go:104-123〕
 
 ## 想深入去哪查
 

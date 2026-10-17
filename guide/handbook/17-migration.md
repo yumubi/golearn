@@ -538,12 +538,13 @@ func main() {
 - Canal 的组成：Server 连着数据库监控 binlog 并转发给客户端；Client 接收处理变更；binlog 是变更来源；中间还有一层格式转换器，支持 JSON、Avro 等输出；分布式场景用 ZooKeeper 做高可用协调。〔W18-2 p6-7〕
 - 配置分三块：Server 本体（`serverMode=Kafka`）、每个数据库一份的连接配置（canal 用户要高权限，消息发到 `webook_binlog` topic）、Kafka 转发配置。发 Kafka 的一段把 `acks=all`、`max.in.flight=1`、`retries=0` 一起配上，这是用吞吐换强顺序：在途请求压到 1，失败不重试，消息就不会乱序。〔W18-2 p10-12〕
 - 案例一用 Canal 更新缓存，解决更新缓存和更新 DB 的并发问题。两种做法：直接拿 binlog 里的数据更新缓存，前提是同一条数据的 binlog 稳定进同一分区；Canal 只当信号器，收到消息再回查数据库回写，实现简单但高并发回查把压力放大一倍，压 DB。资料选前者。〔W18-2 p20〕
+- UPDATE 消息比 INSERT 多一个 `old` 字段，装的是**更新前的旧值**；用它消费时先想清楚要的是新值还是旧值，别和 INSERT、DELETE 的语义记混。〔W18-2 p16〕
 - 这套做法的本质是把缓存策略从业务代码里剥出去：业务只管写 DB，缓存一致性交给 binlog 消费者。所以消费者绕开 Service 直接操作 Repository，Repository 没逻辑就直捅 Cache；也因为它属于易变的策略，不在 Repository 上定义接口。〔W18-2 p23〕
 - `partitionHash` 的细节：不配置，所有消息全进 partition 0，顺序安全但吞吐归零；按表名哈希会有热点；标准写法是 `.*\\..*:id` 按主键哈希，正则匹配所有表，多个规则按顺序命中即返回，`$pk$` 表示自动取主键，复合主键写 `pk1^pk2`。〔W18-2 p21〕
 - 大规模应用别让所有表共用一个 topic：容易消息积压，Kafka 集群也会成为瓶颈。常见做法是每表一个 topic，用 `dynamicTopic` 的正则把 `schema.table` 路由到对应 topic，集群不够就再加集群。〔W18-2 p22〕
 - 面试里 Canal 的技术细节问得少，常问的就两条：它怎么知道数据库变更（binlog），binlog 三种模式是什么、你们用哪种。把它整合进项目经历的讲法是：早期先更 DB 再更缓存，遇到性能下降、部分失败和并发更新，后来引 Canal 监听 binlog 更新缓存，借 Kafka 的重试解决部分失败，代价是接受最终一致。〔W18-2 p30〕
 
-省略未吸收：W11-1 的"为什么要迁移"动机（选读）、模拟数据生成工具 GenData 与 GenSQL（选读）和 mysqldump 在 MySQL 8.4 上的待核兼容问题；W11-2 的演示流程逐步命令（wrk 压流量、postman 触发校验，选读，常见坑 7 已给要点）、通用迁移方案的界面化愿景（选读）与面试叙事（选读）；W18-2 的 binlog 消息字段逐个说明（选读，正文已讲 DELETE 反直觉那条）、compose 部署与消息验证（选读）、刷 ELK 与 KPI 的建议（与迁移无关）。
+省略未吸收：W11-1 的"为什么要迁移"动机（选读）、模拟数据生成工具 GenData 与 GenSQL（选读）和 mysqldump 在 MySQL 8.4 上的待核兼容问题；W11-2 的演示流程逐步命令（wrk 压流量、postman 触发校验，选读，常见坑 7 已给要点）、通用迁移方案的界面化愿景（选读）与面试叙事（选读）；W18-2 的 binlog 消息字段逐个说明（INSERT 消息全字段清单等选读细节；UPDATE 的 old 与 DELETE 反直觉两条已收）、compose 部署与消息验证（选读）、刷 ELK 与 KPI 的建议（与迁移无关）。
 
 ## 想深入去哪查
 

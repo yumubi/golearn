@@ -553,6 +553,11 @@ func main() {
 - 公司级远程配置中心的功能清单：统一接口、Web 界面（路径权限、关键配置限人、版本回滚、环境同步、审批流、灰度发布），本质都是增删改查，不难。〔W05-3 p30〕
 - `--config` 指向不存在的文件时 `ReadInConfig` 在哪一行 panic、错误长什么样，值得自己跑一遍；viper 支持用 `ReadConfig` 在单测里构造配置替代真实文件。〔W05-3 p14,p17〕
 
+### W02-2 三层落地与缓存判据
+
+- 三层落地先立"透传骨架"再填业务：repository 的 `UserRepository.Create` 做类型转换（domain → dao 结构体）后调 `UserDAO.Insert`；`Insert` 内一行 `db.WithContext(ctx).Create(&u).Error`，错误原样返回。骨架先通，后续每层才好各自演化。〔W02-2 p18〕
+- 缓存该不该上，用压测回答：并发瓶颈通常是加密算法（CPU 密集）和数据库查询，先 `wrk` 压出真实数据再决定上不上 Redis，不要凭感觉。〔W04-1 p2〕
+
 ### W06-2 存储扩展：MongoDB 与 OSS 落地
 
 - 换存储的现实：技术选型一开始就定死，要换也是一次性 MySQL 换 MongoDB，不会有今天 MySQL 明天 MongoDB；DAO 抽象下加一个 MongoDBArticleDAO 实现即可。〔W06-2 p29〕
@@ -568,8 +573,10 @@ func main() {
 - 撤回时删 OSS 对象不等于内容消失：CDN 可能还有缓存，知道 CDN 拼接方式就能绕开登录直接读内容，公开 CDN URL 等于内容公开，私有内容要签名 URL 加防盗链。〔W06-2 p56-57〕
 - 结论别照搬：帖子这种小文本不适合 OSS，图片视频平台才适合；OSS 操作就是增删改查，不支持复杂查询。〔W06-2 p58〕
 - MongoDB 索引的 ESR 原则：等值（Equal）、排序（Sort）、范围（Range）列按此顺序建，比如 `author_id, read_cnt, ctime`；可扩展成 EESR、ESSR 等，只要相对顺序不变；MySQL 索引同样参考，实践中 S 和 R 换序有时更快。〔W06-2 p64〕
+- 状态该信谁：领域状态最真实，存储里的状态是衍生/辅助；DAO 里直接用 `uint8` 魔法值可接受但不优雅，理想是集中定义。〔W06-2 p10〕
+- Mongo 建索引一行：`col.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: ..., Options: options.Index().SetUnique(true)})`；键按业务最常用的查询条件选。〔W06-2 p26〕
 
-省略未吸收：W06-2 的 BSON 四类型完整代码示例与 `$or/$in/Projection` 逐个写法（K10/K11 的代码面，留给 12 节数据库正篇）、MongoDB 更新删除的逐条操作演示（K9 的剩余部分）、K22 的 Region/Endpoint 获取细节（查服务商文档即可）；W04-6 的面试项目包装话术（K19，面试向）；W05-3 的 company 配置中心界面细节（与正文功能清单重复）。其余必读条目已全部融入正文或本块。
+省略未吸收：W06-2 的 BSON 四类型完整代码示例与 `$or/$in/Projection` 逐个写法（K10/K11 的代码面，留给 12 节数据库正篇）、MongoDB 更新删除的逐条操作演示（K9 的剩余部分）、K22 的 Region/Endpoint 获取细节（查服务商文档即可）；W04-6 的面试项目包装话术（K19，面试向）；W05-3 的 company 配置中心界面细节（与正文功能清单重复）；W04-3/W05-3/W06-2 的 p2 为单元概览页（约 3 行目录），内容已由正文与本块覆盖。其余必读条目已全部融入正文或本块。
 
 ## 想深入去哪查
 

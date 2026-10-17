@@ -468,7 +468,7 @@ logger.InfoContext(ctx, "cache miss, forwarding", "qname", "down.test")
 - **lumberjack 参数是运维契约**:`MaxBackups` 乘 `MaxSize` 决定磁盘上限;`Compress=true` 省六成以上磁盘,但查旧日志要先解压。〔W18-1 p21〕
 - **面试怎么讲可观测性**:单独讲 ELK 显单薄;把 ELK(日志)、Prometheus(指标)、OpenTelemetry(链路)合成一套方案,再配一个从发现、定位到解决的案例。〔W18-1 p27〕
 
-没吸收进来的:各单元的选读条目(Grok/Date/Mutate/Kv 插件细节、compose 部署与 ES 7.13 版本对齐、指标命名分层等)和标注待核的版本问题;其余必读点正文或本块已覆盖。
+没吸收进来的:各单元的选读条目(Grok/Date/Mutate/Kv 插件细节、compose 部署与 ES 7.13 版本对齐、指标命名分层等)和标注待核的版本问题;W05-4/W08-1/W08-2 的 p2 均为单元概览页,内容已全部由正文与本块覆盖。
 
 ## 想深入去哪查
 
