@@ -457,11 +457,37 @@ logger.InfoContext(ctx, "cache miss, forwarding", "qname", "down.test")
 
 ### W18-1 ELK 链路的落地细节
 
-- **Logstash 三段是固定形状**:Input(文件、DB、MQ)收,Filter 解析过滤,Output 写 ES。课程的 pipeline:beats 输入监听 5044 收 Filebeat,`json` filter 把 `message` 字段展开,输出按天索引 `logstash-%{+YYYY.MM.dd}`,方便按时间删旧索引。〔W18-1 p6〕〔W18-1 p22〕
-- **Filebeat 的定位**:轻量、实时盯文件变化、自动发现新文件,输出可以给 Logstash、ES 或 Kafka;和 Logstash 组合就是轻量采集加集中过滤。配置核心是 `enabled: true` 加 paths 通配符。〔W18-1 p20〕〔W18-1 p25〕
-- **落盘目录和采集目录必须对齐**:应用写 `/var/log`(容器里注意权限),Filebeat 的 paths 指向同一目录,两边对不上等于白搭。〔W18-1 p20-21〕
-- **lumberjack 参数是运维契约**:`MaxBackups` 乘 `MaxSize` 决定磁盘上限;`Compress=true` 省六成以上磁盘,但查旧日志要先解压。〔W18-1 p21〕
-- **面试怎么讲可观测性**:单独讲 ELK 显单薄;把 ELK(日志)、Prometheus(指标)、OpenTelemetry(链路)合成一套方案,再配一个从发现、定位到解决的案例。〔W18-1 p27〕
+**链路角色与目标**：ELK 是一个强大的开源日志管理和分析平台，由三个核心组件组成〔W18-1 p4〕。Elasticsearch 是分布式搜索引擎，专注实时数据的搜索与分析；Logstash 是数据处理引擎，负责日志的收集、过滤、转换、传输；Kibana 是数据可视化工具，创建动态仪表板。仪表板上展示的数据就存在 ES 里，这就是链路的终点。日志链路串起来是：应用日志落盘 → Filebeat 采集 → Logstash 过滤转换 → ES 存储检索 → Kibana 展示。
+
+**正常执行过程与配置**：
+
+- **Logstash 三段是固定形状**：Input（文件、DB、MQ）收，Filter 解析过滤，Output 写 ES。课程的 pipeline：input 用 beats 插件监听 5044 收 Filebeat 数据；filter 一条 `json { source => "message", target => "data" }`；output 写 `elasticsearch { hosts => "elasticsearch:9200", index => "logstash-%{+YYYY.MM.dd}" }`，按天索引。〔W18-1 p6〕〔W18-1 p22〕
+- **filter 为什么只需一条 json 指令**：Filebeat 传给 Logstash 的数据里，日志内容就放在 `message` 字段；应用侧用 zap 输出 JSON 结构化日志，`message` 本身就是 JSON，一条 json 指令即完成解析，写入 `data` 字段。grok/kv 这类为非结构化文本准备的插件在此用不上。日志规范好过过滤逻辑。〔W18-1 p22〕〔W18-1 p11〕
+- **按天索引**：索引名内嵌 `%{+YYYY.MM.dd}`，随日期变化，每天一个新索引。原课未展开按天索引的运维动机（如定期清理旧索引）；不按时间分索引则单索引持续膨胀、清理困难。〔W18-1 p22〕
+- **Filebeat 的定位与配置**：轻量采集器，实时盯文件变化、自动发现新文件；output 可以给 Logstash、ES 或 Kafka，与 Logstash 组合即轻量采集加集中过滤。input 侧两个硬性条件：`enabled: true`；paths 用通配符指向日志实际写入的目录（课程场景是 `/var/log`，Windows 需对应修改）。output 两种去向：直发 ES（Kibana 数据源向导默认引导这条）或发给 Logstash。课程选后者，地址配成正确的 Logstash 地址。落盘目录和采集目录必须对齐：应用不往 paths 指的目录写，Filebeat 采不到东西，链路空转。〔W18-1 p20〕〔W18-1 p25〕〔W18-1 p19-20〕
+- **应用侧初始化（zap+lumberjack）**：为让日志写进对应目录，初始化时就要指定好目录；引入管理日志切片的 lumberjack 库，日志文件很大或时间变化时分割成多个文件：
+
+```go
+lumberjackLogger := &lumberjack.Logger{
+	Filename:   "/var/log/user.log", // 指定日志文件路径；注意有没有权限
+	MaxSize:    50,                  // 每个日志文件最大大小，MB
+	MaxBackups: 3,                   // 保留旧日志文件的最大个数
+	MaxAge:     28,                  // 保留旧日志文件的最大天数
+	Compress:   true,                // 是否压缩旧日志文件
+}
+core := zapcore.NewCore(
+	zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
+	zapcore.AddSync(lumberjackLogger),
+	zapcore.DebugLevel,
+)
+L := zap.New(core, zap.AddCaller())
+```
+
+  这份参数是一份运维契约：磁盘上限约等于 `MaxBackups` 乘 `MaxSize`；`Compress=true` 省六成以上磁盘，但查旧日志要先解压。〔W18-1 p21〕
+- **展示端**：进 Kibana 的 Discover 后，默认列难读，选字段作列（`data.level`、`message`、`data.msg`）优化展示。〔W18-1 p23-24〕
+- **Kibana vs Grafana**：两者都是流行的数据可视化工具，差别在设计目标、适用场景和特性。Kibana 设计目标是与 Elasticsearch 协同工作、构建实时搜索和分析的仪表板，深度集成 ELK 堆栈、专注日志和指标数据；告警有、能按查询结果设规则，但课件明确它相对较新、相对较简单。Grafana 最初设计为通用的开源仪表板和可视化平台，支持多种数据源；告警更强大成熟，支持电子邮件、Slack、Webhooks 等多种通知渠道，更灵活、允许定义复杂触发条件。所以日志检索偏向 Kibana（ES 原生），多数据源指标监控加告警偏向 Grafana，两者组合而非对立。〔W18-1 p14〕
+
+**面试怎么讲可观测性**：单独讲 ELK 显单薄；把 ELK（日志）、Prometheus（指标）、OpenTelemetry（链路）合成一套方案，再配一个从发现、定位到解决的案例。〔W18-1 p27〕
 
 没吸收进来的:各单元的选读条目(Grok/Date/Mutate/Kv 插件细节、compose 部署与 ES 7.13 版本对齐、指标命名分层等)和标注待核的版本问题;W05-4/W08-1/W08-2 的 p2 均为单元概览页,内容已全部由正文与本块覆盖。
 
