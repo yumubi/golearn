@@ -12,7 +12,7 @@
 | 3 | SC-migrate 迁移与调度 | 17 | 预审认为完整,待独立复核 | | |
 | 4 | SC-smscode 验证码与短信 | 11/16 | 预审认为完整,待独立复核 | | |
 | 5 | SC-auth 认证 | 11 | 预审认为完整,待独立复核 | | |
-| 6 | SC-post 发帖与双库 | 10/14 | 已完整(ao0bef 无新增量;14 节 mvbzq049 K9-K16 双审通过;W04-4 两次重跑 mvc165o4/test3r2 均 blocked,内容与既有正文重叠,仅 K1 定义补入 23f866c) | handbook-batch-mvbv6wa4-ao0bef, handbook-batch-mvbzq049-3dqt17, handbook-batch-mvc165o4-0stuno, handbook-batch-mvc1ntqu-3saf7m | 4f0dc6b, 23f866c |
+| 6 | SC-post 发帖与双库 | 10/14 | 已完整(ao0bef 无新增量;14 节 mvbzq049 K9-K16 双审通过;W04-4 两次重跑 mvc165o4/test3r2 均 blocked,K1 定义补入 23f866c,最终稿净增量 K3 分支响应体/K4 Login 三用例/K5 FindById 三次 mock 编排补入 75ac234) | handbook-batch-mvbv6wa4-ao0bef, handbook-batch-mvbzq049-3dqt17, handbook-batch-mvc165o4-0stuno, handbook-batch-mvc1ntqu-3saf7m | 4f0dc6b, 23f866c, 75ac234 |
 | 7 | SC-comment 评论与计数 | 12/13 | 已落盘(mvbv6t5c 12 节课件实战七章八条双审通过,em-dash 改写后落盘;bfaa710;dachang 重跑 db12r2 四条 2 轮双审通过,同一版内容已在库) | handbook-batch-mvbv6t5c-ljbnv7, handbook-batch-mvbzpvm0-b7gmsu | bfaa710 |
 | 9 | SC-mq 消息队列 | 13 | 预审认为完整,待独立复核 | | |
 | 10 | SC-rank 榜单与定时 | 13/20 | 预审认为完整,待独立复核 | | |
