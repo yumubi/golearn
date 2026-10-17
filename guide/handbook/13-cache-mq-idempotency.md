@@ -592,7 +592,7 @@ order:42 处理次数: 3
 - 软删除下的点赞要一个事务里放两个 Upsert：明细表 DoUpdates status=1 加 utime（取消变点赞），计数表 like_cnt 用 gorm.Expr 自增；收藏同理，事务内插入收藏项再 Upsert 计数，缓存复用同一段 Lua。〔W07-1 p17〕〔W07-1 p19-20〕
 - 收藏建模两张表：收藏夹本体（name 加 uid）加关联表（cid 加 biz 加 bizId 加 uid），收藏夹对内容是 1:N；收藏夹本身的增删改查留作练习。〔W07-1 p18〕
 - 查询接口的聚合用 errgroup 并发查文章、总数、个人是否点赞收藏；另一种思路是把 Interactive 当作 Article 的值对象塞进 domain，课程选了 Web 层聚合。〔W07-1 p21-22〕
-- 计数优化的另一条路：SELECT COUNT 性能差，改成维持总数（Redis 或数据库加 Redis，启动或缓存过期后 Count 一次回写）；实在改不了就优化 SQL 让它直接在索引上数，不回表。〔W07-1 p29〕
+- 计数优化的另一条路：SELECT COUNT 性能差，改成维持总数（Redis 或数据库加 Redis，启动或缓存过期后 Count 一次回写）；实在改不了就优化 SQL 让它直接在索引上数，不回表；连精确值都不需要时，用 `EXPLAIN` 拿估计行数，或总数放 Redis 异步刷新容忍短暂不准。〔W07-1 p29〕〔W16-2 p30〕
 - 点赞接口一个 like bool 字段：Handler 按真假分发 Like/CancelLike，也可以下沉到 Service；Repository 两个方法形状一致，先数据库（Insert/DeleteLikeInfo）再缓存，缓存复用阅读数那段 Lua，只是计数键换成 like_cnt、delta 用正负区分赞与取消。〔W07-1 p13-14〕
 
 ### W09-1 榜单工程细节
