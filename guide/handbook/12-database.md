@@ -250,6 +250,151 @@ COALESCE 后: 1970-01-01
 
 怎么选：一次性脚本和报表用 COALESCE，最快；有业务语义的可空字段（比如"删除时间"）用指针，nil 就是"没有"；不想让结构体字段是指针时用 `sql.NullString`，Go 1.22 起还有泛型版 `sql.Null[string]`，不用再背 `NullInt64` 这一族名字。"没有这一行"是另一回事：`QueryRow` 本身永远不报错，查不到行时错误藏在返回的 `*sql.Row` 里，要等 `Scan` 那一行才冒出来，而且是哨兵错误 `sql.ErrNoRows`，用 `errors.Is` 判断，不要当成故障。开头第一个示例的最后两行就是这两件事的现场：`Scan` 之前一切安好，`Scan` 之后才有 `ErrNoRows`。
 
+## 课件实战：七个现场
+
+手册主线用的都是最小示例；课件把同样的知识铺成了成套的实战代码。`C:go_basic/database` 是一套 `database/sql` 教学代码，从建表、写入、事务到查询走完整流程；`C:dachang/database` 用 GORM 编了五个专题，本节取其中四题（另一个 PrepareStmt 预编译提速题见"想深入去哪查"）[校注：对应 `C:go_frame/orm` 已展开的部分，此处不再重复]。下面每小节先给课件代码，再拆里面起作用的机制；所有数据都是作者机器上 `go test -v` 的留档，倍数关系比绝对值可靠。
+
+### 写入的返回值：LastInsertId 与 RowsAffected
+
+`db.Exec` 返回 `(res, error)`，结果从 res 上取两个值：`LastInsertId` 与 `RowsAffected`。`Insert` 用一条 SQL 插 2 行（小明、小红），注释留了三个事实：ID 自增、用过的 id（即使对应的行已 delete）不会重复使用；单条 INSERT 插多行时，它是第一条数据的 id；插 2 行所以 RowsAffected 是 2。〔C:go_basic/database/crud.go:14-25〕
+
+```go
+//一条sql，插入2行记录
+res, err := db.Exec("insert into student (name,province,city,enrollment) values ('小明', '深圳', '深圳', '2022-07-03'), ('小红', '上海', '上海', '2022-07-03')")
+lastId, err := res.LastInsertId() //ID自增，用过的id（即使对应的行已delete）不会重复使用。如果使用单个INSERT语句将多行插入到表中，则LastInsertId是第一条数据使用的id
+rows, err := res.RowsAffected() //插入2行，所以影响了2行
+```
+
+对 UPDATE 或 DELETE 调 `LastInsertId` 恒得 0，不报错：只有插入操作才会给它赋值；`RowsAffected` 是 where 命中几行就影响几行。〔C:go_basic/database/crud.go:41-48〕〔C:go_basic/database/crud.go:72-76〕
+
+| 操作 | LastInsertId | RowsAffected |
+|---|---|---|
+| INSERT 两行 | 第一条数据的 id | 2（新插行数） |
+| UPDATE | 恒 0（仅插入才赋值） | where 命中行数 |
+| DELETE | 恒 0（仅插入才赋值） | where 命中行数 |
+| REPLACE 两行 | 取最接近被替换的那条 id | 4＝先删 2 后插 2 |
+
+`Replace` 是 Exec 三兄弟里唯一改写语义的：student 表的 name 上有唯一索引 idx_name，普通 insert 撞上重复 name 直接报错；replace into 遇到重复行的动作序列是**先删除旧行、再插入新行**。对已存在的小明、小红两行执行一次 replace 两行，RowsAffected 是 4（先删 2 行、后插 2 行的总和）。把 4 当成"插了 4 行"、或拿影响行数当零一判断（"影响 0 行就是没生效"），都会得出错误结论；对 replace 语义的把握必须精确到"删除+插入各算一遍"。〔C:go_basic/database/crud.go:28-38〕〔C:go_basic/database/create_table.sql:11-23〕
+
+### 遍历查询结果：Next、Scan 与错误归宿
+
+拿到 `*sql.Rows` 后的标准处理序列三步：`defer rows.Close()`；`for rows.Next()` 遍历，没有数据或发生 error 时返回 false，循环自然结束；循环体内 `rows.Scan` 按查询列的顺序把列值赋给传入的变量地址。〔C:go_basic/database/crud.go:109-119〕
+
+```go
+rows, err := db.Query("select id,name,city,score,enrollment from student where enrollment>=20250130 limit 5")
+defer rows.Close()
+for rows.Next() { //没有数据或发生error时返回false
+	var id int
+	var score float32
+	var name, city string
+	var enrollment time.Time
+	err = rows.Scan(&id, &name, &city, &score, &enrollment) //通过scan把db里的数据赋给go变量
+}
+```
+
+count(*) 的单行结果也必须先 `rows.Next()` 再 `Scan`。分页函数第一步先查 total，专门留了注释"一定要先执行Next()"；不 Next 就 Scan，拿到的不是行数据而是零值，total 变成 0，分页直接算错。机理：`*sql.Rows` 是游标，`Scan` 取的是"当前行"，初始时刻游标还没落在第一行上，`Next()` 才把它推进去。分页第二步 `limit` 的 offset 用 `pageSize*(page-1)` 算出，limit 值本身用 Sprintf 拼接（offset 在课件里是 `int`，不构成注入面，但只要用户能碰它就得走参数化）。〔C:go_basic/database/crud.go:86-106〕
+
+这套代码里查询和写入的错误统一走 `CheckError`：log 打印后 `os.Exit(1)`，教学代码从简，生产代码应把 error 上抛交给调用方处理（注意 `os.Exit` 会跳过上面 `defer rows.Close()`）。〔C:go_basic/database/util.go:20-25〕
+
+### DSN 与连接池：sql.Open 之后发生了什么
+
+这套代码把连接的建立放在包 `init` 里：`sql.Open("mysql", DSN)` 得到全局 `*sql.DB`。手册开头"sql.Open 不建立连接"在这里成立：包初始化只登记参数，物理连接要等第一条语句执行才真正建立。〔C:go_basic/database/db_test.go:14-29〕
+
+```text
+DSN(data source name)格式：[username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]
+```
+
+DSN 参数各管一件事：`parseTime=True` 让 DATE/DATETIME 列扫进 time.Time（漏了它，上一小节的 enrollment 就扫不进去）；`charset=utf8mb4` 支持完整 UTF-8 编码（含 emoji）；`loc` 声明时间解析用哪个时区，课件示例用 Asia/Shanghai。注释明示"db可以并发使用"，全局一份句柄被各测试共享，`db.Close()` 被注释掉，进程生命周期内复用。这条"不调 SetMaxOpenConns"的事实来自课件：课件源码里没有调过连接池参数，那组旋钮留作练习，因此**原课未规定具体数值**。
+
+### 深翻页：offset 越深越慢，游标恒定
+
+同一个"遍历 student 全表"的任务，课件给出两种取"下一页"的写法。Traverse1 通过 limit offset,n 遍历：每轮 `Limit(PAGE_SIZE=100).Offset(offset)`，offset 累加本页行数，取到空页为止。Traverse2 通过 id>x limit 0,n 遍历：每轮 `Where("id>?", maxid).Limit(100)`，源码注释明示"默认会按id排好序"，因此本页最后一行就是本页最大 id，直接拿它当下一轮游标，逐元素比较取最大值的写法被注释掉，注释交代"已按id排好序，所以最后一个students的Id最大"。〔C:dachang/database/limit.go:32-72〕
+
+```go
+// Traverse1 通过limit offset,n遍历表
+db.Select("id,name").Limit(PAGE_SIZE).Offset(offset).Find(&students)
+offset += len(students)
+
+// Traverse2 通过id>x limit 0,n遍历表
+db.Select("id,name").Where("id>?", maxid).Limit(PAGE_SIZE) //默认会按id排好序
+maxid = students[len(students)-1].Id //已按id排好序，所以最后一个students的Id最大
+```
+
+测试注释留了逐页实测：Traverse1 单页耗时从 515μs 涨到约 1.8ms（1760μs），total 92.646ms；Traverse2 单页基本恒定（多为 0μs，个别 565-630μs），total 26.5669ms，两者相差约 3.5 倍。〔C:dachang/database/limit_test.go:31-58〕慢的机制（摘要解释，源码只呈现现象）：offset 越大，MySQL 要先扫过并丢弃前 offset 行才能取本页，代价 O(offset)；游标法按主键直接定位，代价恒定。前提是排序键单调且可比较，自增主键 id 天然满足；换别的列就得显式 ORDER BY 并保证单调，否则游标会跳行或重复。
+
+### SQL 注入：拼接与占位符的一行之差
+
+LoginUnsafe 和 LoginSafe 的唯一代码区别在 Where 的写法，两函数其余逻辑完全相同：〔C:dachang/database/stmt.go:8-19〕
+
+```go
+// 登录成功返回true。容易被SQL注入攻击
+db.Table("login").Select("*").Where("username='" + name + "' and password='" + passwd + "'").Count(&cnt)
+
+// 登录成功返回true。拒绝SQL注入攻击
+db.Table("login").Select("*").Where("username=? and password=?", name, passwd).Count(&cnt)
+```
+
+攻击效果以测试注释留档的 SQL 为准：〔C:dachang/database/stmt_test.go:35〕
+
+```sql
+SELECT count(*) FROM `login` WHERE username='jane' and password='asdfghj' or '1'='1'
+```
+
+and 先于 or，整句变成 (username='jane' and password='asdfghj') or ('1'='1')，后半恒真，count>0，测试断言 LoginUnsafe 返回 true 才算复现成功〔C:dachang/database/stmt_test.go:36-38〕。同样的攻防中，Safe 版把同类载荷整个当作一个普通参数参与 password 的等值比较，登不进，count=0，测试断言返回 false〔C:dachang/database/stmt_test.go:56-58〕。防御原理：占位符下用户输入由驱动层参数化传递，以"纯数据"的身份到达数据库，永不进入 SQL 语法层拼接，无法改变语句结构（注意区分：LoginUnsafe 拼接用的载荷是 `asdfghj' or '1'='1`，LoginSafe 测试用的是同型的 `safsdghf' or '1'='1`，字面不同）。
+
+### 用一张表做分布式锁
+
+机巧全在约束上：distributed_lock 表的 lock_name 上建唯一索引 idx_lock，update_time 由 MySQL 自动维护（default current_timestamp on update current_timestamp）。唯一索引保证同一个锁名全表只有一行，插入成功即持锁并返回 true；函数非阻塞，抢不到立即返回 false。〔C:dachang/database/create_table.sql:1-9〕〔C:dachang/database/lock.go:41-66〕
+
+```go
+// 如果强到锁，就返回true；没强到就立即返回false，不阻塞
+func (model *MysqlDistributedLock) Lock(name string, expiration float64) bool {
+	err := db.Model(model).Create(map[string]any{"lock_name": name}).Error //提交数据
+	if err != nil && expiration > 0 { //第一次没抢到，尝试释放过期锁后再加锁
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) { //  只有唯一索引冲突才尝试夺锁
+			if mysqlErr.Number == 1062 {
+				var data MysqlDistributedLock
+				if db.Where("lock_name=?", name).First(&data).Error == nil {
+					if time.Since(data.UpdateTime).Seconds() >= expiration {
+						if db.Delete(data).Error == nil {
+							return model.Lock(name, expiration)
+						}
+					}
+				}
+			}
+		}
+	}
+	//出错或抢锁失败都返回false
+}
+```
+
+源码自身注释写出全部四步：抢不到锁且 expiration>0 时，errors.As 把 err 解析成 `*mysql.MySQLError` 确认错误码 1062（违反唯一索引），按 lock_name 查出旧记录，`time.Since(UpdateTime).Seconds() >= expiration` 判断上次加锁是否已过期，已过期就删除旧记录后递归调用 Lock 再次插入。旧记录未过期、查询失败或删除失败，都返回 false。Unlock 按 lock_name 删行。〔C:dachang/database/lock.go:44-70〕
+
+`expiration` 在两处起作用：一是 >0 才开启"过期可夺"路径，二是作为判断过期的时间阈值（课件测试设 3 秒）。测试用 10 个协程模拟 10 个进程争抢同一把锁，验证三个阶段：初次争抢、过期后重新争抢（sleep 1+Expire 秒）、Unlock 后重新争抢。〔C:dachang/database/lock_test.go:11-57〕
+
+注意"删旧再重抢"是先删后插两步，不是原子操作：两个客户端可能同时判定过期，一个删除成功后、另一个递归插入前被插队，极端情况下两个进程都认为自己持锁。这是对代码流程的直接分析（摘要"易错"栏同结论），课件没有把非原子定性写成注释。〔C:dachang/database/lock.go:44-66〕
+
+### 批量插入：提交点决定性能
+
+三种写法各插 INSERT_COUNT=10000 条，差别在提交点。InsertOneByOne：循环内逐条 `db.Create(&student)`，每条一次往返且各自隐式提交，实测 1m2.96s。InsertByTransaction1：`db.Begin()` 开事务，循环内改用 `tx.Create` 逐条插，循环结束后 `tx.Commit()` 一次提交，实测 1.795s，省掉的是每条语句各自的提交往返。InsertByTransaction2：事务内再按 BATCH=100 攒一个 []Student，每批一次 `tx.Create(&students)`（一条多值 INSERT），共 100 次往返+1 次提交，实测 310.6ms；三者相差约 200 倍。〔C:dachang/database/transaction.go:12-61〕〔C:dachang/database/transaction_test.go:43-47〕
+
+```go
+// 一次插入多条，整体再放到一个事务里
+tx := db.Begin()
+const BATCH = 100 // 一条SQL语句插入多条
+for i := 0; i < INSERT_COUNT; i += BATCH {
+	students := make([]Student, 0, BATCH)
+	for j := 0; j < BATCH; j++ { students = append(students, student) }
+	tx.Create(&students)
+}
+tx.Commit()
+```
+
+事务边界与失败处理：Begin 后所有 Create 挂在 tx 上，Commit 在全部插入成功后执行一次；三个函数的错误路径一致：打印错误并 return，事务版没有显式 Rollback（摘要有意保留的简化，不是"失败自动回滚"）。测试每次先 `db.Delete(Student{}, "1=1")` 清空表再计时。〔C:dachang/database/transaction_test.go:14-47〕
+
+源码注释明示"注意需要传student的指针"，Create 必须传指针（&student / &students），GORM 要回填自增主键和 CreatedAt。BATCH=100 是"一条SQL语句插入多条"的教学默认值，课件未解释如何选取，调优时需要自行权衡往返次数与单语句体积。〔C:dachang/database/transaction.go:12-61〕
+
 ## 四、GORM 与 sqlc：SQL 和类型对接的两条路
 
 | 方式 | 适合 | 代价 |
