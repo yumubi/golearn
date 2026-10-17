@@ -62,7 +62,8 @@ async function main() {
   const run = { status: 'completed', workflowName: 'handbook-batch', args: input, script, result: good.result }
   assert.equal(validateRun(run, 'before', script), 'after')
   assert.throws(() => validateRun(run, 'changed', script), /旧审稿结论失效/)
-  assert.throws(() => validateRun(run, 'before', `${script}\n`), /工作流定义已变化/)
+  assert.equal(validateRun({ ...run, script: script.trim() }, 'before', script), 'after')
+  assert.throws(() => validateRun(run, 'before', `${script}\n// changed definition`), /工作流定义已变化/)
   for (const mutate of [
     r => r.result.reviews.pop(),
     r => r.result.reviews[0].items = [],

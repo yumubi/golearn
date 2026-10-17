@@ -16,7 +16,8 @@ export function hash(text) {
 export function validateRun(run, text, expectedScript) {
   assert.equal(run.status, 'completed', '运行尚未正常结束')
   assert.equal(run.workflowName, 'handbook-batch', '不是本项目的审读工作流')
-  assert.equal(run.script, expectedScript, '工作流定义已变化，请重新复核')
+  // workflow-tool.ts trims the saved script before persisting a run.
+  assert.equal(run.script.trim(), expectedScript.trim(), '工作流定义已变化，请重新复核')
   const r = run.result
   assert.equal(r?.status, 'reviewed', '本批没有通过独立双审')
   assert.equal(r.target, run.args?.target, '返回的目标与原始任务不一致')

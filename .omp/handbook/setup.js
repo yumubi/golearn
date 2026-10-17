@@ -39,7 +39,7 @@ if (!fs.existsSync(path.join(home, 'settings.json')))
 const model = process.argv[2]
 if (model && !fs.existsSync(path.join(home, 'model-tiers.json')))
   json(path.join(home, 'model-tiers.json'), { tiers: { small: model, medium: model, big: model } })
-json(path.join(root, '.omp/workflows/saved/handbook-batch.workflowon'), {
+json(path.join(root, '.omp/workflows/saved/handbook-batch.json'), {
   name: 'handbook-batch',
   description: '指定 1-8 个原文条目，提出候选稿并独立双审，通过后才允许落盘',
   location: 'project',

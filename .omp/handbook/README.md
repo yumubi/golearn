@@ -10,7 +10,7 @@
 
 ## 启动和使用
 
-首次安装或修改 batch.workflow 后执行 `node .omp/handbook/setup.js`，然后重新启动 omp。生成的 `.omp/workflows/saved/handbook-batch.workflowon` 已忽略，不手动修改。新机器还需安装 omp-dynamic-workflows，并指定可用模型；模型与过程记录保存在机器本地，不入库。
+首次安装或修改 batch.workflow 后执行 `node .omp/handbook/setup.js`，然后重新启动 omp。生成的 `.omp/workflows/saved/handbook-batch.json` 已忽略，不手动修改。新机器还需安装 omp-dynamic-workflows，并指定可用模型；模型与过程记录保存在机器本地，不入库。
 
 本机安装的是扩展 0.1.0，来源提交 421f4bb。它的懒加载桥接在 omp 18.11.1 独立二进制中会加载第二套 SDK，触发 pi-natives 解析失败。setup 会应用本目录的兼容桥接，改用 Bun YAML 与宿主注入的 schema 校验器，保留原文件备份。补丁只接受已核对的版本和原文件哈希；插件升级后若检查失败，需要重新评估，不能强行覆盖。没有修改 omp 核心或模型凭据。
 
