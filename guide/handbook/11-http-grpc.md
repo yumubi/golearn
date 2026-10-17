@@ -438,7 +438,7 @@ func main() {
 
 ### 序列化:一个接口三个引擎
 
-迷你 RPC 的序列化层只约定两个方法,`Marshal(object any) ([]byte, error)` 和 `Unmarshal(stream []byte, object any) error`,Gob、JSON、手写二进制三个实现全挂在这条最小契约上:〔C:dachang/my_rpc/serialization/serializer.go:4-7〕
+迷你 RPC 的序列化层只约定两个方法,`Marshal(object any) ([]byte, error)` 和 `Unmarshal(stream []byte, object any) error`,Gob、JSON、手写二进制三个实现全挂在这条最小契约上:〔C:dachang/my_rpc/serialization/serializer.go:3-5〕
 
 | 实现 | 底层引擎 | 写法 |
 |---|---|---|
@@ -476,7 +476,7 @@ case int:
 	err := binary.Write(buffer, binary.BigEndian, int64(v))
 ```
 
-第二,拼包是先攒后拼:类型 switch 循环里各参数内容先写进 scratch buffer,最后才按 ①→④ 写头、在尾部追加内容 buffer,总容量按 `len(MAGIC)+8+len(types)+8*len(types)+内容` 一次预分配〔C:dachang/my_rpc/serialization/my_serializer.go:86-95〕。用两个参数 `(int 123, string "go")` 手拼一遍,十六进制是 `25 3d 39 17 6f 00…02 00 04 … 00 7b 67 6f`,共 41 字节:开头 5 字节是魔数,接着 8 字节个数 2,然后类型枚举 `00 04`(int 和 string),两个 8 字节长度(8 和 2),最后 `00 00 00 00 00 00 00 7b` 是 123、"go" 是字符串。〔实测〕harness 复现了同一布局的十六进制输出〔C:dachang/my_rpc/work/run/C_dachang__my_rpc/E1/main.go:9-25〕。
+第二,拼包是先攒后拼:类型 switch 循环里各参数内容先写进 scratch buffer,最后才按 ①→④ 写头、在尾部追加内容 buffer,总容量按 `len(MAGIC)+8+len(types)+8*len(types)+内容` 一次预分配〔C:dachang/my_rpc/serialization/my_serializer.go:86-95〕。用两个参数 `(int 123, string "go")` 手拼一遍,十六进制是 `25 3d 39 17 6f 00…02 00 04 … 00 7b 67 6f`,共 41 字节:开头 5 字节是魔数,接着 8 字节个数 2,然后类型枚举 `00 04`(int 和 string),两个 8 字节长度(8 和 2),最后 `00 00 00 00 00 00 00 7b` 是 123、"go" 是字符串,harness 复现了同一布局的十六进制输出〔实测:work/run/C_dachang__my_rpc/E1/main.go:9-25〕。
 
 反序列化入口 `UnmarshalArguments` 的检查是层层递进的:总长小于 `len(MAGIC)+8` 报"数据流长度太短";头 5 字节不等于魔数报"魔数校验失败"并附收到的字节;解出参数个数 `n` 后,`n<=0` 直接返回 `(nil, nil)`,是空结果而不是 error;随后在"读类型枚举之前"和"累计完所有长度字段、算出内容总长之后"各做一次剩余长度检查,源码注释写明动机:每获得一个信息就检查一下数据长度,免得将来发生越界 panic(index out of range)。〔C:dachang/my_rpc/serialization/my_serializer.go:100-181〕第二次检查的位置值得体会:它发生在"已知 totalLen"和"真正切内容"之间:拿到长度表之后、消费任何内容字节之前,先确认剩下的字节够不够。外层 `MySerializer.Unmarshal` 还要先过"必须传指针""必须传结构体指针"两道类型检查,再进入这套防御流程〔C:dachang/my_rpc/serialization/my_serializer.go:203-217〕。魔数加长度检查,正是二进制协议不吃陌生字节流的通行做法;gRPC 消息前的压缩标志和 4 字节长度前缀,是同一思路的工业版。
 
