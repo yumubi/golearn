@@ -327,7 +327,7 @@ func BinarySearch[T cmp.Ordered](arr []T, target T) int {
 }
 ```
 
-注意边界是 `begin <= end` 而不是 `begin < end`。源码注释原话：之所以是 `<=`，是因为"区间内只剩下一个元素时也应该跟 target 进行比较，而不是直接返回-1"。写成 `<`，区间收缩到只剩一个元素（`begin == end`）时就退出循环返回 -1，这个唯一的候选被漏判。用 `arr = []int{1, 3, 6, 8, 10}` 查 `6` 推演（教学推导）：begin=0、end=4，middle=2，`arr[2]=6` 命中返回 2；查 `2` 则走 begin=1、end=4 → middle=2，6>2 使 end=1 → middle=1，3>2 使 end=0 → middle=0，1<2 使 begin=1，此时 begin>end 退出返回 -1。〔C:go_frame/data_structure p8-24〕
+注意边界是 `begin <= end` 而不是 `begin < end`。源码注释原话：之所以是 `<=`，是因为"区间内只剩下一个元素时也应该跟 target 进行比较，而不是直接返回-1"。写成 `<`，区间收缩到只剩一个元素（`begin == end`）时就退出循环返回 -1，这个唯一的候选被漏判。用 `arr = []int{1, 3, 6, 8, 10}` 查 `6` 推演（教学推导）：begin=0、end=4，middle=2，`arr[2]=6` 命中返回 2；查 `2` 则走三轮：middle=2，6>2 使 end=1 → middle=0，1<2 使 begin=1 → begin=end=1，middle=1，3>2 使 end=0，此时 begin>end 退出返回 -1。〔C:go_frame/data_structure p8-24〕
 
 两点预期管理：其一，数组里有多个等于 target 的元素时，注释明确"只返回其中某一个的下标"，不保证最左也不保证最右；其二，未命中时 begin 与 end 一路向对方滑，begin 只增（middle+1）、end 只减（middle-1），正常退出循环返回 -1。官方测试验证了两条路径：`TestBinarySearch` 跑 100 轮（每轮生成长度 100 的随机数组、排序、随机 target），命中下标校验 `arr[index] == target`，返回 -1 时全表扫描反证 target 确实不存在；`TestBinarySearch1` 用固定数组查 1、6、10。〔C:go_frame/data_structure p8-58〕这个二分有配套基准：1200 个元素的数组，模拟 B+树单个节点内的查找，实测 46.83 ns/op（源码注释里的 55ns 是旧机器数据）。〔C:go_frame/data_structure p60-63〕〔实测：work/run/C_go_frame__data_structure/E2/out.txt〕
 
