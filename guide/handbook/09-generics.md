@@ -306,7 +306,7 @@ func Insert[E Entity](e E) {}
 
 ### 泛型二分：begin<=end 的边界与区间版双端短路
 
-第一个例子：泛型二分查找。签名是 `func BinarySearch[T cmp.Ordered](arr []T, target T) int`，约束用标准库 `cmp.Ordered`（1.21 起 `cmp` 包承担了旧 `constraints` 包的角色），一份实现就能服务所有可排序类型，测试里以 `int` 实例化。〔C:go_frame/data_structure p8-24〕
+第一个例子：泛型二分查找。签名是 `func BinarySearch[T cmp.Ordered](arr []T, target T) int`，约束用标准库 `cmp.Ordered`（1.21 起 `cmp` 包承担了旧 `constraints` 包的角色），一份实现就能服务所有可排序类型，测试里以 `int` 实例化。〔C:go_frame/data_structure/binary_search.go:1-52〕
 
 ```go
 func BinarySearch[T cmp.Ordered](arr []T, target T) int {
@@ -327,9 +327,9 @@ func BinarySearch[T cmp.Ordered](arr []T, target T) int {
 }
 ```
 
-注意边界是 `begin <= end` 而不是 `begin < end`。源码注释原话：之所以是 `<=`，是因为"区间内只剩下一个元素时也应该跟 target 进行比较，而不是直接返回-1"。写成 `<`，区间收缩到只剩一个元素（`begin == end`）时就退出循环返回 -1，这个唯一的候选被漏判。用 `arr = []int{1, 3, 6, 8, 10}` 查 `6` 推演（教学推导）：begin=0、end=4，middle=2，`arr[2]=6` 命中返回 2；查 `2` 则走三轮：middle=2，6>2 使 end=1 → middle=0，1<2 使 begin=1 → begin=end=1，middle=1，3>2 使 end=0，此时 begin>end 退出返回 -1。〔C:go_frame/data_structure p8-24〕
+注意边界是 `begin <= end` 而不是 `begin < end`。源码注释原话：之所以是 `<=`，是因为"区间内只剩下一个元素时也应该跟 target 进行比较，而不是直接返回-1"。写成 `<`，区间收缩到只剩一个元素（`begin == end`）时就退出循环返回 -1，这个唯一的候选被漏判。用 `arr = []int{1, 3, 6, 8, 10}` 查 `6` 推演（教学推导）：begin=0、end=4，middle=2，`arr[2]=6` 命中返回 2；查 `2` 则走三轮：middle=2，6>2 使 end=1 → middle=0，1<2 使 begin=1 → begin=end=1，middle=1，3>2 使 end=0，此时 begin>end 退出返回 -1。〔C:go_frame/data_structure/binary_search.go:1-52〕
 
-两点预期管理：其一，数组里有多个等于 target 的元素时，注释明确"只返回其中某一个的下标"，不保证最左也不保证最右；其二，未命中时 begin 与 end 一路向对方滑，begin 只增（middle+1）、end 只减（middle-1），正常退出循环返回 -1。官方测试验证了两条路径：`TestBinarySearch` 跑 100 轮（每轮生成长度 100 的随机数组、排序、随机 target），命中下标校验 `arr[index] == target`，返回 -1 时全表扫描反证 target 确实不存在；`TestBinarySearch1` 用固定数组查 1、6、10。〔C:go_frame/data_structure p8-58〕这个二分有配套基准：1200 个元素的数组，模拟 B+树单个节点内的查找，实测 46.83 ns/op（源码注释里的 55ns 是旧机器数据）。〔C:go_frame/data_structure p60-63〕〔实测：work/run/C_go_frame__data_structure/E2/out.txt〕
+两点预期管理：其一，数组里有多个等于 target 的元素时，注释明确"只返回其中某一个的下标"，不保证最左也不保证最右；其二，未命中时 begin 与 end 一路向对方滑，begin 只增（middle+1）、end 只减（middle-1），正常退出循环返回 -1。官方测试验证了两条路径：`TestBinarySearch` 跑 100 轮（每轮生成长度 100 的随机数组、排序、随机 target），命中下标校验 `arr[index] == target`，返回 -1 时全表扫描反证 target 确实不存在；`TestBinarySearch1` 用固定数组查 1、6、10。〔C:go_frame/data_structure/binary_search.go:1-52〕这个二分有配套基准：1200 个元素的数组，模拟 B+树单个节点内的查找，实测 46.83 ns/op（源码注释里的 55ns 是旧机器数据）。〔C:go_frame/data_structure/binary_search_test.go:50-107〕〔实测：work/run/C_go_frame__data_structure/E2/out.txt〕
 
 第二个例子是**区间版** `BinarySearch4Section[T cmp.Ordered]`，返回第一个 `>=target` 的元素下标，即插入位置。前置条件写在注释里：arr 必须单调递增且不存在重复元素，空数组直接返回 -1。它的骨架每轮循环先做双端短路检查：
 
@@ -345,11 +345,11 @@ for {
 }
 ```
 
-两个短路各自兜住一类边界：`arr[begin] >= target` 说明 begin 已经滑到 target 之后（target 比首元素还小时首轮即返回 0）；`arr[end] < target` 说明 end 已经滑到 target 之前，target 大于全部元素时 `end+1` 即 `len(arr)`,这正是"比最后一个元素还大返回长度、比第一个元素还小返回 0"的由来。短路不成立才进入二分：`arr[middle] > target` 时 `end = middle-1`（注释提醒 `arr[end]` 可能会跑到 target 前面），`arr[middle] < target` 时 `begin = middle+1`（`arr[begin]` 可能会跑到 target 后面），相等直接返回 middle。以 `arr=[1,3,6,8,10]`、`target=4` 推演（教学推导）：begin=0、end=4，双端检查 1<4、10>=4 均不触发；middle=2，6>4 使 end=1；再查 arr[0]=1<4、arr[1]=3<4 触发第二个短路，返回 `end+1=2`,正是 4 的插入位置。官方测试 `TestBinarySearch4Section` 跑 30 轮随机 float64 严格验证：target=arr[0]-1 期望 0、target=末元素+1 期望 len(arr)、target=arr[0] 期望 0、每个相邻元素中点期望 i+1、每个 arr[i+1] 期望 i+1。〔C:go_frame/data_structure p26-52〕〔C:go_frame/data_structure p76-101〕
+两个短路各自兜住一类边界：`arr[begin] >= target` 说明 begin 已经滑到 target 之后（target 比首元素还小时首轮即返回 0）；`arr[end] < target` 说明 end 已经滑到 target 之前，target 大于全部元素时 `end+1` 即 `len(arr)`,这正是"比最后一个元素还大返回长度、比第一个元素还小返回 0"的由来。短路不成立才进入二分：`arr[middle] > target` 时 `end = middle-1`（注释提醒 `arr[end]` 可能会跑到 target 前面），`arr[middle] < target` 时 `begin = middle+1`（`arr[begin]` 可能会跑到 target 后面），相等直接返回 middle。以 `arr=[1,3,6,8,10]`、`target=4` 推演（教学推导）：begin=0、end=4，双端检查 1<4、10>=4 均不触发；middle=2，6>4 使 end=1；再查 arr[0]=1<4、arr[1]=3<4 触发第二个短路，返回 `end+1=2`,正是 4 的插入位置。官方测试 `TestBinarySearch4Section` 跑 30 轮随机 float64 严格验证：target=arr[0]-1 期望 0、target=末元素+1 期望 len(arr)、target=arr[0] 期望 0、每个相邻元素中点期望 i+1、每个 arr[i+1] 期望 i+1。〔C:go_frame/data_structure/binary_search.go:26-52〕〔C:go_frame/data_structure/binary_search_test.go:65-107〕
 
 ### 手写小根堆：数组隐式树、O(N) 建堆、ReplaceTop
 
-第三个例子是泛型小根堆 `Heap[T cmp.Ordered]`，内部只有一个切片 `arr`，用数组隐式存完全二叉树：下标 i 的左孩子是 `2i+1`、右孩子是 `2i+2`、父节点是 `(i-1)/2`。`NewHeap` 先 `slices.Clone` 输入切片再包装，避免污染调用方数据。〔C:go_frame/data_structure p14-18〕
+第三个例子是泛型小根堆 `Heap[T cmp.Ordered]`，内部只有一个切片 `arr`，用数组隐式存完全二叉树：下标 i 的左孩子是 `2i+1`、右孩子是 `2i+2`、父节点是 `(i-1)/2`。`NewHeap` 先 `slices.Clone` 输入切片再包装，避免污染调用方数据。〔C:go_frame/data_structure/heap.go:1-21〕
 
 ```go
 func (heap *Heap[T]) downwardAdjust(parent int) {
@@ -368,7 +368,7 @@ func (heap *Heap[T]) downwardAdjust(parent int) {
 }
 ```
 
-下滤 `downwardAdjust(parent)`：左孩子下标越界说明 parent 已是叶子，直接返回；否则在父子三人（无右孩子则父子二人）中找最小者，最小者不是父节点就交换，并从被换下去的位置递归继续下滤。这与第十三节"维持前 100"的小顶堆是同一棵树：父节点比子节点小，堆顶是当前第 N 名。〔C:go_frame/data_structure p20-46〕〔W09-1 p19〕
+下滤 `downwardAdjust(parent)`：左孩子下标越界说明 parent 已是叶子，直接返回；否则在父子三人（无右孩子则父子二人）中找最小者，最小者不是父节点就交换，并从被换下去的位置递归继续下滤。这与第十三节"维持前 100"的小顶堆是同一棵树：父节点比子节点小，堆顶是当前第 N 名。〔C:go_frame/data_structure/heap.go:22-49〕〔W09-1 p19〕
 
 关键在 `Build`。从 `NewHeap` 拿到的只是元素摆放未调整的切片，还不能保证堆序。`Build` 是自底向上的 O(N) 建堆：
 
@@ -385,13 +385,13 @@ for i := lastIndex; i > 0; i -= 2 { //逆序检查每一个三角形区域
 }
 ```
 
-三个细节：起点 `lastIndex = n/2*2` 是最下层、最右那个三角形区域的右孩子下标,把数组按"父+两个孩子"分成一个个三角形区域，从最后一个三角形扫起；步长 `i -= 2` 从右往左逐三角形逆序，每个三角形由右孩子下标反推 `parent = (right-1)/2`；注释强调"右孩子可能是不存在的，但父节点一定存在",最下层可能只有左孩子没有右孩子，但只要右孩子下标被拿来当锚点，反推出的父节点必然落在数组里。n<=1 直接返回。〔C:go_frame/data_structure p49-62〕
+三个细节：起点 `lastIndex = n/2*2` 是最下层、最右那个三角形区域的右孩子下标,把数组按"父+两个孩子"分成一个个三角形区域，从最后一个三角形扫起；步长 `i -= 2` 从右往左逐三角形逆序，每个三角形由右孩子下标反推 `parent = (right-1)/2`；注释强调"右孩子可能是不存在的，但父节点一定存在",最下层可能只有左孩子没有右孩子，但只要右孩子下标被拿来当锚点，反推出的父节点必然落在数组里。n<=1 直接返回。〔C:go_frame/data_structure/heap.go:50-76〕
 
-之后的增删各是两步：`Push` 把元素 append 到数组尾部，再对新下标 `len-1` 做 `upwardAdjust`（比父小则交换并向上递归，到下标 0 为止）；`Pop` 取出 `arr[0]`，用最后一个元素覆盖堆顶、缩容 `arr[:len-1]`，再 `downwardAdjust(0)`，空堆返回错误。ReplaceTop 是维护 TopN 的关键路径：非空时直接 `arr[0] = ele` 后 `downwardAdjust(0)`，一次下滤完成换顶；先 `Pop` 再 `Push` 要经历一次下滤加一次上滤，调整动作约为其两倍,所以"堆满后新分数比堆顶大才替换"应走 ReplaceTop 语义；堆为空时 ReplaceTop 退化为 Push。〔C:go_frame/data_structure p64-125〕官方测试 `TestHeap` 用 `{50, 20, 49, 15, 30, 62}` `NewHeap` 后 `Build`、`Push(5)`，循环 `Pop` 全部元素，即一次堆排序。〔C:go_frame/data_structure p10-18〕
+之后的增删各是两步：`Push` 把元素 append 到数组尾部，再对新下标 `len-1` 做 `upwardAdjust`（比父小则交换并向上递归，到下标 0 为止）；`Pop` 取出 `arr[0]`，用最后一个元素覆盖堆顶、缩容 `arr[:len-1]`，再 `downwardAdjust(0)`，空堆返回错误。ReplaceTop 是维护 TopN 的关键路径：非空时直接 `arr[0] = ele` 后 `downwardAdjust(0)`，一次下滤完成换顶；先 `Pop` 再 `Push` 要经历一次下滤加一次上滤，调整动作约为其两倍,所以"堆满后新分数比堆顶大才替换"应走 ReplaceTop 语义；堆为空时 ReplaceTop 退化为 Push。〔C:go_frame/data_structure/heap.go:77-125〕官方测试 `TestHeap` 用 `{50, 20, 49, 15, 30, 62}` `NewHeap` 后 `Build`、`Push(5)`，循环 `Pop` 全部元素，即一次堆排序。〔C:go_frame/data_structure/heap.go:16-21〕
 
 ### container/heap 适配：五方法、两个坑
 
-标准库 `container/heap` 不提供现成堆类型，任何类型实现五个方法就能被 `heap.Init`/`heap.Push`/`heap.Pop` 操作：`Len() int`、`Less(i, j int) bool`、`Swap(i, j int)`、`Push(x interface{})`、`Pop() interface{}`。课程用 `PriorityQueue[T cmp.Ordered]`（底层 `[]*Item[T]`，`Item` 含 `Info string` 与 `Value T`）示范：〔C:go_frame/data_structure p8-36〕
+标准库 `container/heap` 不提供现成堆类型，任何类型实现五个方法就能被 `heap.Init`/`heap.Push`/`heap.Pop` 操作：`Len() int`、`Less(i, j int) bool`、`Swap(i, j int)`、`Push(x interface{})`、`Pop() interface{}`。课程用 `PriorityQueue[T cmp.Ordered]`（底层 `[]*Item[T]`，`Item` 含 `Info string` 与 `Value T`）示范：〔C:go_frame/data_structure/std_heap.go:1-36〕
 
 ```go
 func (pq PriorityQueue[T]) Less(i, j int) bool {
@@ -413,17 +413,17 @@ func (pq *PriorityQueue[T]) Pop() interface{} {
 }
 ```
 
-两个坑。**坑一：Less 的方向决定堆序语义**。`Less(i,j)` 返回 `pq[i] < pq[j]` 就是小根堆（堆顶最小），返回 `>` 就是大根堆（堆顶最大）,调转比较方向即在小根与大根之间切换。源码注释声称"golang 默认提供的是小根堆，而优先队列是大根堆，所以这里要反着定义 Less"，这个说法与代码实际行为不符：`<` 就是常规小根堆 Less，并未反向（反向应写 `>`）；`TestStdHeap` 的注释也写明 `heap.Pop` 删除的堆顶"即最小的元素"，逐个 Pop 得到按 Value 升序的输出。想要"每次弹出 Value 最大的元素"的优先队列，把 Less 改成 `>` 即可。〔C:go_frame/data_structure p17-19〕〔C:go_frame/data_structure p21-33〕
+两个坑。**坑一：Less 的方向决定堆序语义**。`Less(i,j)` 返回 `pq[i] < pq[j]` 就是小根堆（堆顶最小），返回 `>` 就是大根堆（堆顶最大）,调转比较方向即在小根与大根之间切换。源码注释声称"golang 默认提供的是小根堆，而优先队列是大根堆，所以这里要反着定义 Less"，这个说法与代码实际行为不符：`<` 就是常规小根堆 Less，并未反向（反向应写 `>`）；`TestStdHeap` 的注释也写明 `heap.Pop` 删除的堆顶"即最小的元素"，逐个 Pop 得到按 Value 升序的输出。想要"每次弹出 Value 最大的元素"的优先队列，把 Less 改成 `>` 即可。〔C:go_frame/data_structure/std_heap.go:5-23〕〔C:go_frame/data_structure/std_heap.go:12-23〕
 
-**坑二：Push/Pop 必须用指针接收者**。`Push` 里 `*pq = append(*pq, item)`，append 可能更换底层数组，必须把新 slice header 写回；`Pop` 里 `*pq = (*pq)[0:n-1]` 切掉尾元素改变了长度。两者都修改 slice header，因此接收者必须是 `*PriorityQueue[T]`,值接收者的修改作用在副本上会丢失。源码在两个方法上方分别标注"往slice里append,需要传slice指针""让slice指向新的子切片，需要传slice指针"。还有一处签名细节：接口要求 `Push(x interface{})`，实现里需要 `x.(*Item[T])` 把 any 断言回具体元素类型。〔C:go_frame/data_structure p26-36〕
+**坑二：Push/Pop 必须用指针接收者**。`Push` 里 `*pq = append(*pq, item)`，append 可能更换底层数组，必须把新 slice header 写回；`Pop` 里 `*pq = (*pq)[0:n-1]` 切掉尾元素改变了长度。两者都修改 slice header，因此接收者必须是 `*PriorityQueue[T]`,值接收者的修改作用在副本上会丢失。源码在两个方法上方分别标注"往slice里append,需要传slice指针""让slice指向新的子切片，需要传slice指针"。还有一处签名细节：接口要求 `Push(x interface{})`，实现里需要 `x.(*Item[T])` 把 any 断言回具体元素类型。〔C:go_frame/data_structure/std_heap.go:24-36〕
 
-调用侧的用法（`TestStdHeap`）：`make(PriorityQueue[int], 0, 10)` 后直接对 pq 逐个 `Push` 三个元素（普通 append，未建堆），`heap.Init(&pq)` 建堆，再 `heap.Push(&pq, D)` 走接口增元素，循环 `heap.Pop(&pq)` 实现堆排序；调用处一律传 `&pq`。对照第十三节 TopN：那里 `heap.Push(h, it)` 进堆、堆满后 `heap.Pop(h)` 再 `heap.Push(h, it)` 挤掉当前最小者，用的正是这套五方法协议。〔C:go_frame/data_structure p21-33〕〔W09-1 p22〕
+调用侧的用法（`TestStdHeap`）：`make(PriorityQueue[int], 0, 10)` 后直接对 pq 逐个 `Push` 三个元素（普通 append，未建堆），`heap.Init(&pq)` 建堆，再 `heap.Push(&pq, D)` 走接口增元素，循环 `heap.Pop(&pq)` 实现堆排序；调用处一律传 `&pq`。对照第十三节 TopN：那里 `heap.Push(h, it)` 进堆、堆满后 `heap.Pop(h)` 再 `heap.Push(h, it)` 挤掉当前最小者，用的正是这套五方法协议。〔C:go_frame/data_structure/std_heap.go:12-23〕〔W09-1 p22〕
 
-顺带对照手写版与标准库版的取舍：手写 `Heap[T]` 值语义内聚可控，标准库要求实现五方法接口但能适配任意类型与优先级规则。〔C:go_frame/data_structure p6-12〕
+顺带对照手写版与标准库版的取舍：手写 `Heap[T]` 值语义内聚可控，标准库要求实现五方法接口但能适配任意类型与优先级规则。〔C:go_frame/data_structure/binary_search.go:1-52〕
 
 ### 泛型 Set：comparable 约束与 struct{} 值
 
-第四个例子回到"类型本身带参数"。用 map 模拟 set 是 Go 社区多年的惯用法，Go 1.24 起泛型类型别名转正，可以给它一个带类型参数的具名类型：〔C:go_basic/v24 p3-4〕
+第四个例子回到"类型本身带参数"。用 map 模拟 set 是 Go 社区多年的惯用法，Go 1.24 起泛型类型别名转正，可以给它一个带类型参数的具名类型：〔C:go_basic/v24/generic_type_alias.go:1-11〕
 
 ```go
 type Set[T comparable] map[T]struct{}
@@ -434,18 +434,18 @@ func NewSet[T comparable](n int) Set[T] {
 }
 ```
 
-三个设计点：**约束必须是 `comparable`**,map key 要求可比较，若约束放宽为 `any`，函数、map、切片这类不可比较的类型也能实例化 `Set`，`map[T]struct{}` 那行无法通过编译；`comparable` 把 key 合法性交给类型系统在编译期保证。**值类型选 `struct{}`**,零大小、所有空结构体同址零内存，只借 key 的存在性表达成员关系，不像 `map[T]bool` 每个值还要占一个字节。**`NewSet` 的参数 n** 用于 `make(map[T]struct{}, n)` 预分配容量、减少扩容；`make` 返回的是匿名 map 类型，最后要 `Set[T](m)` 显式转换一次回具名类型再返回。〔C:go_basic/v24 p3-9〕
+三个设计点：**约束必须是 `comparable`**,map key 要求可比较，若约束放宽为 `any`，函数、map、切片这类不可比较的类型也能实例化 `Set`，`map[T]struct{}` 那行无法通过编译；`comparable` 把 key 合法性交给类型系统在编译期保证。**值类型选 `struct{}`**,零大小、所有空结构体同址零内存，只借 key 的存在性表达成员关系，不像 `map[T]bool` 每个值还要占一个字节。**`NewSet` 的参数 n** 用于 `make(map[T]struct{}, n)` 预分配容量、减少扩容；`make` 返回的是匿名 map 类型，最后要 `Set[T](m)` 显式转换一次回具名类型再返回。〔C:go_basic/v24/generic_type_alias.go:1-37〕
 
-五操作与底层 map 操作一一对应：`Add` 置 `set[ele] = struct{}{}`；`Len` 复用 `len(set)`；`Remove` 复用 `delete(set, ele)`；`Exists` 用 `_, exists := set[ele]` 的 comma-ok 双返回判存在；`Range` 用 `for key := range set` 遍历并对每个 key 调用回调 `f func(ele T)`，回调式设计不暴露内部 map，调用方拿到的是元素而非底层容器。`Exists` 必须用双返回：值类型 `struct{}` 的零值不含任何信息，直接读 value 无法区分 key 存在与否，只能靠第二个返回值 exists。〔C:go_basic/v24 p11-37〕
+五操作与底层 map 操作一一对应：`Add` 置 `set[ele] = struct{}{}`；`Len` 复用 `len(set)`；`Remove` 复用 `delete(set, ele)`；`Exists` 用 `_, exists := set[ele]` 的 comma-ok 双返回判存在；`Range` 用 `for key := range set` 遍历并对每个 key 调用回调 `f func(ele T)`，回调式设计不暴露内部 map，调用方拿到的是元素而非底层容器。`Exists` 必须用双返回：值类型 `struct{}` 的零值不含任何信息，直接读 value 无法区分 key 存在与否，只能靠第二个返回值 exists。〔C:go_basic/v24/generic_type_alias.go:12-37〕
 
-官方测试 `TestSet` 位于外部测试包 v24_test、只依赖公开 API：`NewSet[int](10)` 后 `Add 2、4、6`，断言 `Len()==3`、`Exists(2)` 为真；`Remove(2)` 后断言 `Exists(2)` 为假、`Len()==2`；最后 `Range` 逐个回调打印，实测输出 4、6（map 遍历无序）。实测 TestSet PASS。〔C:go_basic/v24 p9-32〕〔实测：work/run/C_go_basic__v24/E1/out.txt〕
+官方测试 `TestSet` 位于外部测试包 v24_test、只依赖公开 API：`NewSet[int](10)` 后 `Add 2、4、6`，断言 `Len()==3`、`Exists(2)` 为真；`Remove(2)` 后断言 `Exists(2)` 为假、`Len()==2`；最后 `Range` 逐个回调打印，实测输出 4、6（map 遍历无序）。实测 TestSet PASS。〔C:go_basic/v24/generic_type_alias_test.go:9-52〕〔实测：work/run/C_go_basic__v24/E1/out.txt〕
 
 ### 小结与连线
 
-- 泛型二分的边界是 `begin <= end`：区间剩一个元素时仍要比较一次；区间版 `BinarySearch4Section` 用 begin/end 双端短路找第一个 `>=target` 的下标。多命中只返回其中某一个，不保证最左或最右。〔C:go_frame/data_structure p8-52〕
-- 手写堆用数组隐式存完全二叉树（左 2i+1、右 2i+2、父 (i-1)/2）；`Build` 自底向上按三角形逆序下滤是 O(N) 建堆；`Push` 上滤、`Pop` 尾换头后下滤；`ReplaceTop` 一次下滤，比 Pop+Push 少一半调整。〔C:go_frame/data_structure p20-66〕
-- `container/heap` 适配五方法 `Len/Less/Swap/Push/Pop`；Less 方向决定小根/大根，Push/Pop 改 slice header 必须指针接收者。〔C:go_frame/data_structure p8-36〕
-- `type Set[T comparable] map[T]struct{}` 是 Go 1.24 起的惯用法类型化：comparable 保证 key 可比较，struct{} 值零成本，五操作各自对应一个 map 操作。〔C:go_basic/v24 p3-37〕
+- 泛型二分的边界是 `begin <= end`：区间剩一个元素时仍要比较一次；区间版 `BinarySearch4Section` 用 begin/end 双端短路找第一个 `>=target` 的下标。多命中只返回其中某一个，不保证最左或最右。〔C:go_frame/data_structure/binary_search.go:26-52〕
+- 手写堆用数组隐式存完全二叉树（左 2i+1、右 2i+2、父 (i-1)/2）；`Build` 自底向上按三角形逆序下滤是 O(N) 建堆；`Push` 上滤、`Pop` 尾换头后下滤；`ReplaceTop` 一次下滤，比 Pop+Push 少一半调整。〔C:go_frame/data_structure/heap.go:22-125〕
+- `container/heap` 适配五方法 `Len/Less/Swap/Push/Pop`；Less 方向决定小根/大根，Push/Pop 改 slice header 必须指针接收者。〔C:go_frame/data_structure/std_heap.go:1-36〕
+- `type Set[T comparable] map[T]struct{}` 是 Go 1.24 起的惯用法类型化：comparable 保证 key 可比较，struct{} 值零成本，五操作各自对应一个 map 操作。〔C:go_basic/v24/generic_type_alias.go:1-37〕
 
 这些结构都不是玩具：第十三节榜单 TopN 的小顶堆、业务里常见的去重集合，落点就是它们。判断"这里能不能用泛型"的判据，下一节展开。
 
