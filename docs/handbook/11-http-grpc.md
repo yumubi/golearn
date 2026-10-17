@@ -360,7 +360,7 @@ JWT 不可变，"退出登录"没法把已签发的 token 变无效:多实例下
 
 ### OAuth2 扫码：第三方登录是授权的特例
 
-微信扫码登录本质是 OAuth2 授权码流程，三步：跳微信的授权页（后端拼 URL）、用户扫码确认、微信带着 `code` 回调你注册的 `redirect_uri`，后端再拿 `code+appid+secret` 换 `access_token`，最后 open_id 走 FindOrCreateByWechat 建账号。拼 URL 的五个参数：appid、redirect_uri（必须是注册时填的域名）、response_type=code、scope=snsapi_login、state（随机 UUID）。〔W05-1 p4-12〕〔W05-1 p15-16〕〔W05-1 p23〕〔W05-1 p2〕
+微信扫码登录本质是 OAuth2 授权码流程，三步：跳微信的授权页（后端拼 URL）、用户扫码确认、微信带着 `code` 回调你注册的 `redirect_uri`，后端再拿 `code+appid+secret` 换 `access_token`，最后 open_id 走 FindOrCreateByWechat 建账号。拼 URL 的五个参数：appid、redirect_uri（必须是注册时填的域名）、response_type=code、scope=snsapi_login、state（随机 UUID）。〔W05-1 p4-8〕〔W05-1 p9-12〕〔W05-1 p15-16〕〔W05-1 p23〕
 
 两个细节最容易被糊弄过去。其一，**URL 由后端拼**而不是前端：state 要在后端校验，后端拼了改起来才方便。其二，state 防的是 CSRF 登录绑定攻击：攻击者先用自己的微信走一遍授权拿到 code，伪造页面诱导已登录用户点击，把攻击者的微信绑到受害者账号上；有 state（登录时发、回调时验）这条路就走不通。换回来的字段有两组：授权侧 access_token/expires_in/refresh_token，ID 侧 open_id/union_id。同一用户在 A、B 两个产品各有 open_id，union_id 全公司同一个，多产品账号打通靠它。你还能认出来：**微信的 access/refresh 就是长短 token 的原型**，自研双 token 方案就是从这里抄的作业。〔W05-1 p20-22〕〔W05-1 p24〕〔W05-1 p28-29〕
 
@@ -678,7 +678,7 @@ HTTP 侧的坑（超时只设一个、忘关 `resp.Body`、把 `http.ErrServerCl
 - 多 proto 文件组织靠 `--proto_path` 多路径解析 import，裸文件名在多路径下有同名歧义，标准做法是 import 全路径 `google/protobuf/timestamp.proto` 并把 proto_path 指向 include 目录；跨包引用字段要带 proto package 名（`model.com.user`）；`--go_opt=Mmodel/user.proto=a/b/c/model` 改写生成代码的 import，目标必须与 go.mod 的 module 名一致，否则编译报 package not in std。Timestamp 这类 well-known 类型生成 `*timestamppb.Timestamp`。〔C:go_basic/protoc/dao/product.proto:8-12〕〔C:go_basic/protoc/model/user.proto:9-14〕〔C:go_basic/protoc/go.mod:1-2〕
 - 生成代码头部有版本锚定：`EnforceVersion(20)` 与 MaxVersion 双向断言生成器与运行库兼容，SupportPackageIsVersion9 要求 grpc v1.64 以上；遇到版本不匹配先看这里。〔C:go_basic/protoc/model/user.pb.go:1-24〕
 
-省略未吸收：TB09 的项目布局五要素与仿 database/sql 工厂已在 05 节讲过；W04-2 的 sql.NullString 与 JsonColumn 属于数据库主题（见 22 节）；W05-1 的 verifyState 实现细节与 W13-2 的 Kratos 作业属于框架与作业范畴；W02-1 的 gin 输入输出 API 全景与 ctx.Get 系列是 API 目录不是机制；W04-1 的 Redis 数据结构清单属 12 节缓存主题；W10-1 的 DDD 八概念正文仅留速记（p15 的概念总览已在速记条目里）；C 单元的模板渲染、Cookie 解析 API 细节与 bufconn 练习未收。W05-1 p2、W10-1 p2 为目录页，无知识点可收。
+省略未吸收：TB09 的项目布局约定见 02 节，仿 database/sql 工厂已在本节 TB09 干货块展开；W04-2 的 sql.NullString 与 JsonColumn 已在 13 节验证码登录干货块展开，NULL 的三种处理方式见 12 节；W05-1 的 verifyState 实现细节与 W13-2 的 Kratos 作业属于框架与作业范畴；W02-1 的 gin 输入输出 API 全景与 ctx.Get 系列是 API 目录不是机制；W04-1 的 Redis 数据结构清单是选读内容，缓存机制见 13 节；W10-1 的 DDD 八概念正文仅留速记（p15 的概念总览已在速记条目里）；C 单元的模板渲染、Cookie 解析 API 细节与 bufconn 练习未收。W05-1 p2、W10-1 p2 为目录页，无知识点可收。
 
 ## 想深入去哪查
 

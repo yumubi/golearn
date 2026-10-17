@@ -5,7 +5,7 @@ title: 12 数据库：连接池、事务纪律与 ORM 的取舍
 # 12 数据库：连接池、事务纪律与 ORM 的取舍
 
 
-> 详细程度：标准 · 约 60 分钟
+> 详细程度：标准 · 约 65 分钟
 > 材料：W02-2、W06-2、W16-1、C:go_basic/database、C:go_frame/orm、旧长版 `notes/p9-database.md` `notes/p11-sqlc-goose.md` `notes/p12-sqlc-pgx.md`
 > 前置：10 分层与依赖注入
 
@@ -390,7 +390,7 @@ err: 非法领域状态: 9
 ## 六、树形评论：四种建模，选一种
 
 
-前面都在讲"一张平表怎么读写"。评论是关系建模的进阶题：它天然是树（可被回复），查询是高并发场景（打开资源必加载），删的是子树。同样的树，四种建模差别巨大：〔W16-1 p7-12〕
+前面都在讲"一张平表怎么读写"。评论围绕文章、视频这类资源展开，评论本身也能被回复和点赞；打开资源就要加载评论，所以查询是高并发场景。〔W16-1 p4〕回复把评论连成树，删除时可能要删整个子树。同样的树，四种建模差别巨大：〔W16-1 p7-12〕
 
 | 建模 | 形状 | 查子节点 | 评价 |
 |---|---|---|---|
@@ -399,7 +399,7 @@ err: 非法领域状态: 9
 | Nested Set | `nsleft/nsright` 存 DFS 序 | 区间查询 | 插入要改半张表，难维护 |
 | Closure Table | 另一张 `TreePaths(祖先,后继)` | 直接查 | 数据量爆炸 |
 
-课程按三层查询场景选型：资源首页第一页评论、每条评论的前几条回复、点"更多"加载整棵回复。核心操作是"查某节点的子节点"，邻接表一条 `WHERE pid=?` 解决，其余三种要么查询别扭要么写入昂贵，落选。表上再补一个 **RootID 冗余列**（回复与它所属的根评论同值），"加载更多回复"就从递归遍历退化成 `WHERE root_id=? AND id<? ORDER BY id DESC LIMIT ?`，一次查询出整棵回复列表；分页不用 offset（offset 有并发漂移），用 min_id keyset。索引三件：Uid（查自己的评论）、Biz+BizID 复合（按资源查）、PID（查子节点）。〔W16-1 p15-19〕〔W16-1 p26〕〔W16-1 p30-31〕
+课程先拆出三层查询场景：资源首页第一页评论、每条评论的前几条回复、点"更多"加载后续回复。〔W16-1 p5〕核心操作是"查某节点的子节点"，邻接表一条 `WHERE pid=?` 解决，其余三种要么查询别扭要么写入昂贵，落选。表上再补一个 **RootID 冗余列**（回复与它所属的根评论同值），"加载更多回复"就从递归遍历退化成 `WHERE root_id=? AND id<? ORDER BY id DESC LIMIT ?`，按页查询根评论下的回复列表；分页不用 offset（offset 有并发漂移），用 min_id keyset。索引三件：Uid（查自己的评论）、Biz+BizID 复合（按资源查）、PID（查子节点）。〔W16-1 p15-19〕〔W16-1 p26〕〔W16-1 p30-31〕
 
 删除子树的两条路：手动级联（循环"找父=当前 id 的行再删"，几层就几次；path 建模可 `DELETE WHERE path LIKE` 一条搞定）与 GORM 外键 `OnDelete:CASCADE` 交给数据库。写量大的平台（Kafka 异步削峰在 13 节展开）和热门/非热门分级限流是评论系统的并发配套，属于 16 节稳定性话题，这里记住数据形状就够。〔W16-1 p18〕〔W16-1 p19-21〕
 
@@ -531,9 +531,38 @@ func main() {
 - 加载更多的缓存命中率天然低，因为大多数人不点；用户点了一次就预加载下一页写缓存，因为点过的人大概率要看完全部。〔W16-1 p32〕
 - 读写分组部署：查 100 实例一个读组、增删 20 实例一个写组，客户端负载均衡各走各的；读组故障把部分流量导入写组，本质是分组加动态流量调度（`read_weight`/`write_weight` 可实现），代价是临时牺牲写吞吐。〔W16-1 p33〕
 - 评论限流按资源热度分开：热门 400/s、非热门 100/s 各自限流；降级时只查热门资源的评论，非热门直接给空态。〔W16-1 p29〕
-### W06-2 状态映射与 Mongo 索引
+
+### W06-2 状态映射、Mongo 查询与索引
 
 - 状态映射：领域状态最真实，存储里的状态是衍生/辅助；DAO 层直接写 `uint8` 魔法值可接受但不优雅，集中定义更好。〔W06-2 p10〕
+- BSON 四类型各管一种形状：`bson.E` 是一个键值对，`bson.D` 是保留顺序的 E 切片，`bson.M` 是 `map[string]any`，`bson.A` 是表达 BSON 数组的切片。Value 可以继续嵌套这些类型。构造查询时先分清文档与数组，再把操作符放到对应的层。〔W06-2 p20-21〕
+
+下面沿用课件的 Go driver v1 包路径：`bson` 来自 `go.mongodb.org/mongo-driver/bson`，`options` 来自 `go.mongodb.org/mongo-driver/mongo/options`。这些是函数体内的查询片段，`col` 是已经取得的集合，`ctx` 是调用方传入的 context。〔W06-2 p15〕〔W06-2 p20-21〕〔W06-2 p22-25〕
+
+```go
+conditions := bson.A{
+	bson.D{{Key: "id", Value: int64(123)}},
+	bson.D{{Key: "id", Value: int64(234)}},
+}
+orFilter := bson.D{{Key: "$or", Value: conditions}}
+
+andFilter := bson.D{{Key: "$and", Value: bson.A{
+	bson.D{{Key: "id", Value: int64(123)}},
+	bson.D{{Key: "title", Value: "有标题"}},
+}}}
+
+inFilter := bson.D{{Key: "id", Value: bson.D{
+	{Key: "$in", Value: bson.A{int64(123), int64(234)}},
+}}}
+projection := options.Find().SetProjection(bson.D{
+	{Key: "id", Value: 1},
+})
+```
+
+`orFilter` 表示两个 ID 任意一个匹配；`andFilter` 要求 ID 和标题同时匹配。两者的操作符都接一个条件数组，所以是 A 包 D，再由 D 里的 E 表达条件。`inFilter` 则先定位字段 id，再把 `$in` 文档放进这个字段的 Value。〔W06-2 p22-24〕
+
+`col.Find(ctx, inFilter, projection)` 按条件找文档，并用 Projection 选择返回字段；课件用 `{id: 1}` 请求 id 字段。换成另外两个 filter，就得到 OR 或 AND 查询。Find 返回后先检查 error，再读取 cursor，并关闭 cursor；课程用 `cursor.All(ctx, &articles)` 把结果解码到切片，传入的是切片指针。〔W06-2 p22-25〕
+
 - Mongo 建唯一索引一行：`col.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: ..., Options: options.Index().SetUnique(true)})`，键按业务最常用的查询条件选。〔W06-2 p26〕
 
 省略未吸收：W02-2 的 docker-compose 起 MySQL（K6，环境搭建，非数据库知识）、模型标签清单细节（K5，上面已给出查文档的结论）；W16-1 的面试要点页（K22）；W06-2 的 p2 为单元概览页，内容已由正文与本块覆盖。其余必读条目已融入正文或本块。

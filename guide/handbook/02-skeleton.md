@@ -111,7 +111,9 @@ go install example.com/cmd/tool@latest  # 安装可执行文件
 
 依赖下载走 `GOPROXY`（默认官方代理，国内常换成 goproxy.cn），拉下来的内容存进本地 module 缓存（`GOMODCACHE`，默认 `$GOPATH/pkg/mod`），同一个版本全机器只存一份、只读。离线或 CI 场景用 `go build -mod=vendor` 走仓库里的 `vendor/` 目录；1.14 起顶层有 `vendor/` 时默认就优先用它。〔TB06 p8〕〔TB07 p10〕
 
-本地联调用 `replace` 指向本地路径，缺点是路径因人而异、而且 `go.mod` 要提交；Go 1.18 的 `go.work` 工作区把这种配置放进不进仓库的文件里，更适合。〔TB35b p2-4〕私有 module 用 `GOPRIVATE` 绕过公共代理和校验；企业内网的标准做法是自建一个 goproxy 统一代理内外所有 module，开发者只配一个地址，心智负担最低。〔TB35b p5-8〕
+本地联调用 `replace` 指向本地路径，缺点是路径因人而异、而且 `go.mod` 要提交；Go 1.18 的 `go.work` 工作区把这种配置放进不进仓库的文件里，更适合。〔TB35b p2-4〕
+
+私有 module 要先选拉取方式。开发机直连仓库时，用 `GOPRIVATE` 让私有路径绕过代理与公共校验；由企业代理统一拉取时，开发机把 `GOPROXY` 指向企业代理，用 `GONOSUMDB` 排除私有路径的公共校验。后者还要求代理持有仓库访问权限，具体配置与自定义路径映射见本节干货块。〔TB35b p5-8〕〔TB35b p14〕
 
 发布侧的两个冷知识。其一，Go 1.17 起依赖图剪枝：`go.mod` 声明 `go 1.17` 后，构建只用直接依赖与真正被用到的间接依赖的 `go.mod`，但 `go mod tidy` 会把全部间接依赖记进 `go.mod`（分块 `// indirect`），它第一次有了 lock 文件的完整列表效果。〔TBX02 p4-8〕其二，某个版本发坏了（比如 `v1.0.2` 有致命 bug），**删 tag 重发是无效的**：版本一旦被任何一个 goproxy 缓存，后续请求不回源，散布在各代理里的坏版本继续传播，源仓库删了也没用。正解是发 `v1.0.3` 修复版（MVS 保证没显式升级的消费者不受影响），再在 `v1.0.3` 的 `go.mod` 里 `retract v1.0.2` 作废旧版（只提示不强制，`go list` 会显示 retracted）；作废整个大版本用首行 `// Deprecated:` 注释。〔TBX11 p5-12〕
 
@@ -275,9 +277,14 @@ pprof 采集有两条路：在线服务 `import _ "net/http/pprof"` 再开一个
 
 ### TB35b 与 TBX11 私有仓库与发布布局
 
-- 私有 module 的导入路径问题:内部 vcs 通常没有域名,导入路径又不能写 IP,解法是为私有 module 自定义统一路径(如 mycompany.com/go/module1),再配 GOPRIVATE/GONOSUMDB 让 go 命令绕过公共代理与校验。〔TB35b p10〕
-- 自建 goproxy 的价值:统一内部依赖出口、加速、审计;go.work 只影响本机构建选择,不影响 go.mod 内容。〔TB35b p10-14〕
-- 无 monorepo 强约束时的默认解:单 repo 单 module,module path 与仓库地址一致,打 tag 即版本号;pkg 导入路径 = module path + /pkgN。〔TBX11 p2-3〕
+- 开发机直连私有仓库：把私有路径前缀写入 `GOPRIVATE`，匹配的 module 默认绕过 `GOPROXY` 与公共校验数据库。每个开发者都要有仓库访问凭证；公共 module 仍可走公共或企业代理。〔TB35b p5-7〕
+- 企业代理统一拉取：开发机的 `GOPROXY` 指向企业代理，`GONOSUMDB` 填私有路径前缀，例如 `mycompany.com/go`；仓库凭证由代理持有。若开发机还配置了 `GOPRIVATE`，本机 `go help private` 给出的做法是再设 `GONOPROXY=none`，覆盖默认的绕过代理行为，让私有 module 也经过企业代理。〔TB35b p7〕〔TB35b p14〕
+- 自建代理先验证公共依赖：课程选 goproxy.io 的开源实现，编译后以 `-listen=0.0.0.0:8081 -cacheDir=...` 启动。开发机把 `GOPROXY` 指向它，下载一个公共 module，确认代理缓存里出现记录，再接私有仓库。监听地址与端口是课程环境的示例值。〔TB35b p8-10〕
+- 自定义路径还要能找到真实仓库：例如 `mycompany.com/go/module1` 对应内网的 SSH 仓库。课程让代理用 `-exclude` 排除私有路径的公共上游转发，再在代理节点的 hosts 中把 `mycompany.com` 指向本机；nginx 监听 80 端口，把 `/go` 请求转给监听 8080 的 govanityurls。〔TB35b p10-12〕
+- govanityurls 的 `vanity.yaml` 登记路径到仓库的映射：`host: mycompany.com`，`paths` 下的 `/go/module1` 配 `repo: ssh://admin@10.10.30.30/module1` 与 `vcs: git`。它返回仓库定位信息，代理再拉取、缓存并返回代码。新增 module 要补这份映射；开发机的 `GONOSUMDB=mycompany.com/go` 覆盖整个私有前缀。〔TB35b p13-14〕
+- 无 monorepo 强约束时，默认选单 repo 单 module，module path 与仓库地址一致，打 tag 即版本号；包导入路径是 module path 加 `/pkgN`。多 module 仓库则把子目录写进 module path，并用 `module1/v1.0.0` 这样的 tag 独立发布。〔TBX11 p2-4〕
+- 发布公测版要告诉使用者显式执行 `go get github.com/bigwhite/srsm@v1.1.0-beta.1`。`@latest` 优先选正式版，仓库已有正式版时不会用新的 beta 替代它；没有正式版时才会选预发布版。课件中“不获取公测版”的说法以已有正式版为前提。〔TBX11 p4〕
+- major branch 的升级步骤：建立并切到 `v2` 分支，把 `go.mod` 的 module path 改成 `example.com/lib/v2`，并把内部包之间的 import 一起改成 `example.com/lib/v2/...`。只改 module path 会让新版本代码继续引用旧 major 的包；旧版留在 main，新分支用 `v2.x.x` tag 发布。〔TBX11 p12-13〕
 - 寄存器调用惯例(1.17)的影响面:绝大多数程序无感,受影响的只有违反 unsafe.Pointer 规则的代码(用 unsafe.Pointer 访问函数参数、比较函数代码指针这类未公开行为)。〔TBX02 p12-14〕
 - 1.17 的语言级小改进落在切片上:此前"数组能切片化、切片不能转回数组",只能 unsafe.Pointer 黑魔法;现在 `p := (*[3]int)(b)` 直接把切片转成数组指针,对 `p[1]` 的修改会反映回原切片。十二年前提的 issue 落地成语法。〔TBX02 p2-3〕
 
