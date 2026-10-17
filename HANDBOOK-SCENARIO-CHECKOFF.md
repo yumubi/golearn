@@ -7,7 +7,7 @@
 
 | # | 场景 | 节 | 状态 | runId | 提交 |
 |---|---|---|---|---|---|
-| 1 | SC-pay 支付打赏与回调 | 18 | 在途批次 | handbook-batch-mvbtdj1z-1jtewp | |
+| 1 | SC-pay 支付打赏与回调 | 18 | 已落盘(双审 16/16,修订 1 轮) | handbook-batch-mvbtdj1z-1jtewp | 26781e4 |
 | 2 | SC-ledger 记账与转账 | 18/17 | 已完整(随 SC-pay 批次核 K15/K18) | | |
 | 3 | SC-migrate 迁移与调度 | 17 | 已完整 | | |
 | 4 | SC-smscode 验证码与短信 | 11/16 | 已完整 | | |
@@ -18,7 +18,7 @@
 | 9 | SC-mq 消息队列 | 13 | 已完整 | | |
 | 10 | SC-rank 榜单与定时 | 13/20 | 已完整 | | |
 | 11 | SC-tolerance 第三方容错 | 16/10 | 已完整 | | |
-| 12 | SC-follow 关注与 Feed | 21/25 | 遗漏(教学推导缺失) | | |
+| 12 | SC-follow 关注与 Feed | 21/25 | 已落盘(双审 6/6,修订 1 轮) | handbook-batch-mvbtk2wc-qrnxm3 | bf6bc40 |
 | 13 | SC-search 搜索与标签 | 21 | 已完整 | | |
 | 14 | SC-im IM | 21 | 已完整 | | |
 | 15 | SC-msvc 微服务拆分 | 19 | 已完整 | | |
@@ -26,10 +26,10 @@
 | 17 | SC-obs 可观测性 | 15 | 已完整 | | |
 | 18 | SC-deploy 部署 K8s | 23 | 已完整 | | |
 | 19 | SC-dns DNS 项目 | 24 | 已完整 | | |
-| 20 | SC-lang 语言基础 | 01-09 | 遗漏(两个泛型单元未归并) | | |
-| 21 | SC-rpc 手写迷你 RPC | 11 | 遗漏(my_rpc 9 必读 ZERO) | | |
-| 22 | SC-generics-ds 泛型数据结构 | 09 | 遗漏 | | |
-| 23 | SC-generics-alias 泛型别名 Go1.24 | 09 | 遗漏 | | |
+| 20 | SC-lang 语言基础 | 01-09 | 已完整(SC-generics 落盘后未归并单元清零) | handbook-batch-mvbtkrau-i1rssy | adb431a |
+| 21 | SC-rpc 手写迷你 RPC | 11 | 已落盘(双审 12/12,零 issue) | handbook-batch-mvbtb2jz-1jtewp | 1900419 |
+| 22 | SC-generics-ds 泛型数据结构 | 09 | 已落盘(双审 12/12) | handbook-batch-mvbtkrau-i1rssy | adb431a |
+| 23 | SC-generics-alias 泛型别名 Go1.24 | 09 | 已落盘(同批次) | handbook-batch-mvbtkrau-i1rssy | adb431a |
 
 ## 有理由省略(依据)
 
@@ -53,6 +53,7 @@
 
 ## 续接记录
 
-- 已完成:主控预审 23 个场景(页码交集+正文抽查),15 个判已完整;SC-pay 工作流批次在途(8 条目,双审中)。
-- 待批次:SC-follow(21 节新关注语义教学推导,W19-1 原文止 p44)、SC-rpc(11 节 my_rpc)、SC-generics-ds/alias(09 节)。
+- 已完成:主控预审 23 个场景;4 个工作流批次(SC-pay/SC-follow/SC-rpc/SC-generics-ds+alias)全部双审通过并落盘,23/23 场景收口。
+- 批次回执:SC-pay 26781e4(18 节)、SC-follow bf6bc40(21 节)、SC-rpc 1900419(11 节)、SC-generics adb431a(09 节,含二分推演修正 a9bd2f2)。
+- 审稿闭环实绩:fidelity 各揪出 1 处(骨架归属、推演自相矛盾、口径外推),writer 修订轮修复;learner 全部 6/6 或 8/8。
 - 阻塞:无。
