@@ -145,7 +145,7 @@ func main() {
 fatal error: all goroutines are asleep - deadlock!
 ```
 
-第二个：向已关闭的 channel 发送。这解释了开头的现象为什么只限于"接收"：接收方从关闭的 channel 读是安全的，发送方往关闭的 channel 写必 panic：
+第二个：向已关闭的 channel 发送。开头那段代码里 `close(ch)` 之后 `<-ch` 还读出了缓冲里的 `1` 和零值 `0 false`，说明关闭只是封了发送端，接收一直是安全的；这一条反过来：往已关闭的 channel 发送必 panic：
 
 ```go fail
 package main
@@ -524,7 +524,7 @@ func main() {
 
 - Mutex 内部只有 state 和 sema 两个字段，零值就是未锁定状态，所以锁可以零值可用、无须初始化；复制一个 Mutex 就是复制这两个整型字段，原变量与副本从此各管各的，同步失效。锁处于锁定状态时复制副本再加锁，加锁的 goroutine 会永久阻塞。〔TB34 p5-6〕
 - Mutex 的两条使用原则：临界区尽量短，减少别人等待的时间；一定记得 Unlock，配合 defer 兜底，忘解锁会导致局部甚至整个程序死锁。〔TB34 p7〕
-- RWMutex 基准里的关键数字：读锁耗时恒定在 40ns 左右，写锁随并发数恶化（32 核时 86ns）；Mutex 在并发小时最快（16ns），并发大了竞争加剧。原子读 0.24 到 0.74ns，约为读锁的 200 倍，且并发增大还有提升空间。〔TB34 p8-10,16-18〕
+- RWMutex 基准里的关键数字：读锁耗时恒定在 40ns 左右，写锁随并发数恶化（32 核时 86ns）；Mutex 在并发小时最快（16ns），并发大了竞争加剧。原子读 0.24 到 0.74ns，约为读锁的 200 倍，且并发增大还有提升空间。〔TB34 p8-10〕〔TB34 p16-18〕
 - atomic 是 channel 与 sync 原语的实现基础，由硬件指令直接支持：`SwapInt64` 就是对 x86_64 `XCHGQ` 指令的汇编封装；普通 `a++` 是 LOAD/ADD/STORE 三条可中断指令，原子操作是不可中断的指令级"事务"。〔TB34 p14-15〕
 - Cond 的适用面比 Mutex/RWMutex 窄得多：没有 Cond 就得连续轮询条件，goroutine 活着但没进展，白耗资源；Broadcast 唤醒后条件可能已被别人改变，所以必须 `for !cond { Wait() }` 重新判定。channel 加 sync 原语已覆盖绝大多数同步需求。〔TB34 p10-14〕
 
