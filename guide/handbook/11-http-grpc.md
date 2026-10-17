@@ -432,6 +432,96 @@ func main() {
 
 标准库和 gin 怎么选：服务简单、想少依赖，1.22 以后的 `ServeMux` 够用；团队已经熟悉 gin 或者需要它的绑定校验时选 gin。两边的 handler 都能套进同样的"中间件等于包装函数"思路，没有谁更"正确"。
 
+## 四点五、RPC 的三块基石:序列化、粘包、请求关联
+
+前面几节一直在"框架给你什么"的层面看接口形态。gRPC 之所以用起来顺手,是因为它把三件底层的事都替你做完了:把结构体变成字节流(序列化)、在字节流上认出一条条消息(边界)、把响应送回正确的等待者(请求关联)。课程里有一个手写的迷你 RPC,把这三件事全部摊开在源码里,读完再看 gRPC,就能看清它替你做了什么。〔C:dachang/my_rpc/serialization/my_serializer.go:40-97〕
+
+### 序列化:一个接口三个引擎
+
+迷你 RPC 的序列化层只约定两个方法,`Marshal(object any) ([]byte, error)` 和 `Unmarshal(stream []byte, object any) error`,Gob、JSON、手写二进制三个实现全挂在这条最小契约上:〔C:dachang/my_rpc/serialization/serializer.go:4-7〕
+
+| 实现 | 底层引擎 | 写法 |
+|---|---|---|
+| `Gob{}` | 标准库 `encoding/gob` | `bytes.Buffer` 上套 `gob.NewEncoder/NewDecoder` 做 `Encode/Decode`〔C:dachang/my_rpc/serialization/gob.go:9-20〕 |
+| `Json{}` | `bytedance/sonic` | `Marshal/Unmarshal` 直接转发给 sonic〔C:dachang/my_rpc/serialization/json.go:3-15〕 |
+| `MySerializer{}` | 手写五段式二进制协议 | 反射取字段再走参数化编解码,下一小节展开〔C:dachang/my_rpc/serialization/my_serializer.go:183-196〕 |
+
+切换实现不碰任何业务代码,`common.go` 里一个全局变量说了算,生效行之外的两行注释着,换实现挪个注释就行:〔C:dachang/my_rpc/common.go:14-16〕
+
+```go
+var Serializer = serialization.MySerializer{}
+
+// var Serializer = serialization.Json{}
+// var Serializer = serialization.Gob{}
+```
+
+测试对象是一个混合了五种基础类型的 `RpcData`:`A int`、`B float32`、`C bool`、`D float64`、`E string`、`Id string`,外加一个故意放进去的小写字段 `f int`。源码注释明说:可导出的字段才会被序列化,`f` 不可导出,不进字节流〔C:dachang/my_rpc/common.go:8-13〕;序列化和反序列化两头的反射循环都用 `IsExported()` 把非导出字段跳过去〔C:dachang/my_rpc/serialization/my_serializer.go:186-196〕。这带来一个容易忽略的约束:字节流里只有"一列导出字段的值",没有字段名。两端结构体的导出字段集(顺序加类型)必须对齐,否则反序列化就整体错位。gRPC 用 `.proto` 契约给两端发同一份生成代码,杜绝的正是这一类错位。
+
+### 手写五段式二进制协议
+
+`MySerializer` 的协议按传输顺序分五段,序列化入口是批量的 `MarshalArguments(arguments ...any)`:〔C:dachang/my_rpc/serialization/my_serializer.go:40-97〕
+
+| 段 | 内容 | 占用 |
+|---|---|---|
+| ① | 魔数 `MAGIC` | 5 字节,`{37, 61, 57, 23, 111}`〔C:dachang/my_rpc/serialization/my_serializer.go:21〕 |
+| ② | 参数个数 | 8 字节,大端 int64 |
+| ③ | 每参数 1 字节类型枚举 | `iota` 顺序 `TYPE_INT=0/TYPE_BOOL/TYPE_FLOAT32/TYPE_FLOAT64/TYPE_STRING`〔C:dachang/my_rpc/serialization/my_serializer.go:9-15〕 |
+| ④ | 每参数 8 字节长度 | 大端 int64 |
+| ⑤ | 所有参数内容按序顺排 | 各参数长度之和 |
+
+两个实现细节值得点出来。第一,一个 `int` 参数写进流之前被显式转成 `int64` 再 `binary.Write`(源码注释:`binary.Write` 要求定长类型,`int` 的长度跟机器有关):〔C:dachang/my_rpc/serialization/my_serializer.go:48-69〕
+
+```go
+case int:
+	err := binary.Write(buffer, binary.BigEndian, int64(v))
+```
+
+第二,拼包是先攒后拼:类型 switch 循环里各参数内容先写进 scratch buffer,最后才按 ①→④ 写头、在尾部追加内容 buffer,总容量按 `len(MAGIC)+8+len(types)+8*len(types)+内容` 一次预分配〔C:dachang/my_rpc/serialization/my_serializer.go:86-95〕。用两个参数 `(int 123, string "go")` 手拼一遍,十六进制是 `25 3d 39 17 6f 00…02 00 04 … 00 7b 67 6f`,共 41 字节:开头 5 字节是魔数,接着 8 字节个数 2,然后类型枚举 `00 04`(int 和 string),两个 8 字节长度(8 和 2),最后 `00 00 00 00 00 00 00 7b` 是 123、"go" 是字符串。〔实测〕harness 复现了同一布局的十六进制输出〔C:dachang/my_rpc/work/run/C_dachang__my_rpc/E1/main.go:9-25〕。
+
+反序列化入口 `UnmarshalArguments` 的检查是层层递进的:总长小于 `len(MAGIC)+8` 报"数据流长度太短";头 5 字节不等于魔数报"魔数校验失败"并附收到的字节;解出参数个数 `n` 后,`n<=0` 直接返回 `(nil, nil)`,是空结果而不是 error;随后在"读类型枚举之前"和"累计完所有长度字段、算出内容总长之后"各做一次剩余长度检查,源码注释写明动机:每获得一个信息就检查一下数据长度,免得将来发生越界 panic(index out of range)。〔C:dachang/my_rpc/serialization/my_serializer.go:100-181〕第二次检查的位置值得体会:它发生在"已知 totalLen"和"真正切内容"之间:拿到长度表之后、消费任何内容字节之前,先确认剩下的字节够不够。外层 `MySerializer.Unmarshal` 还要先过"必须传指针""必须传结构体指针"两道类型检查,再进入这套防御流程〔C:dachang/my_rpc/serialization/my_serializer.go:203-217〕。魔数加长度检查,正是二进制协议不吃陌生字节流的通行做法;gRPC 消息前的压缩标志和 4 字节长度前缀,是同一思路的工业版。
+
+### TCP 粘包与魔数分隔
+
+有了序列化还差一步:字节流上怎么认出一条消息的边界。TCP 是面向字节流的,一次 `Read` 到的数据可能包含多个报文,也可能只包含半个报文,一条报文在什么地方结束需要通信双方事先约定好。传输层这里约定的分隔符是 `MAGIC = []byte{1,1,5,2,0}`。注意它与上一小节序列化协议里的魔数 `{37, 61, 57, 23, 111}` 是两个不同的常量,各自管各层的事。〔C:dachang/my_rpc/transport/server/tcp.go:25-28〕〔C:dachang/my_rpc/transport/common.go:15〕
+
+服务端每次 `Read` 用 256 字节缓冲(注释:设定一个最大长度,防止 flood attack),跨 `Read` 保留一个 `bytes.Buffer` 攒半包,对每次读到的 data 用 `bytes.Index(data, MAGIC)` 循环切分。切分循环三分支:〔C:dachang/my_rpc/transport/server/tcp.go:29-47〕
+
+1. **分隔符在本次读的中间**(`pos > 0`):buffer 里的旧半包加 `data[:pos]` 合成一条完整报文,打印并 `Reset`,然后从分隔符之后继续找下一条。
+2. **本次读一开头就是分隔符**(`pos == 0`):若 buffer 非空,说明上次的半包到这条分隔符为止凑齐了,打印并 `Reset`;buffer 为空说明收到一条空报文,跳过即可。
+3. **本次读里找不到分隔符**:整段余量写进 buffer 当半包攒着,退出内层循环等下一次 `Read` 拼后续字节。
+
+演示场景里客户端连发 3 条 `"china"+MAGIC` 就 Close,服务端 `Accept` 后故意 `Sleep 5` 秒,让 3 条报文先堆进内核缓冲区再开始读,于是读到的字节流几乎必然是粘成一坨的 `chinachinachina` 加分隔符,切分循环把它拆回三条。收到 `io.EOF`(对方关闭连接)时,先把 buffer 里残留的内容打印出来再退出循环并 `Close`,半包不会因为对端退出就丢掉。〔C:dachang/my_rpc/transport/client/tcp.go:17-20〕〔C:dachang/my_rpc/transport/server/tcp.go:28-31〕
+
+### UDP 报文语义与 xid 请求关联
+
+Echo 示例的传输层选了 UDP,理由写在构造函数注释里:UDP 面向报文实现方便,若用 TCP 需自行按魔数对字节流进行分隔,上文的切分循环就是"若用 TCP"的代价。一次 `Read` 恰好对应一条 datagram,天然没有粘包问题。〔C:dachang/my_rpc/client/echo_client.go:22-27〕
+
+报文语义的代价是"请求-响应不再自动成对":多条响应乱序到达时,谁也说不清哪条响应属于哪个请求。`EchoClient` 的解法是给每个请求发唯一号,靠号回填:〔C:dachang/my_rpc/client/echo_client.go:15-33〕
+
+- 结构体持有 `conn`、`serializer` 和 `sync.Map` 类型的 `requestBuffer`;构造函数 `DialTimeout("udp", …, 30min)` 建连后启动常驻接收协程 `go client.receive()`,此后收发完全异步。
+- `Call` 五步:① `xid.New().String()`(rs/xid 分布式唯一 id 生成器)生成 id 写进 `request.Id`;② 序列化整个请求;③ 建容量 1 的 `chan my_rpc.RpcData`,以 id 为 key `Store` 进 `requestBuffer`;④ `conn.Write(data)` 发出请求;⑤ 阻塞在 `resp := <-streamCh` 直到响应送达。〔C:dachang/my_rpc/client/echo_client.go:60-79〕
+- `receive` 协程循环:4096 字节缓冲 `Read` → 反序列化成 `RpcData` → 按 `resp.Id` 到 `requestBuffer.Load`;命中则**先 `Delete(resp.Id)` 再把 resp 推进取出的 chan** 唤醒等待方。先删再投,保证派发后 entry 不残留,防止 `sync.Map` 泄漏;未命中(超时后迟到的响应或 id 对不上)只打日志"request buffer里没有id %s",不投递。〔C:dachang/my_rpc/client/echo_client.go:37-56〕
+- `Call` 定义为指针接收者,因为要修改成员 `requestBuffer`。〔C:dachang/my_rpc/client/echo_client.go:59-60〕
+- main 里 10 个 goroutine 各持独立 EchoClient 串行调 10 次 `Call`,校验 `resp.A` 与发出的随机数相等,验证了并发下"按 id 归位"依然成立。〔C:dachang/my_rpc/client/echo_client.go:82-106〕
+
+服务端那一半:每收到一条 datagram 就 `go server.handle(...)` 并发处理,handle 里随机 `Sleep` 0 到 500ms,故意让"先请求的不一定先拿到响应",逼出客户端按 id 归位的必要性;然后原样把数据序列化回给对方。〔C:dachang/my_rpc/server/echo_server.go:45-59〕
+
+### 三种引擎的速度账
+
+基准测试对象是上面那个 `RpcData`,每次 op = 一次 `Marshal` 加一次 `Unmarshal` 完整往返:〔C:dachang/my_rpc/serialization/test/serializer_test.go:10-17〕〔C:dachang/my_rpc/serialization/test/serializer_test.go:96-117〕
+
+| 引擎 | 作者机器〔C:dachang/my_rpc/serialization/test/serializer_test.go:112-117〕 | 本机复测〔C:dachang/my_rpc/work/digest/C_dachang__my_rpc.md〕 |
+|---|---|---|
+| Json(sonic) | 2221 ns/op | 863 ns |
+| Gob | 16154 ns/op | 7385 ns |
+| MySerializer(手写二进制) | 2845 ns/op | 1315 ns |
+
+排序在两台机器一致:Json < MySerializer < Gob。Gob 比 Json 慢约 7 倍。Gob 的字段名等自描述信息是它"跨端对齐字段"的底气,也是它慢的主因;手写二进制略慢于 sonic(约 1.3 倍)但比 Gob 快约 5.7 倍。复测有个环境前提:go1.26 下 sonic v1.12.x 因 linkname 依赖 `encoding/json` 内部符号而链接失败,本机复测用 stdlib json 替换后三个数字成立〔C:dachang/my_rpc/work/digest/C_dachang__my_rpc.md,与 Go 1.26 冲突或过期节〕。
+
+### 回到 gRPC
+
+现在读 gRPC 的选型说明,可以把"序列化用 Protobuf"翻译成前面刚写过一遍的东西:`.proto` 契约对齐两端的字段集,相当于把本节"两端导出字段必须一致"从口头约定变成编译期保证;protobuf 的二进制编码与本节五段式同属"类型加长度加内容"的家族;gRPC 在 HTTP/2 帧上对每条消息做边界处理,就是粘包问题的现成解法;一次一元调用能拿回"属于这次请求"的响应,靠的是 HTTP/2 流 id,和 `requestBuffer` 按 id 派发是同一个思想。底层三基石都清楚了,第五节看契约与流就只是换语法。
+
 ## 五、gRPC：契约先行
 
 选型上，资料给的口诀是"遇事不决选 gRPC"：利用 HTTP/2 的双向流，支持流控、压缩，跨语言，社区强。〔W10-1 p26〕（该页还写了"基于 QUIC"，这是错的，gRPC 跑在 HTTP/2 上。）"契约先行"指先写 `.proto`（接口描述语言，平台无关），再用编译器生成各语言的客户端和服务端代码；序列化用 Protobuf，二进制格式，课程的说法是序列化速度和压缩效率在同类协议里名列前茅。〔W10-1 p27-29〕
