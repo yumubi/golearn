@@ -551,7 +551,7 @@ func main() {
 - viper 没有内置多环境概念，多环境靠启动参数：`pflag.String("config", "config/config.yaml")` 定义，启动时 `--config=config/dev.yaml` 切文件，注意 working directory。〔W05-3 p16-17〕
 - etcd 作远程配置中心的完整链路：Docker Compose 起 etcd，`etcdctl put /webook "$(<dev.yaml)"` 写入，代码里 `AddRemoteProvider("etcd3", "http://127.0.0.1:12379", "/webook")` 加 `SetConfigType("yaml")` 加 `ReadRemoteConfig`。〔W05-3 p21-24〕
 - 公司级远程配置中心的功能清单：统一接口、Web 界面（路径权限、关键配置限人、版本回滚、环境同步、审批流、灰度发布），本质都是增删改查，不难。〔W05-3 p30〕
-- `--config` 指向不存在的文件时 `ReadInConfig` 在哪一行 panic、错误长什么样，值得自己跑一遍；viper 支持用 `ReadConfig` 在单测里构造配置替代真实文件。〔W05-3 p14,p17〕
+- `--config` 指向不存在的文件时 `ReadInConfig` 在哪一行 panic、错误长什么样，值得自己跑一遍；viper 支持用 `ReadConfig` 在单测里构造配置替代真实文件。〔W05-3 p14〕〔W05-3 p17〕
 
 ### W02-2 三层落地与缓存判据
 
