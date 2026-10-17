@@ -7,7 +7,7 @@
 
 | # | 场景 | 节 | 状态 | runId | 提交 |
 |---|---|---|---|---|---|
-| 1 | SC-pay 支付打赏与回调 | 18 | 已落盘(双审 16/16,修订 1 轮) | handbook-batch-mvbtdj1z-1jtewp | 26781e4 |
+| 1 | SC-pay 支付打赏与回调 | 18 | 已落盘(双审 16/16,修订 1 轮;主流程批次 mvbx5s9b 补 K2/K3/K4/K6/K13/D2/D5 七条,3 轮双审通过,内容已在库) | handbook-batch-mvbtdj1z-1jtewp, handbook-batch-mvbx5s9b-se3nan | 26781e4 |
 | 2 | SC-ledger 记账与转账 | 18/17 | 已落盘(oxz0hb needs_rework 三轮后手动补齐 K15 语义/K16 拆表/K19 幂等遗留,ledger2 双审增量合并;ab70c19) | handbook-batch-mvbv0ptk-oxz0hb, handbook-batch-mvc1p0zt-n28ogw | 5c5726e, ab70c19 |
 | 3 | SC-migrate 迁移与调度 | 17 | 预审认为完整,待独立复核 | | |
 | 4 | SC-smscode 验证码与短信 | 11/16 | 预审认为完整,待独立复核 | | |
