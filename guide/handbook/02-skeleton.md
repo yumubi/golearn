@@ -1,6 +1,6 @@
 # 02 工程骨架：包、module、启动次序与工具链
 
-> 详细程度：速通 · 约 30 分钟
+> 详细程度：速通 · 约 35 分钟
 > 材料：TB02、TB04 到 TB08、TB35b、TBX02、TBX11 · 旧长版：`notes/p1-toolchain.md`、`notes/p22-toolchain-docs.md`
 > 前置：01 Go 的世界观
 
@@ -113,7 +113,7 @@ go install example.com/cmd/tool@latest  # 安装可执行文件
 
 本地联调用 `replace` 指向本地路径，缺点是路径因人而异、而且 `go.mod` 要提交；Go 1.18 的 `go.work` 工作区把这种配置放进不进仓库的文件里，更适合。〔TB35b p2-4〕私有 module 用 `GOPRIVATE` 绕过公共代理和校验；企业内网的标准做法是自建一个 goproxy 统一代理内外所有 module，开发者只配一个地址，心智负担最低。〔TB35b p5-8〕
 
-发布侧的两个冷知识。其一，Go 1.17 起依赖图剪枝：`go.mod` 声明 `go 1.17` 后，构建只用直接依赖与真正被用到的间接依赖的 `go.mod`，但 `go mod tidy` 会把全部间接依赖记进 go.mod（分块 `// indirect`），它第一次有了 lock 文件的完整列表效果。〔TBX02 p4-8〕其二，某个版本发坏了（比如 v1.0.2 有致命 bug），**删 tag 重发是无效的**：版本一旦被任何一个 goproxy 缓存，后续请求不回源，散布在各代理里的坏版本继续传播，源仓库删了也没用。正解是发 v1.0.3 修复版（MVS 保证没显式升级的消费者不受影响），再在 v1.0.3 的 go.mod 里 `retract v1.0.2` 作废旧版（只提示不强制，go list 会显示 retracted）；作废整个大版本用首行 `// Deprecated:` 注释。〔TBX11 p5-12〕
+发布侧的两个冷知识。其一，Go 1.17 起依赖图剪枝：`go.mod` 声明 `go 1.17` 后，构建只用直接依赖与真正被用到的间接依赖的 `go.mod`，但 `go mod tidy` 会把全部间接依赖记进 `go.mod`（分块 `// indirect`），它第一次有了 lock 文件的完整列表效果。〔TBX02 p4-8〕其二，某个版本发坏了（比如 `v1.0.2` 有致命 bug），**删 tag 重发是无效的**：版本一旦被任何一个 goproxy 缓存，后续请求不回源，散布在各代理里的坏版本继续传播，源仓库删了也没用。正解是发 `v1.0.3` 修复版（MVS 保证没显式升级的消费者不受影响），再在 `v1.0.3` 的 `go.mod` 里 `retract v1.0.2` 作废旧版（只提示不强制，`go list` 会显示 retracted）；作废整个大版本用首行 `// Deprecated:` 注释。〔TBX11 p5-12〕
 
 ## 三、项目布局：没有官方标准
 
@@ -258,6 +258,55 @@ pprof 采集有两条路：在线服务 `import _ "net/http/pprof"` 再开一个
 ## 在项目里
 
 `dnsproxi-go/` 是单 module：`go.mod` 里 `module golearn/dnsproxi-go`，配 `go.mod`/`go.sum`。它没套 `cmd/` 约定：主服务是根目录 `main.go` 的 `main` 包，压测发包器是 `dnsq/main.go` 的第二个 `main` 包；`cache/`、`guard/`、`tcp/`、`wire/` 是平铺的小包，没有 `internal/`。回归命令：`cd dnsproxi-go && go vet ./... && go test -race -count=1 ./...`。
+
+## 想深入:正文之外的干货
+
+### TB04-TB08 编译、布局与依赖操作补遗
+
+- 交付形态的差别:go build 产出的是自包含二进制,目标环境不用装 Go;动态语言要解释器跟着走。go run 只用于开发调试,交付永远 go build。〔TB04 p8-9〕
+- go mod tidy 一次做完三件事:扫描源码、下载缺失依赖、把直接与间接依赖写进 go.mod;go.sum 记录每个依赖的版本 hash,内容对不上直接拒绝构建,供应链校验就靠它。〔TB04 p12-13〕
+- 布局演进三轮:1.0 的 GOPATH 路径约定、vendor 目录、1.11 起 Go Module 把版本绑定到 module 而不是目录;1.13 加上 go.mod/go.sum 的创世项目形态,构建从此可重现。〔TB05 p6〕
+- 项目布局约定:`internal/` 下的包只有本 module 能导入,编译器强制;标准库自带包全在 `std` 这一个 module 里。〔TB05 p7〕
+- 建 module 三步:`go mod init` 写下 module path,`go mod tidy` 补依赖,`go build` 验证;项目从此放哪都行,不受 GOPATH 约束。〔TB06 p6-7〕
+- 添加一个新依赖的标准流程:源码里先 import,`go build` 报 `no required module provides package` 并提示 go get;`go get` 下载进本地 module 缓存并在 require 段加一行,或者一步 `go mod tidy` 代替。〔TB07 p2-3〕
+- 版本升降级:`go list -m -versions <module>` 列全部版本,`go get <module>@v1.7.0` 降级(输出 downgraded v1.8.1 => v1.7.0),也可 `go mod edit -require=...` 后 tidy。原理是语义导入版本:主版本相同即兼容,go 命令据此自动选。〔TB07 p4-5〕
+- 给自己的 module 发 v3+:仓库里有 go.mod 而导入路径没带 /v3 后缀时,go 命令直接拒绝,主版本不兼容不是建议是语法。〔TB07 p13〕
+- 可执行程序的 main 包必须定义 `main` 函数,否则编译报错;`main.main` 无参数无返回值,运行在主 goroutine 里。〔TB08 p2〕
+
+### TB35b 与 TBX11 私有仓库与发布布局
+
+- 私有 module 的导入路径问题:内部 vcs 通常没有域名,导入路径又不能写 IP,解法是为私有 module 自定义统一路径(如 mycompany.com/go/module1),再配 GOPRIVATE/GONOSUMDB 让 go 命令绕过公共代理与校验。〔TB35b p10〕
+- 自建 goproxy 的价值:统一内部依赖出口、加速、审计;go.work 只影响本机构建选择,不影响 go.mod 内容。〔TB35b p10-14〕
+- 无 monorepo 强约束时的默认解:单 repo 单 module,module path 与仓库地址一致,打 tag 即版本号;pkg 导入路径 = module path + /pkgN。〔TBX11 p2-3〕
+- 寄存器调用惯例(1.17)的影响面:绝大多数程序无感,受影响的只有违反 unsafe.Pointer 规则的代码(用 unsafe.Pointer 访问函数参数、比较函数代码指针这类未公开行为)。〔TBX02 p12-14〕
+- 1.17 的语言级小改进落在切片上:此前"数组能切片化、切片不能转回数组",只能 unsafe.Pointer 黑魔法;现在 `p := (*[3]int)(b)` 直接把切片转成数组指针,对 `p[1]` 的修改会反映回原切片。十二年前提的 issue 落地成语法。〔TBX02 p2-3〕
+
+### TB03 Go 的安装与版本策略
+
+- 发布节奏是每年二月、八月各一个大版本。官方只为最新的两个大版本提供支持(修重大 bug、改文档、安全更新),再旧的大版本没有安全补丁可拿,长期项目钉在旧版本上要自己承担风险。〔TB03 p2〕
+- 选版本的三种思路:用最新版(稳定版平均质量一直很高,本课程推荐)。求稳用次新版,即最新版的前一个版本,这是多数量产项目的选择。或者跟随具体项目:Kubernetes 升级激进,docker 曾落后两个周期还在用 Go 1.15。选版本质是新特性收益与稳定性风险的权衡。〔TB03 p2〕
+- 大陆下载用镜像站 golang.google.cn/dl 替代官方 golang.org/dl,下载时间大幅缩短。构建前唯一必须配的是 GOPROXY(02 节正文已讲,默认官方代理,国内常用 goproxy.cn)。〔TB03 p3〕〔TB03 p13〕
+- Linux 标准安装是四步。先 `wget` 下 `tar.gz`,解压到 `/usr/local`(生成 `go/` 目录,官方推荐位置)。再把 `/usr/local/go/bin` 追加进 `$HOME/.profile` 的 PATH,source 后用 `go version` 验证。macOS 双击 `.pkg` 或同 Linux 用 `tar.gz`。Windows 双击 msi,默认装 `C:\Program Files\Go`,安装器自动设 GOPATH 并把 `Go\bin` 加进系统 Path。〔TB03 p3-7〕
+- 多版本方法一:各版本装不同目录,切换时改 PATH 再 source,适合偶尔切换,状态靠人维护。〔TB03 p7-8〕
+- 多版本方法二(官方下载器):先有一个标准 Go,把 $HOME/go/bin 加进 PATH,`go install golang.org/dl/go1.21.0@latest` 装专用下载器,`go1.21.0 download` 把该版本装到 $HOME/sdk/go1.21.0,之后用 `go1.21.0 version`、`go1.21.0 env GOROOT` 使用它。多版本共存交给官方工具,不靠手工 PATH,代价是"先有一个 Go 才能装第二个"。〔TB03 p8-10〕〔1.26 修正〕教材写 `go get golang.org/dl/...`,自 Go 1.17 起报错 `installing executables with 'go get' in module mode is deprecated`,入口命令换成 `go install ...@version`,下载器机制本身仍在(本机 go1.26.4 实测安装可用)。〔TB03 p15〕
+- beta 与 tip 版走同一机制:`go install golang.org/dl/go1.17beta1@latest` + `go1.17beta1 download`。gotip 是滚动到最新提交的版本,一次提交就可能让构建失败,装不上是常态,不是你操作错了。〔TB03 p10-11〕
+- Go 开箱即用,无需任何配置。配置项以环境变量形式存在,`go env` 查看、`go help environment` 看全部。本机 go1.26 新增了教材年代没有的 GOTOOLCHAIN(1.21 起,设 auto 时可按 go.mod 要求自动切换工具链)。〔TB03 p11-12〕
+
+### TB27 函数调用链跟踪:defer、runtime 与 AST 注入
+
+- 最简实现三行:`Trace(name string) func()` 打印 enter 后返回一个打印 exit 的闭包,`defer Trace("foo")()` 利用 defer 注册时求值、返回前执行的 LIFO 机制,得到 main→foo→bar→exit bar→exit foo→exit main 的完整链路。四个不足:函数名要手动传、多 goroutine 输出混杂、没有缩进层次、每个函数要手工加。〔TB27 p2-3〕
+- 自动取函数名靠 runtime:`runtime.Caller(1)` 取调用者栈帧,返回 pc/文件/行号/ok 四值。参数是栈帧号,传 0 拿到的是 Caller 的调用者即 Trace 自己,要拿"谁调了 Trace"必须传 1。〔实测〕go1.26 下传 0 输出 main.Trace,传 1 才是 main.foo。〔TB27 p4-6〕
+- `runtime.FuncForPC(pc).Name()` 把 pc 转成含包名的完整函数名(main.foo)。这个"统一的无参调用形式 defer Trace()()"正是后面自动注入能成立的前提:注入器往任何函数里塞同一行代码就行,不用关心函数名。〔TB27 p4-6〕
+- Go 核心团队为防滥用故意不暴露 goroutine ID,但标准库 `net/http/h2_bundle.go` 里藏着取法。`runtime.Stack(b, false)` 拿当前栈,栈首行是 `goroutine 4707 [` 格式,TrimPrefix 后取第一个空格前的数字再 ParseUint。复制品改造两处:直接 make byte 切片替代从 pool 取,用 `strconv.ParseUint` 替代私有的 `http2parseUintBytes`。〔TB27 p6-7〕〔实测〕go1.26 上 main goroutine 取到 1,新 goroutine 取到 7,解析仍成立。依赖栈首行格式属实现细节,只在调试工具里用。〔TB27 p6-7〕
+- 输出格式用 `fmt.Printf("g[%05d]: enter: [%s]\n", gid, name)`,%05d 左补零把 ID 对齐成 5 位。多 goroutine 交织时,把输出重定向到文件,按 gid grep 就能抽出单条调用链。〔TB27 p7-10〕
+- 缩进层次用 `map[uint64]int` 存,以 gid 为 key:进入时取值输出 "->" 再 +1 存回,defer 闭包退出时取值输出 "<-" 再 -1。这张 map 会被多个 goroutine 同时读写,必须配 sync.Mutex(03 节讲过 map 并发写直接 fatal error)。〔TB27 p10-11〕
+- trace 包独立成 module(go mod init github.com/bigwhite/instrument_trace)供外部导入。example_test.go 里 `ExampleTrace` 函数加 `// Output:` 注释,go test 扫描 Example 前缀函数、执行并比对注释里的预期输出。示例即单元测试,也是可执行的文档。〔TB27 p12-14〕
+- AST 注入五步:go/parser 把源码解析成 AST,astutil.AddImport 加导入,遍历 f.Decls 逐个类型断言 *ast.FuncDecl,注入 defer 语句节点,最后 format.Node 转回源码。Go 把 ast 相关包随语言开放,这是官方标准库直接支持的源码改写路径。〔TB27 p17-18〕
+- 注入必须幂等,否则工具跑两遍就把 defer 语句插两遍。addDeferStmt 先遍历函数体,对每条语句做类型断言链 DeferStmt→CallExpr→SelectorExpr→Ident,匹配 tracePkg+traceFunc 已存在就跳过。不存在才构造 DeferStmt 节点插到函数体首部。〔TB27 p18-20〕
+- 工程结构按 03 节的布局惯例:cmd/instrument 放 main 包(flag 解析 -w,os.Args 取文件路径,校验 .go 扩展名),注入逻辑放 instrumenter 包。接口只声明一个方法 `Instrument(string) ([]byte, error)`,为换注入方式(注释指令、代码生成)预留。`-w` 写回原文件,不带则输出 stdout。〔TB27 p14-16〕
+- 两条生产边界:注入跟踪代码只用于调试和阅读理解,不上生产,Trace 会被编译进产物。goroutine ID 同为核心团队不建议依赖的设施。手工删 Trace 繁琐易错,正解是思考题的 build tag 开关:config 目录下 dev.go 带 `//go:build dev` 实现真 Trace,prod.go 空实现,`go build -tags dev` 切换。〔TB27 p23-26〕
+
+以上省去的:TB03 的三系统安装逐步命令与截图(照官方文档走即可,选读条目只留了目录与 PATH 两条要点)、用 go help 总结命令用法的思考题方向。TB27 的逐版完整源码清单(五版演进只讲机制与坑)与 ioutil.WriteFile 写回(该函数自 Go 1.16 起废弃,现行写法 os.WriteFile)。两单元其余必读条目均已融入本块。
 
 ## 想深入去哪查
 
