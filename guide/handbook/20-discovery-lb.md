@@ -99,19 +99,73 @@ round_robin 连打 4 次: 127.0.0.1:8091 127.0.0.1:8090 127.0.0.1:8091 127.0.0.1
 
 注册自己的地址有个小坑:不能用 `127.0.0.1`,得注册和客户端同处一个局域网的地址。从配置文件读不可靠,常见办法是枚举网卡取第一个非环回的 IPv4(`net.InterfaceAddrs` 遍历,跳过 loopback 和 IPv6),平台注入环境变量或 UDP 拨号探测出口 IP 也是可行做法。课件里的 `GetLocalIP` 函数就是枚举网卡这路,找不到时返回 `ERR_NO_LOCAL_IP_FOUND`。〔C:dachang/etcd/service_registration_center/common.go:25-51〕〔W12-2 p16〕
 
+UDP 拨号这一路值得单独说清:作者在 ginx 改造里用的 `GetOutboundIP()` 是向外部地址 `net.Dial("udp", "8.8.8.8:80")` 建立连接,`defer conn.Close()`,然后把 `conn.LocalAddr()` 断言为 `*net.UDPAddr`,返回 `LocalAddr.IP.String()`。UDP 无连接,`Dial` 只是让内核按路由为"到外部地址的连接"选出本地出口 IP,并不真正发出数据包。〔W12-2 p16〕为什么绝对不能用 `127.0.0.1`:回环地址只对进程自己有意义,注册出去的必须是客户端拿来到本机建连的那个局域网 IP。注册的时候基本上都是注册自己和客户端所在同一局域网的 IP 地址,写 `127.0.0.1` 客户端只会连向它自己的回环。〔W12-2 p16〕在 K8s 里这条同理变体:注册的必须是 Pod 之间真实通信的外部通信 IP,不能是容器内网视角的地址,而且 Pod 重启后 IP 可能漂移(重启后的 Pod 往往拿新 IP,网络配置变化也可能触发漂移),所以材料作者在 K8s 里不太推荐再跑注册中心,推荐直接用 Service 的名字(DNS)通信。〔W12-2 p18〕
+
+### etcd 官方 SDK 怎么注册:Manager、Update 和退出清理
+
+etcd 直接提供了 gRPC 服务注册与发现的 Resolver 实现,服务端注册不用自己拼 etcd API,走 `endpoints` 包四步:〔W12-2 p7〕
+
+1. 创建 Manager:`endpoints.NewManager(cli, "service/user")`,第二个参数 target 就是服务名;
+2. 注册:`em.AddEndpoint(ctx, key, endpoints.Endpoint{Addr: addr})`。key 必须以服务名为前缀,实际 key = `"service/user/" + addr`(示例里 addr=`127.0.0.1:8090`,key 即 `service/user/127.0.0.1:8090`);`Endpoint` 的 metadata 一般是给客户端用的(比如后面第六节的权重);
+3. 注册数据有变动时调 `Update`。别扭之处:传入的是 `endpoints.Add` 操作,因为 key 已经存在,实际效果就是覆盖更新了数据。而且 etcd 这里没有提供 Edit 操作,作者原话是"无力吐槽"。课件里用 ticker 模拟元数据变化(更新 Metadata 时间戳),`etcdctl get` 同一个 key 能看到 Metadata 从 16:48:10 → 16:48:13 → 16:48:18 依次变化;〔W12-2 p8〕
+4. 正常退出按顺序做两件事:先 `em.DeleteEndpoint(ctx, key)` 删除自己注册的 Endpoint(取消注册),再 `server.GracefulStop()` 做 gRPC 优雅退出。顺序不能反:先停服务器再删,客户端会在删掉之前就开始拿到一个已死的地址。〔W12-2 p9〕
+
+### 宕机残留:谁清理、客户端怎么感知
+
+上面这套注册没有租约,那进程被强制关闭(`kill -9`,走不到 DeleteEndpoint 的优雅退出路径)之后会怎样?作者用强制关闭服务器模拟宕机验证过:`etcdctl get service/user/127.0.0.1:8090` 在宕机后依然返回这个节点,Metadata 时间戳一直停留在同一时刻。**注册残留没有被清掉**。按理论宕机后注册数据应该没了,实际却还在。〔W12-2 p10〕
+
+残留的因果:没有租约时,这条注册只是一条普通 KV,etcd 不会因为进程死亡而删它,唯一的删除路径就是优雅退出里的 DeleteEndpoint,进程崩溃时恰好走不到。谁最终清掉它?靠 Lease:注册数据挂上租约之后,进程死亡 → 无人续约 → 租约到期,etcd 按租约机制清掉挂在该租约上的 key。租约过期自动删除是 Lease 机制本身,不需要任何组件"发现"进程死了。〔W12-2 p10-11〕客户端这边感知变化不靠轮询:Resolver/SDK 封装了 Watch 加拉取,etcd 上节点一消失,客户端本地列表随之更新。但这条链路有秒级延迟窗口,窗口内调用方只会连不上,要靠自己的 failover 换节点重试。〔W12-2 p40〕
+
 ### 心跳就是租约续租
 
-注册成功不等于一劳永逸。注册机制的本质是**租约**:数据带过期时间,心跳就是续租。心跳有两种模式:服务端主动(只要没收到网络错误就当连接正常)或注册中心主动探测；心跳失败,注册中心就判定节点崩溃并通知客户端。〔W12-1 p14〕"失败"可以是一次,也可以是连续多次,这两个参数都是权衡:间隔越短压力越大；判定次数越少发现越快但越怕偶发抖动误踢,越多越稳但发现越慢。〔W12-1 p15〕
+注册成功不等于一劳永逸。注册机制的本质是**租约**:数据带过期时间,心跳就是续租。心跳有两种模式:服务端主动(只要没收到网络错误就当连接正常)或注册中心主动探测;心跳失败,注册中心就判定节点崩溃并通知客户端。〔W12-1 p14〕"失败"可以是一次,也可以是连续多次,这两个参数都是权衡:间隔越短压力越大;判定次数越少发现越快但越怕偶发抖动误踢,越多越稳但发现越慢。〔W12-1 p15〕
 
-etcd 把这套机制做成 Lease 加 KeepAlive:先 `Grant` 创建带 TTL 的租约,`Put` 时用 `WithLease` 把 key 挂上租约,再 `KeepAlive` 自动续约；节点崩溃没人续租,key 到期自动消失。etcd 的 KeepAlive 默认每隔 ttl/3 续约一次,选项很少。大多数微服务框架直接用它的租约机制当心跳,实践中没什么问题,只是没有自定义重试和判定策略的空间。〔W12-2 p11-12〕课件里 `etcd.go` 的 `keepAlive` 函数演示了 Grant、Put 带租约、KeepAlive 的基本用法。〔C:dachang/etcd/etcd.go:59-85〕
+etcd 把这套机制做成 Lease 加 KeepAlive:先 `Grant` 创建带 TTL 的租约,`Put` 时用 `WithLease` 把 key 挂上租约,再 `KeepAlive` 自动续约;节点崩溃没人续租,key 到期自动消失。etcd 的 KeepAlive 默认每隔 ttl/3 续约一次,选项很少。大多数微服务框架直接用它的租约机制当心跳,实践中没什么问题,只是没有自定义重试和判定策略的空间。〔W12-2 p11-12〕课件里 `etcd.go` 的 `keepAlive` 函数演示了 Grant、Put 带租约、KeepAlive 的基本用法。〔C:dachang/etcd/etcd.go:59-85〕
+
+落到课件的服务端示例,完整流程四步(TTL 示例取 5 秒):〔W12-2 p11〕
+
+1. 创建租约:`var ttl int64 = 5`,调 `S.cli.Grant(ctx, ttl)` 拿到 `LeaseResp`;
+2. 开启自动续约:`kaCtx, kaCancel := context.WithCancel(context.Background())`,起 goroutine 调 `S.cli.KeepAlive(kaCtx, LeaseResp.ID)`,`for resp := range ch` 处理每次续约结果。作者建议只简单打个日志就够了。续约失败了实际上你也做不了什么;
+3. 对 Endpoint 的所有操作都带上租约 ID:`em.AddEndpoint(..., clientv3.WithLease(LeaseResp.ID))`,之后模拟元数据变化的 `Update` 也要带 `clientv3.WithLease(LeaseResp.ID)`,否则新写入的数据不挂租约;
+4. 退出时三步按序:先 `kaCancel()` 取消 kaCtx 退出续约的 goroutine,再 `em.DeleteEndpoint(ctx, key)`,最后 `server.GracefulStop()`。
+
+租约过期还有个坑要预想到:租约一旦过期被回收,续约就再也续不上,只能整个重新注册。课件服务端对应的处理是续约收到 `rpctypes.ErrLeaseNotFound` 时把 leaseID 置 0,退回 `Grant` 加 `Put` 的注册分支重走一遍。〔C:dachang/etcd/service_registration_center/server/service_hub.go:54-84〕
 
 ### 优雅下线五步
 
-收到退出信号能不能立刻结束进程?不能:进程里可能还有读了一半的请求,客户端可能正发着下一个请求。完整流程是五步:通知注册中心自己要下线；不再接受新请求,网络上读了一半的请求读完即拒,不进业务代码；等在处理的请求和定时任务结束；结束运行；整个退出过程有超时控制,超时强退。〔W12-1 p18-19〕课件里的服务端收 `SIGINT`/`SIGTERM` 后先主动注销再退出,即使没来得及注销,最晚一个 TTL 之后注册中心也会把这个节点踢掉。〔C:dachang/etcd/service_registration_center/server/server.go:64-75〕
+收到退出信号能不能立刻结束进程?不能:进程里可能还有读了一半的请求,客户端可能正发着下一个请求。完整流程是五步:通知注册中心自己要下线;不再接受新请求,网络上读了一半的请求读完即拒,不进业务代码;等在处理的请求和定时任务结束;结束运行;整个退出过程有超时控制,超时强退。〔W12-1 p18-19〕课件里的服务端收 `SIGINT`/`SIGTERM` 后先主动注销再退出,即使没来得及注销,最晚一个 TTL 之后注册中心也会把这个节点踢掉。〔C:dachang/etcd/service_registration_center/server/server.go:64-75〕
 
 ### 客户端发现的两个时机
 
-客户端做服务发现有两个时机:启动时发现,从配置或注册接口拿到全部要用的服务,初始化时就查好,失败就不启动；或者惰性发现,第一次真正调用某个服务时才去查。后者冷启动快,但首次调用会多一次查询延迟。另外客户端和注册中心之间也要保持连接(心跳),这样节点变动才能推得过来。〔W12-1 p20〕
+客户端做服务发现有两个时机:启动时发现,从配置或注册接口拿到全部要用的服务,初始化时就查好,失败就不启动;或者惰性发现,第一次真正调用某个服务时才去查。后者冷启动快,但首次调用会多一次查询延迟。另外客户端和注册中心之间也要保持连接(心跳),这样节点变动才能推得过来。〔W12-1 p20〕
+
+### etcd 客户端服务发现:一个 target 搞定
+
+对比服务端的一长串注册代码,客户端这边简单很多:客户端不需要关心同步数据之类的事情,SDK 都处理了(Watch、拉取等细节被 etcd 的 resolver 实现封装)。用法两步:〔W12-2 p13〕
+
+```go
+etcdResolver, err := resolver.NewBuilder(cli)
+cc, epr := grpc.Dial("etcd:///service/user",
+    grpc.WithResolvers(etcdResolver), // 首先是三个,不要漏了
+    grpc.WithTransportCredentials(insecure.NewCredentials()))
+userClient := NewUserServiceClient(cc)
+resp, err := userClient.GetById(ctx, &GetByIdReq{Id: 123})
+```
+
+target `"etcd:///service/user"` 的拆解:scheme 部分 `etcd` 对应 builder 的名字。`resolver.NewBuilder(cli)` 返回的 builder 其 `Scheme()` 方法就返回 `"etcd"`;路径部分 `service/user` 是服务名,与服务端注册 key 的前缀对应。Dial 选项必须带上 `grpc.WithResolvers(etcdResolver)`,原文提醒"首先是三个,不要漏了",还包括 `grpc.WithTransportCredentials(insecure.NewCredentials())`。拿到 `cc` 之后正常构造 client 调用,调用方感知不到背后走了注册中心。〔W12-2 p13〕
+
+### 改造 ginx.Server:注册接进启动流程
+
+把这套东西接进自己的框架,核心修改是扩展 ginx.Server 的功能,让它负责和注册中心打交道,只改造了 Serve 方法。Serve 从创建 ctx 到阻塞的顺序:〔W12-2 p14〕
+
+1. `ctx, cancel := context.WithCancel(...)`,存到 `s.cancel`,初始化一个控制整个过程的 ctx(也可以考虑让外面传进来);
+2. `port := strconv.Itoa(s.Port)`,对端口做 `net.Listen("tcp", ...)`;Listen 失败直接 `return err`;
+3. 确保端口打开(启动成功)之后才调用 `s.register(ctx, port)`。原文特别强调"我们是在确保端口打开之后才注册的",先确保启动成功再注册服务,否则客户端拿着列表打过来连接被拒;
+4. 最后 `return s.Server.Serve(L)` 阻塞。
+
+`register(ctx, port)` 内部依次做:`clientv3.NewFromURL("http://localhost:12379")` 建 etcd 客户端存到 `s.etcdClient`;`serviceName := "service/" + s.Name`,`endpoints.NewManager(cli, serviceName)` 存到 `s.etcdManager`;`ip := netx.GetOutboundIP()` 获得自己的 IP;`s.etcdKey = serviceName + "/" + ip`,`addr = ip + ":" + port`;`cli.Grant(ctx, s.EtcdTTL)` 创建租约;`cli.KeepAlive(ctx, LeaseResp.ID)` 开启续约(goroutine 处理返回的 ch);最后 `em.AddEndpoint(ctx, s.etcdKey, endpoints.Endpoint{Addr: addr}, clientv3.WithLease(LeaseResp.ID))` 添加服务节点。这里没有要提供的 metadata。〔W12-2 p15〕
+
+作者指出这种写法的缺陷:Server 和 etcd 强绑定在一起;类似 go-zero、ego、Kratos 之类的框架都允许你使用不同的注册中心,但写法是类似的。〔W12-2 p15〕
 
 ## 三、拿 etcd 实现一遍
 
