@@ -595,9 +595,10 @@ PASS
 - mock 工具换代要记牢：官方 `golang/mock` 已归档弃维护，现在装的是 `go.uber.org/mock/mockgen`；三参数 `-source`（接口所在文件）、`-destination`（生成路径）、`-package`（生成包名），在项目根目录跑，Makefile 封装成 `make mock`。〔W04-4 p25-27〕
 - gomock 新手第一坑是字面量类型不匹配：断言 `int64(12)` 必须显式写 `int64(12)`，裸写 `12` 是 int，参数对不上时报的是"期望的调用没发生"，错误信息和真实原因相距甚远。〔W04-4 p55-57〕
 - 每个测试用例独立一个 mock 控制器（在 `t.Run` 里面 `gomock.NewController(t)`）：控制器跨用例复用，EXPECT 会互相串扰。〔W04-4 p31〕
-- Handler 单测的用例从哪来：先写正常流程（输入合法、Signup 返回 nil、断言 200），异常用例全部由正常用例复制粘贴改出来：Bind 错 400 空体、邮箱格式不对、两次密码不同、邮箱冲突返回 `ErrUserDuplicateEmail`、系统错误。〔W04-4 p32-36〕
+- Handler 单测的用例从哪来：先写正常流程（输入合法、Signup 返回 nil、断言 200 和 "hello，注册成功"；mock 一条 `EXPECT().Signup(gomock.Any(), gomock.Any()).Return(nil)`，Signup 用不到 CodeService 就不为它备模拟调用），异常用例全部由正常用例复制粘贴改出来，各分支的断言与返回值：Bind 错 400 空体（没跑到 Signup，mock `Return(nil, nil)` 都行）；邮箱格式不对 200 "邮箱不正确"；两次密码不同 200 "两次输入的密码不相同"；密码格式不对 200 "密码必须包含数字、特殊字符，并且长度不能小于8位"；邮箱冲突 `Return(service.ErrUserDuplicateEmail)` 200 "重复邮箱，请换一个邮箱"；系统错误 `Return(errors.New("模拟系统异常"))` 200 "服务器异常，注册失败"。〔W04-4 p32-41〕
 - 两个没法 mock 的角落要心里有数：校验出错时不会调 UserService，mock 直接 `Return(nil, nil)`；正则表达式没抽接口，`MatchString` 的 error 分支测不了，只能测格式不对的情形。〔W04-4 p36-37〕
-- Service 层测试的 mock 自由度：`FindByEmail` 可以不用 `gomock.Any()` 而传具体参数（如 `"123@qq.com"`），参数越具体测试越能暴露实现细节的耦合，这是取舍不是规范。〔W04-4 p45-49〕
+- Service 层测试的 mock 自由度：`FindByEmail` 可以不用 `gomock.Any()` 而传具体参数（如 `"123@qq.com"`），参数越具体测试越能暴露实现细节的耦合，这是取舍不是规范。Login 只有三个分支、只用到 `FindByEmail` 这一个方法：成功用例 mock 返回的 domain.User 同时就是 wantUser；用户未找到用例 mock 返回 `repository.ErrUserNotFound`，Login 把它翻译成 `ErrInvalidUserOrPassword`；密码错误用例 mock 里的密码是 hello#world123 加密的，输入少了尾部字符的串让 `bcrypt.CompareHashAndPassword` 对不上，wantErr 同样是 `ErrInvalidUserOrPassword`。〔W04-4 p44-49〕
+- Repository 层 FindById"查找成功、缓存未命中"用例要按业务顺序编排三次 mock：`Get` 返回 `domain.User{}` 加 `cache.ErrKeyNotExist`（未命中）、`FindById` 返回带 Id 12 的 dao.User（Email、Phone 是 sql.NullString，Ctime/Utime 用 nowMs）、`Set` 回写 domain.User（时间用截断过的 now）。变体也只做最小修改：缓存命中用例让 Get 直接返回 User，`FindById` 和 `Set` 两个期望就都删掉，缓存这边继续用 domain.User；"没有找到用户"用例是一路 error：Get 未命中、`FindById` 返回 `dao.ErrDataNotFound`、最终 wantErr 是 repository 层的 `ErrUserNotFound`，正好看清错误一层层往上翻译。〔W04-4 p52-58〕
 - DAO 测试不用 sqlite 内存库的理由：真用数据库就得建表、清数据，单测快不起来；sqlmock 靠 SQL 字符串的正则匹配加返回值注入，零代码生成。代价是 SQL 写法一变 `ExpectExec` 的匹配就挂。〔W04-4 p66-67〕
 - `SkipDefaultTransaction` 关掉后单语句不再包 BEGIN/COMMIT，sqlmock 的期望序列随之简化；生产配置要保持默认开启事务，两边的期望不能混用。〔W04-4 p69〕
 
