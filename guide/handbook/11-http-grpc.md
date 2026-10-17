@@ -510,13 +510,13 @@ Echo 示例的传输层选了 UDP,理由写在构造函数注释里:UDP 面向�
 
 基准测试对象是上面那个 `RpcData`,每次 op = 一次 `Marshal` 加一次 `Unmarshal` 完整往返:〔C:dachang/my_rpc/serialization/test/serializer_test.go:10-17〕〔C:dachang/my_rpc/serialization/test/serializer_test.go:96-117〕
 
-| 引擎 | 作者机器〔C:dachang/my_rpc/serialization/test/serializer_test.go:112-117〕 | 本机复测〔C:dachang/my_rpc/work/digest/C_dachang__my_rpc.md〕 |
+| 引擎 | 作者机器〔C:dachang/my_rpc/serialization/test/serializer_test.go:112-117〕 | 本机复测 |
 |---|---|---|
 | Json(sonic) | 2221 ns/op | 863 ns |
 | Gob | 16154 ns/op | 7385 ns |
 | MySerializer(手写二进制) | 2845 ns/op | 1315 ns |
 
-排序在两台机器一致:Json < MySerializer < Gob。Gob 比 Json 慢约 7 倍。Gob 的字段名等自描述信息是它"跨端对齐字段"的底气,也是它慢的主因;手写二进制略慢于 sonic(约 1.3 倍)但比 Gob 快约 5.7 倍。复测有个环境前提:go1.26 下 sonic v1.12.x 因 linkname 依赖 `encoding/json` 内部符号而链接失败,本机复测用 stdlib json 替换后三个数字成立〔C:dachang/my_rpc/work/digest/C_dachang__my_rpc.md,与 Go 1.26 冲突或过期节〕。
+排序在两台机器一致:Json < MySerializer < Gob。Gob 比 Json 慢约 7 倍。Gob 的字段名等自描述信息是它"跨端对齐字段"的底气,也是它慢的主因;手写二进制略慢于 sonic(约 1.3 倍)但比 Gob 快约 5.7 倍。复测命令 `go test ./my_rpc/serialization/test/ -run "^$" -bench "BenchmarkGob|BenchmarkSerializer|BenchmarkJson" -benchtime=100000x`;环境前提:go1.26 下 sonic v1.12.x 因 linkname 依赖 `encoding/json` 内部符号而链接失败,本机复测用 stdlib json 替换后三个数字成立〔实测:work/digest/C_dachang__my_rpc.md〕。
 
 ### 回到 gRPC
 
