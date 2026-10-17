@@ -26,3 +26,7 @@ scripts/audit-scope.txt
 # 付费课程素材与凭据，不入库
 downloads/
 work/
+
+# Generated OMP commands and temporary worktrees; regenerate with .omp/handbook/setup.js.
+.omp/workflows/saved/
+.omp/worktrees/

@@ -1,0 +1,10 @@
+read:
+  summarize:
+    enabled: false
+task:
+  maxConcurrency: 3
+  structured: true
+skills:
+  includeSkills:
+    - workflow-authoring
+    - workflow-patterns
