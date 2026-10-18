@@ -593,12 +593,12 @@ func main() {
 - 接口最小化：`mchid`、`appid`、`notify_url` 都是支付服务自己知道的配置，不该出现在 API 参数里；外部只传 description、out_trade_no、amount。提前为支付宝做通用化是过早抽象，将来字段变多再拆实现类组合复用。〔W15-1 p15-16〕
 - native 支付只涉及三处代码：下单接口创建订单、处理回调、可选的主动查询；Prepay 参数里 `out_trade_no` 是我方业务交易号，`notify_url` 是回调地址，响应的 `code_url` 前端转成二维码。〔W15-1 p12-14〕
 - 处理回调不要手动验签解密，坑多，直接用微信 SDK 的 NotifyHandler；Web 层负责把微信支付状态翻译成内部状态。〔W15-1 p22〕
-- PreReward 的入参来自打赏这一业务动作：Biz（article）、BizId（文章 ID）、BizName、TargetUid（作者）、Uid（打赏人）、Amt；NativePrePay 时把 `BizTradeNo` 填成 `reward-rid`，支付侧因此能反解出打赏记录 ID。〔W15-2 p6〕
-- 课程只支持微信扫码一种支付方式，是刻意的假设：多方式时用户选金额的同时选方式，Web 按方式调不同的 reward 接口，前面的幂等与对账设计不受影响。〔W15-2 p7〕
+- PreReward 的调用链：用户在文章页点打赏，Web 先按文章 ID 查文章信息，拿到作者和标题，再调 Reward 服务的 PreReward；Reward 内部完成建打赏记录与调 Payment 的 NativePrePay，返回 codeURL 和 rid，前端展示二维码。接口挂在 `ArticleHandler` 下，因为它就是“打赏文章”的接口。PreReward 的入参来自打赏这一业务动作：Biz（article）、BizId（文章 ID）、BizName（文章标题）、TargetUid（文章作者）、Uid（当前登录用户）、Amt（打赏金额）。返回体里 codeURL 给前端转二维码，rid 是打赏记录 ID，后续查打赏支付结果要用。〔W15-2 p6〕
+- 课程只支持微信扫码一种支付方式，是刻意的假设；只支持一种方式，gRPC 接口和内部业务实现都能保持简单。多方式时用户选金额的同时选方式，Web 按方式调不同的 reward 接口，前面的幂等与对账设计不受影响（这句是本节推导）。〔W15-2 p7〕
 - 账号服务的 Credit 接口一次请求带多笔账：`CreditRequest{biz, bizId, items[]}`，每条 `CreditItem{account, account_type, amt, currency, uid}`；一个业务拆几笔账要在接口里定义清楚，账号服务是对账、统计、报表的核心。〔W15-2 p21〕
 - 本地调试收不到回调：notify_url 必须是公网地址，标准解法是 nginx 多域名分发，test/dev/live 各一个域名，dev 转发到能回到本机的跳板机。〔W15-1 p20-21〕
-- PreReward 四步：查缓存二维码、建打赏记录（Status=Init）、调 NativePrePay（BizTradeNo=reward-rid）、缓存返回的二维码。缓存命中说明用户上次点了打赏又放弃，直接复用，少调一次支付服务；这步是纯优化，不缓存也行。〔W15-2 p8-9〕
-- 支付结果用 Kafka 广播：Payment 处理完微信回调、更新本地之后发事件，各业务方自己订阅；Reward 消费后只更新本地 DB，按 BizTradeNO 反解出 rid 更新状态。〔W15-2 p11〕〔W15-2 p14〕
+- PreReward 四步：查缓存二维码、建打赏记录（Status=Init，拿到 rid）、调 NativePrePay（BizTradeNo 用 `reward-` 拼 rid，Description 拼上被打赏文章标题）、缓存返回的二维码。缓存命中说明用户上次点了打赏又放弃，直接复用，少调一次支付服务；未命中才走创建记录和调支付这两步。最后缓存的是含 rid 与 URL 的 CodeURL 对象；这步是纯优化，不缓存也行，去掉缓存最少保留创建打赏记录、获得二维码两步。〔W15-2 p8-9〕
+- 支付结果用 Kafka 广播：Payment 自己处理微信回调，业务方也要拿到支付结果，于是引入一个 Kafka；微信把结果通知 Payment，Payment 处理完回调、更新本地之后往 Kafka 发事件，不同业务方按需订阅。〔W15-2 p11〕Reward 消费后只更新本地 DB：`UpdateReward` 收到 BizTradeNO 和 status，先用 `toRid` 反解出 rid，再调 `repo.UpdateStatus(ctx, rid, status)` 更新状态；这个更新本身幂等，前提是发送方消息顺序没问题，重复消费最多重复更新。〔W15-2 p14〕
 - 要不要统一支付接口：一开始就知道用户选了哪种方式（如只支持微信扫码），就不抽象，按方式直接写；需要"查询支付结果"这种不知道方式的通用能力才抽象。审视现有代码时按这个尺度抽共性和个性。〔W15-2 p27〕
 - 表设计从简：只存 Amt、Currency、Description、BizTradeNO、TxnID 这些必要字段；业务方传来的数据业务方自己存了就别重复存，非存不可的原始报文塞进 BLOB 备查。〔W15-1 p19〕
 - 回调进 MQ 可行但不提早：回调 QPS 与正向支付一样，payment-web 轻量解密撑得住；MQ 的多订阅者、重放调试收益要到多团队场景才显现。〔W15-1 p26〕
@@ -607,10 +607,10 @@ func main() {
 
 - 用户怎么知道支付结果：支付时用户只跟微信交互，结果通知是异步的；前端轮询查询结果，失败立刻再查，超时或超次才报错。查询结果有三种可能：没收到回调、回调处理失败、成功。〔W15-2 p10〕
 - 查询走快慢两条路：快路径查本地 reward 表，已完结直接返回；本地状态未知时走慢路径去查 Payment 服务，回填本地再返回。降级时可以关掉慢路径保住 Reward 服务本身。〔W15-2 p16〕
-- 查询必须校验归属：把查询人的 uid 传给 Reward 服务核对 rid 是不是他打赏的，否则交易号可被枚举，越权看别人的打赏记录。〔W15-2 p15〕
-- 有序性只对有顺序语义的事件必要：打赏从 Init 到 Success 的纯状态更新天然容忍乱序（重复更新无害），支付和退款这类事件才需要生产者按业务 key 哈希分区（sarama 的一致性 CRC 分区器）。〔W15-2 p13〕
+- 查询必须校验归属：后端只暴露一个查询打赏结果的接口，`RewardHandler.GetReward` 的请求带 `Rid=req.Rid`、`Uid=claims.Id`；Reward 服务核对 rid 是不是当前登录用户创建的，打赏的人和查询的人必须是同一个，否则交易号可被枚举，越权看别人的打赏记录（这句是本节推导）。返回 Data 暂时只需要状态（resp.Status 的字符串形式）。〔W15-2 p15〕
+- 有序性只对有顺序语义的事件必要：打赏从 Init 到 Success 的纯状态更新天然容忍乱序（重复更新无害），支付、退款这类有顺序要求的事件才需要控制；Payment 初始化生产者时把分区器换成 sarama 的一致性 CRC 哈希分区器（`sarama.NewConsistentCRCHashPartitioner`），并设置 `Return.Successes=true`，再用 viper 读 Kafka 配置创建客户端。〔W15-2 p13〕
 - 发消息失败可以返回 nil：本地 DB 已经记下终态，Kafka 只是通知；因通知失败让微信回调整个流程重试反而危险。代价是必须有监控告警加异步补偿作业兜底。〔W15-2 p12〕
-- 记账归属三选一：打赏分（业务知道分成比例，课程选这个）、支付分（分账算支付流程一部分）、账号分（记账业务的一部分），没有显著优劣，选一个保持一致。〔W15-2 p20〕
+- 记账归属三选一：打赏分，因为打赏业务才知道具体分成比例；支付分，因为分账可以看作支付流程的一部分；账号分，因为分成可以看作记账业务的一部分。打赏分还有一个变体：打赏只计算分成，由支付来调用记账服务，具体做法是打赏调支付接口时提前告诉支付怎么记账，后续支付再调账号服务。作者认为三种没有明显优劣，课程选打赏分，因为他更倾向于让具体业务处理记账。〔W15-2 p20〕
 - 账号服务 Credit 接口一次带多笔账：平台抽成 10% 加作者 90% 两条 item；抽成为 0 也要记账（课程注释原话「虽然可能为 0，但是也要记录出来」）。课程只说了"要记录",理由是教学推导:省掉零金额记录不影响金额合计,但流水少了一行,无法完整还原"这笔业务事件分了两笔账"的事实,排查和审计时对不上条数。〔W15-2 p25〕
 - CreditRequest 与 CreditItem 的字段全景：CreditRequest 只有三个字段，`biz`（string，注释「唯一标识业务」）、`biz_id`（int64，业务 ID）、`items`（repeated CreditItem，注释「不同账号金额变动」）；每条 CreditItem 有 `account`（int64，账号）、`account_type`（AccountType，注释「账号类型」）、`amt`（int64，注释「金额」）、`currency`（string，货币）、`uid`（int64，用户）五个字段。两条注释别混：`account` 的原注释是"在一些复杂的系统里面，用户可能有多个"，说的是复杂系统里一个用户可以有多个账号（此时用 account 指定记到哪个账号）；"系统账号这个字段可能会没有"是 `uid` 的注释（平台侧抽成账没有自然人 uid，这是结合 p25 的分账代码得出的结论〔W15-2 p25〕）。接口的关键是把同一个业务拆成多笔账、在接口里定义清楚，账号服务是对账、统计、报表的核心。〔W15-2 p21〕
 - Reward 侧分账与幂等遗留：先算平台抽成 `weAmt = int64(float64(r.Amt) * 0.1)`，再一次 `Credit` 调用 `Biz="reward"`、`BizId=rid`，Items 带两笔：`Amt=weAmt`（平台抽成，注释「虽然可能为 0，但是也要记录出来」）与 `Amt=r.Amt-weAmt`（作者得九成），`Currency` 均为 "CNY"。同一笔打赏消息重复消费会重复记账，作者明说"这里我没有处理一个问题：幂等。这是你作业中的一个选项"；落地时至少用 Biz 加 BizId 做幂等键。〔W15-2 p25〕
