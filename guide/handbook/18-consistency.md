@@ -632,15 +632,15 @@ func main() {
 ### C:dachang/distributed_transaction：DTM 的细节与坑
 
 - 所有模式共享"最终成功"兜底：二阶段消息的分支、SAGA 的补偿、TCC 的 Confirm/Cancel 都必须重试到成功，失败超阈值报警转人工。〔C:dachang/distributed_transaction/分布式事务模式.md:9-13〕
-- barrier 的并发语义靠数据库唯一键：事务未提交时，另一事务写相同 `gid-branchid-op` 会被唯一键锁阻塞；`insert ignore` 撞键不报错只给 warning，必须用 `RowsAffected>0` 判断是否真的插进去了。唯一键漏建，三个控制全部失效。〔C:dachang/distributed_transaction/exception/ap/barrier.go:9-23〕
-- 二阶段消息的 DoAndSubmitDB 把本地事务和 Submit 原子绑定：本地事务成功才插入 barrier 记录并 Submit；进程没来得及返回就宕机，dtm 回查 QueryPrepared，它一上来先插 rollback 记录，所以宕机默认按失败处理，业务方必须接受"宁可少转不可多转"。〔C:dachang/distributed_transaction/msg/ap/main.go:73-103〕
+- barrier 的并发语义靠数据库唯一键：事务未提交时，另一事务写相同 `gid-branchid-op` 会被唯一键锁阻塞；`insert ignore` 撞键不报错只给 warning，必须用 `RowsAffected>0` 判断是否真的插进去了；不违反唯一键的 insert ignore 不会阻塞。唯一键漏建，三个控制全部失效。〔C:dachang/distributed_transaction/exception/ap/barrier.go:9-23〕
+- 二阶段消息的 DoAndSubmitDB 把本地事务和 Submit 原子绑定：本地事务成功才插入 barrier 记录并 Submit；返回 error 时插 rollback 记录，dtm 把全局事务标为失败。进程没来得及返回就宕机，dtm 回查 QueryPrepared，它一上来先插 rollback 记录，所以宕机默认按失败处理，业务方必须接受"宁可少转不可多转"；二阶段消息的分支 trans_in 由 dtm 异步调用，默认必成功。〔C:dachang/distributed_transaction/msg/ap/main.go:73-103〕
 - TCC 的代价是业务侵入：RM 要实现 Try/Confirm/Cancel 三接口加资源冻结字段；Try 全成才 Confirm，一失败全 Cancel；返回时 Try 已完成但 Confirm 通常没完，最终成功由 dtm 无限重试保证。TCC 只适合短事务：AP 重启后全局事务只能回滚不能继续，这点和 SAGA 不同。〔C:dachang/distributed_transaction/tcc/ap/main.go:60-194〕
 - XA 的坑：prepare 期间锁不释放，高并发热点必死；xa end 之后 prepare 之前同连接再读写报 XAE07；AP 在 prepare 后宕机，锁悬着，要人工 `xa recover` 裁决。RM 的 handler 必须用 ShouldBindJSON 而不是 Bind，XA 分支会被多次调用且有时没有请求体，Bind 会 400 中止让 dtm 误判失败。〔C:dachang/distributed_transaction/xa/rm/main.go:47-49〕
 - 手写补偿的教程代码是 for 死循环加 Sleep，没有重试上限，生产必须加次数阈值、报警、人工介入。〔C:dachang/distributed_transaction/exception/ap/main.go:104-113〕
-- dtm 客户端怎么用：分支 handler 从请求 query 里取 gid、branch_id、op、trans_type 构造 Barrier（`dtmcli.BarrierFromQuery`），再用 `CallWithDB` 把业务包进 barrier 事务；分支返回值三态，nil 成功、ErrOngoing 框架重试、ErrFailure 触发补偿。〔C:dachang/distributed_transaction/saga/ap/main.go:59-126〕
+- dtm 客户端怎么用：分支 handler 从请求 query 里取 gid、branch_id、op、trans_type 构造 Barrier（`dtmcli.BarrierFromQuery`），再用 `CallWithDB` 把业务包进 barrier 事务，框架在内部完成幂等、空补偿、防悬挂三项控制；分支返回值三态，nil 成功、ErrOngoing 框架重试、ErrFailure 触发补偿。〔C:dachang/distributed_transaction/saga/ap/main.go:59-126〕
 - TCC 在 RM 侧的样子：Try 调资源接口把金额挪进 `trading_balance` 冻结字段（带防负条件），Confirm 还原进真实余额，Cancel 反向解冻；AP 里 TccGlobalTransaction 串行 CallBranch。〔C:dachang/distributed_transaction/tcc/ap/main.go:60-194〕
 - XA 的代码形状：RM 用 `XaLocalTransaction` 包本地 SQL（xaID 是 gid 加 branchID），数据库自动两阶段；AP 用 XaGlobalTransaction 串行调各 RM，Prepare 成功就返回，commit 大概率还没完成。〔C:dachang/distributed_transaction/xa/rm/main.go:46-62〕
-- 手写 SAGA 的编排：AP 起全局 gid，分支先过 Barrier(action)（拦住说明已执行，直接成功）再调 RM 转账，本地事务成功 Commit 失败 Rollback；任一分支失败触发全部补偿，补偿先过 Barrier(compensate) 幂等，再查 action 占位判断空补偿，然后循环重试到成功。〔C:dachang/distributed_transaction/exception/ap/main.go:64-170〕
+- 手写 SAGA 的编排：AP 起全局 gid，分支先过 Barrier(action)（拦住说明已执行，直接成功）再调 RM 转账，本地事务成功 Commit 失败 Rollback；任一分支失败触发全部补偿，补偿先过 Barrier(compensate) 幂等，再查 action 占位判断空补偿，然后循环重试到成功（Sleep 5s，超过阈值报警）。〔C:dachang/distributed_transaction/exception/ap/main.go:64-170〕
 
 ### C:dachang/raft：教学版实现的工程细节
 
