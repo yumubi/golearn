@@ -163,9 +163,11 @@ func main() {
 
 - **生成的服务端接口强制组合一个空实现**（`mustEmbedUnimplemented...Server`）。目的同样是向后兼容：接口以后加方法时，老实现因为组合了空实现而仍然编译通过，不会让所有存量服务一夜之间编译失败。〔W10-1 p49〕
 
-API 定义放哪也是拆分期的决定。gRPC 场景下就是 Protobuf 文件放哪里，主流有三种方案：方案一，同一个仓库，公司（或部门）只有一个统一的 API 仓库，所有微服务的 API 定义都放在这里；方案二，各微服务内部维护一个 API 目录，放各自的 Protobuf 定义；方案三，每个微服务有一个实现仓库加一个 API 仓库，Protobuf 文件放 API 仓库。〔W10-3 p7〕
+API 定义放哪也是拆分期的决定。使用 gRPC 时，Protobuf 文件放在哪里是一个相当难解决的问题。〔W10-3 p7〕主流有三种方案：方案一，同一个仓库，公司（或部门）只有一个统一的 API 仓库，所有微服务的 API 定义都放在这里；方案二，各微服务内部维护一个 API 目录，放各自的 Protobuf 定义；方案三，每个微服务有一个实现仓库加一个 API 仓库，Protobuf 文件放 API 仓库。〔W10-3 p7〕
 
-选型条件与团队规模和组织形态强相关：小规模应用（团队规模不超过 30 人）建议方案一；巨型应用且团队组织架构合理的建议方案三。课程落地用的就是方案一：在 webook 下面建一个 api 目录放 Protobuf 定义。api 下面理论上还能放别的定义，比如 Thrift、Swagger；proto 按服务拆分目录，旁边配一个 gen 目录放生成代码；具体服务再加上版本号目录（也可以省略）。〔W10-3 p7-8〕
+选型条件与团队规模和组织形态强相关：小规模应用（团队规模不超过 30 人）建议方案一；巨型应用且团队组织架构合理的建议方案三。课程落地用的就是方案一：在 webook 下面建一个 api 目录放 Protobuf 定义。api 下面理论上还能放别的定义，比如 Thrift、Swagger；proto 按服务拆分目录，旁边配一个 gen 目录放生成代码；具体服务再加上版本号目录（也可以省略），比如 interactive 服务就是 api/proto/intr/v1/interactive.proto。〔W10-3 p7-8〕
+
+目录按服务和版本摆好之后，接下来要往里面填 Interactive 的定义。课程在 v1 版本目录下写 Interactive 的 Protobuf 定义，内容参照本地 Service 里的接口直接翻译过来：service 名用 InteractiveService，rpc 至少列出 IncrReadCnt、Like、CancelLike（取消点赞）、Collect（收藏）、Get、GetByIds。这一步就是把原本的本地调用包装成 gRPC 调用；package 这一项可以不配置，原文说它没什么特别的作用。〔W10-3 p9〕
 
 定义写好之后是生成代码。直接用 protoc 有三个痛点：插件难管理；protoc 命令本身不好记，每次使用都要输入一大堆参数；各种文件目录、package 定位简直要命（原课把改用 buf 这一步标注为可选）。所以引入 buf 来管理 protobuf，安装参考 buf.build/docs/installation，先试自己操作系统的安装方式，不行就用 npm。〔W10-3 p10〕在项目顶级目录放 buf.gen.yaml，定义 buf 怎么管理和编译 protobuf：`go_package_prefix` 解决每次都要写老长一段 go package 的问题；`plugins` 是关键配置，指定两个插件（Go 语言插件和 gRPC 插件），并在两个插件里分别指定 out（输出目录）和 opt（选项）。生成在顶级目录触发，两种等价方式：作者封装好的 `make grpc`，或者直接执行 `buf generate webook/api/proto`；buf 还有其他配置项，需要时再去看。〔W10-3 p11〕
 
