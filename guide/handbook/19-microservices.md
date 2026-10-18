@@ -225,13 +225,13 @@ service: article/8 +1
 
 如果你的抽象没做好，这一步就会要求修改 Service 的实现，那是危险信号：先回头把本地接口整理干净，再拆进程。〔W10-3 p12〕04 章的"接口写在使用方""包装器、适配器"在这一步全部派上用场。
 
-框架选型在这门课里是顺便带过的一步，但选型逻辑值得记全。Go 下候选有四个：**gRPC** 专注于 RPC，但也提供了负载均衡之类的基本功能，生态最好、相关开源软件非常多；**go-zero** 是集成 Web 开发和微服务开发的框架，底层通信就是用 gRPC，插件丰富、由中国人维护、没有语言壁垒；**Dubbo-go** 实现了 Dubbo 协议，可以无缝和 Java 的 Dubbo 应用通信，功能强、社区活跃，同时也支持 gRPC 协议；**go-micro** 专注于微服务、简单易用，有自己的协议，也适配了 gRPC 协议。〔W10-3 p5〕作者按三个维度对比：功能性上，业务没有特别之处的话，主流框架基本都能满足实际需要，四者没有特别大差距；成熟度上（社区支持度、搜索引擎支持度、招聘人才难度），gRPC 最好；非功能性上（性能），中小公司基本不考虑，而 gRPC 性能毫无疑问最好。据此课程选定 gRPC。〔W10-3 p4-5〕所以作者的选型建议是：遇事不决选 gRPC，绝对不会出错。〔W10-1 p26〕
+微服务化真正动手之前，要先确定微服务框架的选型。课程此前已经定了用 gRPC，这里虽然只是顺便带过，选型逻辑还是值得记全。〔W10-3 p4〕Go 下候选有四个：**gRPC** 专注于 RPC，但也提供了负载均衡之类的基本功能，生态最好、相关开源软件非常多；**go-zero** 是集成 Web 开发和微服务开发的框架，底层通信就是用 gRPC，插件丰富、由中国人维护、没有语言壁垒；**Dubbo-go** 实现了 Dubbo 协议，可以无缝和 Java 的 Dubbo 应用通信，功能强、社区活跃，同时也支持 gRPC 协议；**go-micro** 专注于微服务、简单易用，有自己的协议，也适配了 gRPC 协议。〔W10-3 p5〕作者按三个维度对比：功能性既可以说最重要，也可以说最不重要，业务没有特别之处的话，主流框架基本都能满足实际需要，四者没有特别大差距；成熟度上（社区支持度、搜索引擎支持度、招聘人才难度），gRPC 最好；非功能性上（性能），中小公司基本不考虑，而 gRPC 性能毫无疑问最好。据此课程选定 gRPC。〔W10-3 p4-5〕所以作者的选型建议是：遇事不决选 gRPC，绝对不会出错。〔W10-1 p26〕
 
 ### 启动 Interactive：独立微服务的启动件
 
 外壳写完，最后一步是把 Interactive 变成可独立启动的微服务。要补齐三个启动件：模块内的 wire 装配、main 函数、一份自己的配置文件。wire 部分不用从零写：第六节"集成测试跟着搬"已经为 Interactive 写过一套测试用的 IoC 加 wire（模块少，相比 webook 简单很多），把测试的 wire 相关代码抄一份即可，再按主应用形态改差集。Interactive 作为一个完全独立的模块，配置之类的模块它也有一份，可以认为 webook 中 main 函数的部分它差不多都会有一份。〔W10-3 p16〕
 
-wire 装配分两组〔W10-3 p17〕。`serviceProviderSet` 收 Interactive 全链路的 provider：`dao.NewGORMInteractiveDAO`、`cache.NewRedisInteractiveCache`、`repository.NewCachedInteractiveRepository`、`events.NewInteractiveReadEventConsumer`、`service.NewInteractiveService`、`grpc.NewInteractiveServiceServer`。`thirdProvider` 收 ioc 初始化：`ioc.InitRedis`、`ioc.InitDB`、`ioc.InitLogger`、`ioc.InitKafka`、`ioc.InitGRPCServer`、`ioc.NewConsumers`。`Init() *App` 通过 `wire.Build(thirdProvider, serviceProviderSet, wire.Struct(new(App), fieldNames...: "*"))` 返回 App。和测试版相比有两处差集：一是 `thirdProvider` 里 `InitTestDB`、`InitLog` 换成正式的 `InitDB`、`InitLogger`，再新增 `InitGRPCServer` 和 `NewConsumers`，四项变六项；二是测试版散装列在 `wire.Build` 的 server、dao、cache、repository、service，正式版收进 `serviceProviderSet`，并补上事件消费者（测试不装配消费者）。
+wire 装配分三组〔W10-3 p17〕。`serviceProviderSet` 收 Interactive 全链路的 provider：`dao.NewGORMInteractiveDAO`、`cache.NewRedisInteractiveCache`、`repository.NewCachedInteractiveRepository`、`events.NewInteractiveReadEventConsumer`、`service.NewInteractiveService`，gRPC Server 的 provider 不在这一组。`thirdProvider` 收 ioc 初始化的四项：`ioc.InitRedis`、`ioc.InitDB`、`ioc.InitLogger`、`ioc.InitKafka`。`Init() *App` 的 `wire.Build` 直接列出 `thirdProvider`、`serviceProviderSet`、`grpc.NewInteractiveServiceServer`、初始化 gRPC Server 的 provider、`ioc.NewConsumers`，最后是 `wire.Struct(new(App), fieldNames...: "*")`，`Init()` 返回 `new(App)`。和测试版相比〔W10-3 p14〕：`thirdProvider` 仍是四项，只把 `InitTestDB`、`InitLog` 换成正式的 `InitDB`、`InitLogger`；测试版散装列在 `wire.Build` 里的 dao、cache、repository、service 收进 `serviceProviderSet`，并补上事件消费者（测试不装配消费者）；`wire.Build` 另外增加初始化 gRPC Server 和消费者的两个 provider。
 
 配置文件相比 webook 主应用只是多了一个 gRPC 启动端口，其余 db、redis、kafka 配置齐全〔W10-3 p17-18〕：
 
