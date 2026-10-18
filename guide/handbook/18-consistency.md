@@ -18,7 +18,7 @@
 2. 这个状态能不能被检测出来？
 3. 检测出来之后，靠什么把它修回去？
 
-还有三个"捣乱者"，缩写 NPC：网络延迟（TCP 保序不丢，但消除不了延迟）、进程暂停（GC 或云迁移可能停几分钟）、时钟漂移（NTP 同步会让本机时间前后跳）。分布式事务不依赖时间戳，真正天天咬人的是延迟和暂停。〔C:dachang/distributed_transaction/exception/npc.md:1-7〕后面的机制几乎都在和"响应还没回来"以及"请求其实还活着"作斗争。
+还有三个"捣乱者"，缩写 NPC：网络延迟（TCP 保序不丢，但消除不了延迟）、进程暂停（GC 或云迁移可能停几分钟）、时钟漂移（石英钟本身有精度偏差、还受温度影响，NTP 对齐又会让本机时间前后跳）。分布式事务不依赖时间戳，真正天天咬人的是延迟和暂停。〔C:dachang/distributed_transaction/exception/npc.md:1-9〕后面的机制几乎都在和"响应还没回来"以及"请求其实还活着"作斗争。
 
 工程上的总原则只有三条，优先级从高到低：
 
@@ -55,7 +55,7 @@
 
 ## 二、三大异常与 barrier：补偿机制的地基
 
-SAGA 的补偿动作会遇到三类异常，这也是一切补偿方案的公共考点：〔C:dachang/distributed_transaction/exception/npc.md:9-13〕
+SAGA 的补偿动作会遇到三类异常，这也是一切补偿方案的公共考点：〔C:dachang/distributed_transaction/exception/npc.md:11-15〕
 
 - **空补偿**：补偿比分支操作先到（操作还没执行就收到了补偿），此时补偿应该什么都不做，直接返回成功。
 - **悬挂**：分支操作在补偿之后才到达，此时分支操作应该拒绝执行，否则资源永远悬着。
@@ -63,7 +63,7 @@ SAGA 的补偿动作会遇到三类异常，这也是一切补偿方案的公共
 
 前两个异常来自 NPC：网络延迟让两个请求以任意顺序到达；进程暂停让"先发"的请求后执行。
 
-DTM 的解法是**子事务屏障**（barrier）：在本地数据库建一张表，唯一键是 `gid-branchid-op`（全局事务 ID、分支 ID、操作类型 action 或 compensate），用 `insert ignore` 判断是否第一次到达。四步：〔C:dachang/distributed_transaction/exception/npc.md:22-28〕
+DTM 的解法是**子事务屏障**（barrier）：在本地数据库建一张表，唯一键是 `gid-branchid-op`（全局事务 ID、分支 ID、操作类型 action 或 compensate），用 `insert ignore` 判断是否第一次到达。四步：〔C:dachang/distributed_transaction/exception/npc.md:17-29〕
 
 1. 开启本地事务。
 2. 对当前操作 `op`，`insert ignore` 一条 `gid-branchid-op`；影响 0 行说明是重复请求，直接提交返回成功。这一步管**幂等**。
