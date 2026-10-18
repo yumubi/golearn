@@ -47,6 +47,10 @@
 | TCC | Try 预留资源、Confirm 使用预留、Cancel 释放 | 预留资源提供一定隔离 | 一致性要求高、不接受"先改后补偿" |
 | XA | 两阶段提交，数据库原生支持 | 强，prepare 期间持锁 | 并发不高、无热点争抢 |
 
+**TCC 的短事务限制与失败重试**：TCC 只适合短事务，分支的执行顺序要自己写代码控制，AP 重启后全局事务只能回滚、不能继续；Confirm/Cancel 失败时 dtm 会不断重试到成功，建议监控，重试超过 3 次就报警并人工介入。〔C:dachang/distributed_transaction/分布式事务模式.md:23-27〕〔C:dachang/distributed_transaction/分布式事务模式.md:9-13〕
+
+**XA 的两阶段与恢复**：XA 是数据库原生两阶段提交，prepare 阶段所有参与者锁住资源并报 ready，commit/rollback 由 TM 裁决；主流数据库都支持，而且不需要 Barrier。xa end 之后、prepare 之前同一连接读写会报 XAE07；锁超时是 ERROR 1205，可用 innodb_lock_wait_timeout 调整。崩溃恢复分三种：已经 commit 的没事，还没 prepare 的回滚，prepare 过的要等 xa recover 裁决。代价是 prepare 期间锁不释放、伤害吞吐，commit 结果对客户端未知；适用条件是并发不高、没有热点争抢。〔C:dachang/distributed_transaction/分布式事务模式.md:29-53〕
+
 选型口诀（DTM 官方建议）：**不需要回滚用二阶段消息，需要回滚用 SAGA，一致性要求高用 TCC，并发不高且没有热点用 XA**。〔C:dachang/distributed_transaction/分布式事务模式.md:54-56〕三个典型场景帮你把口诀落到地上：
 
 - **秒杀**：创建订单和扣库存不是原子操作。用二阶段消息：Prepare 阶段去 Redis 扣库存（大概率失败，秒杀成功是小概率事件），Commit 阶段向 MySQL 写订单。〔C:dachang/distributed_transaction/分布式事务模式.md:57〕
