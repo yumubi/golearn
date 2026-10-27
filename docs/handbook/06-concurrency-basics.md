@@ -544,6 +544,6 @@ func main() {
 ## 想深入去哪查
 
 - 原材料：TB31（CSP 与 goroutine 基础）、TB32（调度器演进与抢占，基于较老的 Go 版本，以结构为准）、TB33（channel 与 select 全部惯用法及基准）、TB34（sync 与 atomic 的选型基准）、TB35（goroutine 池，下一节会用到）。
-- 代码：`C:go_basic/concurrence`（脏写复现、锁矩阵、sync.Cond 与 channel 等价、context）、`C:dachang/concurrence`（手写 Once、自旋锁、分段锁、协程池、泄漏现场）。
+- 代码：`C:go_basic/concurrence`（脏写复现、锁矩阵、sync.Cond 与 channel 等价、context）、`C:dachang/concurrence`（手写 Once、自旋锁、分段锁、goroutine 池、泄漏现场）。
 - 旧长版：`notes/p3-concurrency.md`、`notes/p31-concurrency-scheduler.md`（含调度器 G/P/M 结构体字段、sysmon 抢占链路、基准全表）。
 - 不在这一节：`runtime` 里 `runq` 和 `sysmon` 的实现细节，遇到性能诊断再查 TB32 与旧长版。

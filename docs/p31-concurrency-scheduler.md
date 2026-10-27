@@ -296,7 +296,7 @@ New 的参数要加选项又不破坏旧调用，用 Option 模式：`type Optio
 
 〔实测〕 `go test ./exercises/p31sched/ -run TestFunctionalOptions -count=1` PASS：容量 1 占住 worker 后非阻塞 Schedule 返回 ErrNoIdleWorkerInPool。Java 的 ThreadPoolExecutor+RejectedExecutionHandler 是同构物；Rust 走 builder 模式，两大惯用法各自成派。
 
-一个边界要说清：课程版 run 在 preAlloc=false 时不主动建 worker，先阻塞在 tasks 读取上，首个 task 才触发创建（作者留言确认）。教学实现，不能上生产；生产用 ants 这类库。〔TB35 p13-15〕 C:dachang/concurrence#K4 的双协程池对照（close 即停版与 CAS 状态机版）进 MATERIALS 索引。
+一个边界要说清：课程版 run 在 preAlloc=false 时不主动建 worker，先阻塞在 tasks 读取上，首个 task 才触发创建（作者留言确认）。教学实现，不能上生产；生产用 ants 这类库。〔TB35 p13-15〕 C:dachang/concurrence#K4 的双 goroutine 池对照（close 即停版与 CAS 状态机版）进 MATERIALS 索引。
 
 ## 实测五点：脏写、锁矩阵、map 崩溃、context
 
@@ -314,7 +314,7 @@ func Inc() {
 // inc2 用 atomic.AddInt32(&n, 1) 修复
 ```
 
-〔实测〕 1000 协程各 `n++` 跑 5 轮，`go test ./exercises/p31sched/ -run TestLostUpdateDistribution -count=1 -v`：
+〔实测〕 1000 个 goroutine 各 `n++` 跑 5 轮，`go test ./exercises/p31sched/ -run TestLostUpdateDistribution -count=1 -v`：
 
 ```text
 n++ 结果: 940
@@ -361,7 +361,7 @@ child 到期耗时 500.581625ms, err=context deadline exceeded
 
 WithValue 的自定义 key 纪律（StringKey 类型避免碰撞、只用于跨 API 边界携带数据）P3 §context 已讲，源码锚点 〔C:go_basic/concurrence/context.go:76-127〕；〔C:go_basic/concurrence/context.go:13-33〕 的 select 写法是上面实测的模板（done 收业务结果，ctx.Done() 收超时，Err() 区分 canceled 与 deadline exceeded）。
 
-### 协程泄露的现场
+### goroutine 泄露的现场
 
 超时 ctx 等 5ms 的 rpc、1ms 就返回，rpc goroutine 仍阻塞在无缓冲 channel 上，每请求泄一个；NumGoroutine 打印与 pprof goroutine profile 抓现行。这是"channel 惯用法群"一节信号惯用法用错方向的现场，完整链路见 MATERIALS 索引 C:dachang/concurrence#K7，P36 泄露专题会展开。
 

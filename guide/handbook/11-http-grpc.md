@@ -512,9 +512,9 @@ Echo 示例的传输层选了 UDP,理由写在构造函数注释里:UDP 面向�
 
 报文语义的代价是"请求-响应不再自动成对":多条响应乱序到达时,谁也说不清哪条响应属于哪个请求。`EchoClient` 的解法是给每个请求发唯一号,靠号回填:〔C:dachang/my_rpc/client/echo_client.go:15-33〕
 
-- 结构体持有 `conn`、`serializer` 和 `sync.Map` 类型的 `requestBuffer`;构造函数 `DialTimeout("udp", …, 30min)` 建连后启动常驻接收协程 `go client.receive()`,此后收发完全异步。
+- 结构体持有 `conn`、`serializer` 和 `sync.Map` 类型的 `requestBuffer`;构造函数 `DialTimeout("udp", …, 30min)` 建连后启动常驻接收 goroutine（`go client.receive()`）,此后收发完全异步。
 - `Call` 五步:① `xid.New().String()`(rs/xid 分布式唯一 id 生成器)生成 id 写进 `request.Id`;② 序列化整个请求;③ 建容量 1 的 `chan my_rpc.RpcData`,以 id 为 key `Store` 进 `requestBuffer`;④ `conn.Write(data)` 发出请求;⑤ 阻塞在 `resp := <-streamCh` 直到响应送达。〔C:dachang/my_rpc/client/echo_client.go:60-79〕
-- `receive` 协程循环:4096 字节缓冲 `Read` → 反序列化成 `RpcData` → 按 `resp.Id` 到 `requestBuffer.Load`;命中则**先 `Delete(resp.Id)` 再把 resp 推进取出的 chan** 唤醒等待方。先删再投,保证派发后 entry 不残留,防止 `sync.Map` 泄漏;未命中(超时后迟到的响应或 id 对不上)只打日志"request buffer里没有id %s",不投递。〔C:dachang/my_rpc/client/echo_client.go:37-56〕
+- `receive` goroutine 循环:4096 字节缓冲 `Read` → 反序列化成 `RpcData` → 按 `resp.Id` 到 `requestBuffer.Load`;命中则**先 `Delete(resp.Id)` 再把 resp 推进取出的 chan** 唤醒等待方。先删再投,保证派发后 entry 不残留,防止 `sync.Map` 泄漏;未命中(超时后迟到的响应或 id 对不上)只打日志"request buffer里没有id %s",不投递。〔C:dachang/my_rpc/client/echo_client.go:37-56〕
 - `Call` 定义为指针接收者,因为要修改成员 `requestBuffer`。〔C:dachang/my_rpc/client/echo_client.go:59-60〕
 - main 里 10 个 goroutine 各持独立 EchoClient 串行调 10 次 `Call`,校验 `resp.A` 与发出的随机数相等,验证了并发下"按 id 归位"依然成立。〔C:dachang/my_rpc/client/echo_client.go:82-106〕
 

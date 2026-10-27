@@ -426,7 +426,7 @@ custom:  :80 1s 0
 
 - 不是什么都能直接 defer：自定义函数与方法无条件支持（有返回值会在调度执行时自动丢弃）；内置函数里 close、copy、delete、print、println、recover、panic 可以直接 defer，而 append、cap、len、make、new 这些有返回值的直接 defer 会编译错 `defer discards result`，要用匿名函数包一层。〔TB23 p14-16〕
 - `net/http` 连接 goroutine 的 recover 有个细节：`err != ErrAbortHandler` 才打印栈。ErrAbortHandler 是服务器故意用来中止连接的内部哨兵，静默吞掉不算错误；自己写 recover 时可借鉴"有意的 panic 不告警"这个模式。〔TB23 p6-7〕
-- defer 必须在 panic 触发之前注册才会执行：panic 之后才写的 defer 来不及进栈，接不住当前这次 panic。留言区把三条铁律收成一句话：defer 要在 panic 前、recover 只能在 defer 中调、recover 只救本协程。〔TB23 p22-23〕
+- defer 必须在 panic 触发之前注册才会执行：panic 之后才写的 defer 来不及进栈，接不住当前这次 panic。留言区把三条铁律收成一句话：defer 要在 panic 前、recover 只能在 defer 中调、recover 只救本 goroutine。〔TB23 p22-23〕
 
 ### TBX09 工程化写法的三个补遗
 

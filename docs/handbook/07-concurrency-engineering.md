@@ -533,16 +533,16 @@ load once
 
 ### C:go_basic/concurrence 与 C:dachang/concurrence 的补充点
 
-- 双协程池对照：Simple 版是共享 tasks chan 加 N 个 worker for-range，close 即停、WaitGroup 收尾。RoutinePool 版给每个 worker 配容量 1 的 tasks chan，Submit 轮转提交，可能轮到空 worker。再用 CAS 状态机防重复 run 和 close。〔C:dachang/concurrence/routine_pool.go:16-154〕
+- 双 goroutine 池对照：Simple 版是共享 tasks chan 加 N 个 worker for-range，close 即停、WaitGroup 收尾。RoutinePool 版给每个 worker 配容量 1 的 tasks chan，Submit 轮转提交，可能轮到空 worker。再用 CAS 状态机防重复 run 和 close。〔C:dachang/concurrence/routine_pool.go:16-154〕
 - 泄漏抓现行：`runtime.NumGoroutine()` 看趋势，挂上 net/http/pprof 后访问 /debug/pprof/goroutine 能看到每个泄漏 goroutine 卡在哪一行；现场是 1ms 超时等 5ms 的 rpc，子 goroutine 卡在无缓冲发送上，每请求泄一个。〔C:dachang/concurrence/main/routine_leaky.go:19-59〕
 - `net.Conn` 的接口契约允许多个 goroutine 同时调用方法；其他连接或客户端类型的并发安全性应分别查阅其文档，不能一概推断。〔C:dachang/concurrence/concurrent_connection/client/tcp/main.go:1-65〕
 - 信号量的额度必须归还：QpsLimit 每次处理先取令牌，处理完要在 defer 里还（`<-qps`），取还不对称，额度越漏越少。〔C:go_basic/concurrence/qps_limit.go:10-19〕
-- 三级流水线的实盘形状：单协程 walkDir 遍历文件名入 fileList，15 个读协程逐行进 lineBuffer，5 个处理协程 atomic 求和；上游 close 后下游 for-range 退出，逐级 Wait+close 收敛；另起 Ticker 定时打印两级缓冲的堆积量，用它指导并发度调整。〔C:go_basic/concurrence/deal_file.go:79-124〕
+- 三级流水线的实盘形状：单 goroutine walkDir 遍历文件名入 fileList，15 个读 goroutine 逐行进 lineBuffer，5 个处理 goroutine atomic 求和；上游 close 后下游 for-range 退出，逐级 Wait+close 收敛；另起 Ticker 定时打印两级缓冲的堆积量，用它指导并发度调整。〔C:go_basic/concurrence/deal_file.go:79-124〕
 
-省略未吸收：TB09 的 ServeMux 与 gorilla/mux 已被 Go 1.22 标准库的方法加路径模式取代，归 11 节。TB09 的面向接口 Store 设计归 04 节。TB35 的 go.mod replace 本地引用归 02 节。C 单元的自旋锁与文件并发写维持"想深入去哪查"里声明的边界。Gosched 与 Goexit 归 08 节调度，recover 只捕本协程 05 与 06 节已讲，Cond 与 RWMutex 矩阵归 06 节。
+省略未吸收：TB09 的 ServeMux 与 gorilla/mux 已被 Go 1.22 标准库的方法加路径模式取代，归 11 节。TB09 的面向接口 Store 设计归 04 节。TB35 的 go.mod replace 本地引用归 02 节。C 单元的自旋锁与文件并发写维持"想深入去哪查"里声明的边界。Gosched 与 Goexit 归 08 节调度，recover 只捕本 goroutine 05 与 06 节已讲，Cond 与 RWMutex 矩阵归 06 节。
 
 ## 想深入去哪查
 
-- 原材料：TB35（goroutine 池的完整实现：创建、worker 管理、提交调度、功能选项）；TB09（优雅退出的 signal.Notify + Shutdown）；`C:dachang/concurrence`（超时四法、优雅退出、泄漏现场、手写 Once 与分段锁）；`C:go_basic/concurrence`（context、协程池与限流）。
+- 原材料：TB35（goroutine 池的完整实现：创建、worker 管理、提交调度、功能选项）；TB09（优雅退出的 signal.Notify + Shutdown）；`C:dachang/concurrence`（超时四法、优雅退出、泄漏现场、手写 Once 与分段锁）；`C:go_basic/concurrence`（context、goroutine 池与限流）。
 - 旧长版：`notes/p14-pipelines.md`（errgroup、SetLimit、生成器、扇出保序、并发上限消融实验）、`notes/p3-concurrency.md`。
 - 不在这一节：自旋锁与 CAS 的内存序细节〔C:dachang/concurrence/spinllock.go:15-50〕、文件并发写的性能对比〔C:dachang/concurrence/file_test.go:11-44〕，遇到再查。
