@@ -87,9 +87,25 @@ func main() {
 
 ## 一、三个最小概念：Pod、Deployment、Service
 
-材料给的最小集：Pod 是实例，Service 是逻辑上的服务，Deployment 管 Pod，少了就补、多了就删。一个 Web 应用部署三个实例，就是一个 Service 对应三个 Pod。〔W03-2 p6〕
+先把主角认全。Kubernetes 是一个开源的容器编排平台，简称 K8s，一句话概括：管容器的。它不替容器干活，只负责管理和调度，讲义给了两个类比：学生是容器，那么老师就是 K8s；你是容器，那么你老板就是 K8s。它管的也不是某一种容器：既可以管理 Docker 产生的容器，也可以管理不是 Docker 产生的容器。〔W03-2 p5〕
 
-三个概念怎么组合成一份能跑的配置？以材料里部署 webook 的例子看 Deployment 的骨架。〔W03-2 p16-17〕
+材料给的最小集：Pod 是实例；Service 是逻辑上的服务，可以认为这个是你业务上 XXX 服务的直接映射；Deployment 是管理 Pod 的东西。Pod 和 Service 的最简理解：假如你有一个 Web 应用，部署了三个实例，那么就是一个 Web Service，对应了三个 Pod。Deployment 最好的理解方式是运维类比：你跟运维说要保证我的 Web 有三个实例，少了运维就重启一个，多了运维就删除一个，运维就是那个 Deployment。〔W03-2 p6〕
+
+材料部署 webook 时用的正是这三件套。目标是部署三个实例，可以让用户直接访问：三个实例即便一个崩溃了也还有两个，比较不容易出问题；实际中你要根据自己的业务来判断。落到配置上，需要一个 Service、一个 Deployment，这个 Deployment 管着三个 Pod，每一个 Pod 是一个实例。〔W03-2 p13〕
+
+只部署 Deployment 行不行？不行。此时应用没办法从外面访问，你需要将 Pod 封装为一个逻辑上的服务，即 Service；webook 的 Service 用的是负载均衡类型，意思是给 selector 里面筛选出来的 Pod 做负载均衡。〔W03-2 p23〕分工可以这样记：Deployment 保证"有三个能跑的实例"始终成立，Service 给这三个实例一个稳定的访问入口。
+
+### 镜像两步走：先交叉编译，再 docker build
+
+部署 K8s 时要告诉它里面跑的是什么。已知 K8s 调度的是容器，已知容器里面运行的是各种镜像，又知我们要在 K8s 里面运行 webook，答案就是要把 webook 打包成镜像，这就是用 Docker 的意图。〔W03-2 p14〕
+
+产出镜像分两步。第一步在本地完成编译，生成一个可在 Linux 平台上执行的 webook 可执行文件，基本命令是 `GOOS=linux GOARCH=arm go build -o webook .`，GOARCH 的值要和目标机器架构一致：讲义文本这里印的是 arm，不排除有丢字，实际部署按目标架构填。第二步运行 Docker 命令打包成镜像，基本命令是 `docker build -t flycash/webook:v0.0.1 .`，带上了版本 tag。〔W03-2 p15〕课程出于方便把这两步封装成了 make docker 命令；没装 make 工具的话，一条条命令在命令行单独执行效果相同。〔W03-2 p15〕
+
+这一步之前还有个前置：材料先改了代码，把 main 里的 MySQL 和 Redis 初始化注释掉，只留 gin 注册 /hello 并监听 8080，保证 Web 能启动、能监听端口就可以，先绕开这两个依赖本身部署起来没那么简单的问题。〔W03-2 p12〕讲义只教到这两步，没有展示 Dockerfile 内容，也没有出现 FROM scratch 或任何基础镜像选择的说明；本仓库 `labs/compose` 的 Dockerfile 交付层用的是 alpine（labs/compose/Dockerfile 1-12 行），多阶段构建的取舍在 22 节展开，这里不替讲义补设定。
+
+### 第一份配置文件：Deployment
+
+以材料里部署 webook 的例子看 Deployment 的骨架，这是本课编写的第一份 K8s 配置文件。〔W03-2 p16-17〕整份文件从上到下是 apiVersion、kind、metadata、spec 四段，spec 里嵌着 Pod 模板。最上面三行各管一件事：apiVersion: apps/v1 声明用哪个版本的 API 解读配置；kind: Deployment 声明这里配置的是 Deployment；metadata.name: webook 给对象起名，注释特意说明也叫 webook，但这是一个 Deployment，对象名与业务同名并不冲突。〔W03-2 p16〕讲义认为 K8s 官方文档写得不是很好，但可以参考 kubernetes.io 的 Deployment 概念页。〔W03-2 p16〕
 
 ```yaml
 apiVersion: apps/v1
@@ -113,29 +129,56 @@ spec:
             - containerPort: 8080
 ```
 
-`spec` 三要素对应三个问题：〔W03-2 p19-21〕
+`spec` 是 Deployment 的规格说明，直接理解为说明书，三要素对应三个问题：〔W03-2 p19-21〕
 
-1. **`replicas`**：要几个。这就是开头 `desired` 的 YAML 写法。
-2. **`selector`**：我怎么在一大堆 Pod 里认出哪些是我的。按标签筛，这里认 `app=webook`。
-3. **`template`**：每个 Pod 长什么样。Pod 里面跑的就是容器，可以跑多个。
+1. **`replicas`**：要几个。值为 3 表示这个 Deployment 有三个副本，实际上就是三个 Pod。这就是开头 `desired` 的 YAML 写法。
+2. **`selector`**：怎么在一大堆 Pod 里认出哪些是我管理的那三个。示例用 matchLabels 按标签筛选，需要的是含有 `app=webook` 标签的 Pod；常用的替代还有 matchExpressions，即根据表达式来筛选。如果 apiVersion 是自定义的，也可以设计自己的 selector，不过很复杂。〔W03-2 p20〕
+3. **`template`**：每个 Pod 长什么样、该怎么创建。有了模板就可以照猫画虎直接创建出来。template 在 kind 不同的时候对应的内容也不同，在 Deployment 里它就是创建 Pod 的模板。〔W03-2 p21〕
 
-注意 selector 必须匹配 template 的 labels：这里使用相同键值。若不匹配，Deployment 的配置会被 API 校验拒绝，而不是先创建 Pod 再找不到。`apiVersion` 决定 API 使用的版本。〔W03-2 p18〕
+template 内部再次出现 metadata 和 labels，标签是 `app: webook`，注释写明了原因：上面 selector 里我们找的就是这个 Label。它的 spec 里指定 containers：名字是 webook，image 是 `flycash/webook:v0.0.1`，ports 里声明 `containerPort: 8080`。从这里可以看出，Pod 里面跑着的就是容器，而且可以跑多个容器。〔W03-2 p17〕〔W03-2 p21〕
+
+两处标签必须对上：template.metadata.labels 与 selector.matchLabels 是同一份键值 app=webook，对不上时 Deployment 无法按标签认出自己创建的 Pod。〔W03-2 p17〕`containerPort: 8080` 也不是随手写的：main 函数里写死了 8080（`server.Run(":8080")`），所以配置文件写 8080，两边必须对上。〔W03-2 p12〕〔W03-2 p17〕`apiVersion` 决定 API 使用的版本。〔W03-2 p18〕
 
 对比 compose：它把 YAML 翻译成一次启动动作，起好之后没有常驻的控制器按副本数对账；K8s 里 `replicas` 是控制器每一轮都在比较的期望值。
 
 ## 二、Service：稳定的门牌，和三个端口
 
-Pod 会死会重生，重生出来的是新实例（上面模型里 `pod-2` 没了，补的是 `pod-4`），直接连某个 Pod 的地址不稳定。Service 提供稳定的访问入口并选择后端 Pod；Pod 也可在网络和权限允许时直接访问，Service 并非访问 Pod 的唯一方式。〔W03-2 p23〕
+Pod 会死会重生，重生出来的是新实例（上面模型里 `pod-2` 没了，补的是 `pod-4`），直接连某个 Pod 的地址不稳定。Service 提供稳定的访问入口，把 Pod 封装为一个逻辑上的服务。〔W03-2 p23〕（补充：Pod 本身在网络和权限允许时也能被直接访问，Service 并不是访问 Pod 的唯一方式，材料本节没有展开这一点。）
 
 材料里部署 Redis 时用到了 Service 的三种端口，这是新手最容易混的地方：〔W03-2 p41〕
 
-- **`port`**：Service 自己的端口。集群内其他 Pod 连 `demo-redis-service:6379`，用的是它。
-- **`targetPort`**：转发目的地，Pod 容器上监听的端口。
-- **`nodePort`**：NodePort 类型在节点上暴露的端口；默认可分配范围是 30000 到 32767，集群管理员可以修改范围。〔W03-2 p40-42〕
+- **`port`**：Service 自己的端口。Redis 的连接信息用的就是 `demo-redis-service:6379`，写的是 Service 名加这个端口。
+- **`targetPort`**：转发目的地，Pod 上暴露的端口。
+- **`nodePort`**：在 K8s 集群之外访问的端口，必须是 30000 到 32767 之间。〔W03-2 p39-41〕
 
-外部客户端可通过节点 IP 和 nodePort 访问，集群网络组件将流量转发到 Service 选中的后端及其 targetPort；数据包不一定依次经过三个独立监听端口。〔W03-2 p39〕如果只给集群内部用，通常用默认的 `ClusterIP` 类型，通过 Service 名称和 port 访问。
+外部的 redis-cli 就是靠节点 IP 加 nodePort 连进来的，讲义给的例子是 `redis-cli -p 30379`；targetPort 则决定转发请求的时候，应该转发到 Pod 上的哪个端口。〔W03-2 p41〕三个端口各司其职，并不是三道串联的门。（补充：一个数据包从外部进来，走的是 nodePort 这一个入口，最后落到 Pod 的 targetPort，不会依次经过三个独立监听的端口；具体转发路径材料没展开。）如果只给集群内部用，通常用默认的 `ClusterIP` 类型，通过 Service 名称和 port 访问。
 
-顺带回答一个老问题：K8s 说不再内置 Docker 了，那我 Docker 构建的镜像还能用吗？能。Docker 实现的是 OCI 标准，镜像归标准管，不归 Docker 管。〔W03-2 p22〕
+顺带回答一个老问题：K8s 说不再内置 Docker 了，那我 Docker 构建的镜像还能用吗？原文的判断是能：Docker 是实现 OCI 标准的，所以即便现在 K8s 声称不支持 Docker，但这个镜像依旧可以用。〔W03-2 p22〕换句话说，镜像归标准管，不归 Docker 管。两个说法并不矛盾：K8s 从 1.24 起移除的是 dockershim，弃用的是与 Docker 运行时的直连，镜像遵循的 OCI 标准没有变，所以 Docker 构建的镜像照常能被 K8s 拉取运行。〔1.26 修正〕上面 YAML 里 `template.spec.containers` 的 image 字段写的就是这套镜像：`flycash/webook:v0.0.1`，与 `containerPort: 8080` 同处一段配置。〔W03-2 p22〕
+
+### 副本多了之后：Session 为什么必须选 redis
+
+Deployment 起 3 个副本，意味着同一个应用同时跑在 3 个 Pod 里，代码里"默认单机"的假设会最先出问题，Session 是最典型的。Gin 本身提供了很多 Session 存储实现：cookie（基于内存的实现）、gorm（基于 GORM）、memcached（基于 Memcached）、memstore（基于内存）、mongo（基于 MongoDB）、postgres（基于 PostgreSQL）、redis（基于 Redis）、tester（用于测试）。不要搞混的一点：sess_id 肯定是放在 cookie 里面的，但 Session 里面的数据，比如代码里的 user_id，才是 store 存储的内容。〔W03-1 p6〕
+
+怎么选？单机单实例部署可以考虑 memstore 实现；多实例部署应该选择 redis 实现；其它实现都比较少使用；平时无脑选 redis 的实现。〔W03-1 p7〕多实例为什么必须选 redis？在分布式环境下（包括单例应用多实例部署）都需要确保 Session 在每一个实例上都可以访问到。〔W03-1 p8〕推导一下：memstore 是基于内存的实现，数据跟着单个实例走，单机单实例只有一个进程，内存里的 Session 天然每次都能访问到；多实例时登录请求落到实例 1，Session 存在实例 1 里，下一个请求被分到实例 2，那里没有这份 Session。讲义的图把现象画得很直白：请求落到有 Session 的实例返回 OK，落到另一个实例因为没有 Session 就要求重新登录。〔W03-1 p8〕三个副本要能互相顶替，Session 必须放在所有实例都能访问到的地方，这就是 redis 的位置。
+
+讲义把 cookie 实现也标注为基于内存，但没有展开它在多实例下的行为，也没有讨论把数据本身放进 Cookie 的做法；这里按讲义口径回答，不替它下结论。
+
+### 登录状态过期了：四种刷新策略
+
+多实例时代还会撞上另一个问题。Session id 所在的 Cookie 过期时间是固定的：假如设为 10 分钟，用户登录后 9:59 还能访问网站，结果过了两秒（10:01），他就被要求重新登录。所以需要在用户持续使用网站的时候刷新过期时间。〔W03-1 p16〕
+
+怎么刷新？讲义给了四种办法：〔W03-1 p17〕
+
+1. 用户每次访问都刷新。缺点：性能差，对 Redis 之类的影响很大。
+2. 快要过期了再刷新。比如 10 分钟过期，用户第 9 分钟访问过来就刷新。风险：万一第 9 分钟以后都没再访问，会话就失效了。
+3. 固定间隔时间刷新。比如每分钟内第一次访问都刷新。讲义只给前两种标注了缺点，这一种没有给。
+4. 使用长短 token。留到后面接入微信登录时再深入讨论。
+
+取舍就在前两种之间：每次刷，用性能换最顺的在线体验；快过期才刷，省下大部分写操作，但留下失效窗口。固定间隔是两者的折中，具体间隔取多少，原课未规定具体数值。
+
+刷新动作放哪？你肯定不想在所有 HTTP 接口里手动刷新过期时间；刷新过期时间是大部分业务都要完成的公共动作，所以最适合放在 middleware 里。现成的登录校验 middleware 正好可以在登录校验之后顺手刷新一下。〔W03-1 p18〕
+
+至于登录状态保持多久比较好：取决于你的产品经理，也取决于系统其它方面的安全措施；有别的验证用户身份的机制，就可以让用户长时间不需要登录。〔W03-1 p19〕JWT 等登录认证细节在 11 节展开，这里只取与部署形态相关的部分。
 
 ## 三、Ingress、PV 与 PVC：规则与实现的分离
 
