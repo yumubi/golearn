@@ -520,7 +520,7 @@ func worker() {
 }
 ```
 
-NewTicker 创建的 Ticker 实例包含一个 channel 类型的字段 C，它按时间间隔持续产生事件，就像"心跳"一样：c 无数据可收时，for 循环每隔特定时间完成一次迭代再回到下一次 select。和 timer 一样，用完要调用 Stop，避免心跳事件在 ticker 的 channel（示例中的 heartbeat.C）中持续产生。〔TB33 p27-28〕两个补充边界：Stop 只停表、不关闭 .C，现行文档明写 Stop does not close the channel，防止并发读取方看到错误的 tick；〔go1.26.4 src/time/tick.go:49-52〕GC 边界与 timer 同款，Go 1.23 起未被引用的 Ticker 也能被 GC 回收，Stop 不再是为帮助 GC 所必需。〔go1.26.4 src/time/tick.go:28-35〕
+NewTicker 创建的 Ticker 实例包含一个 channel 类型的字段 C，它按时间间隔持续产生事件，就像"心跳"一样：c 无数据可收时，for 循环每隔特定时间完成一次迭代再回到下一次 select。和 timer 一样，用完要调用 Stop，避免心跳事件在 ticker 的 channel（示例中的 heartbeat.C）中持续产生。〔TB33 p27-28〕两个补充边界：Stop 只停表、不关闭 .C，标准库 time/tick.go 的 Stop 注释明写 Stop does not close the channel，防止并发读取方看到错误的 tick（本机 go1.26.4 源码 49-52 行核实）；GC 边界与 timer 同款，Go 1.23 起未被引用的 Ticker 也能被 GC 回收，Stop 不再是为帮助 GC 所必需（同文件 28-35 行 NewTicker 注释）。
 
 **nil channel：把枯竭的分支从 select 里摘掉。**channel 类型变量的值为 nil 时，对它的接收和发送都会阻塞：`var c chan int` 之后 `<-c` 或 `c <- 1` 都会让 main goroutine 永久阻塞。〔TB33 p22-23〕这个特性用来收拾一类 select 事故。原文的例子：ch1 在 5s 后发 5 并 close，ch2 在 7s 后发 7 并 close，主循环 for+select 监听两个 case，用 ok1/ok2 标志两者都收到后才 break，预期输出 5、7 后退出。实际时间线是：〔TB33 p23-24〕
 
