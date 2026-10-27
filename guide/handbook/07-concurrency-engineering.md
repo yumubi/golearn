@@ -234,7 +234,7 @@ func merge(ctx context.Context, cs ...<-chan int) <-chan int {
 
 ## 三、worker pool：把规模钉死
 
-每请求一个 goroutine 在中小规模完全合适；规模上去、或下游资源有限（数据库连接、文件句柄）时，就要限制同时在跑的数量。〔TB35 p2〕为什么"规模上去"要管住数量？goroutine 相对操作系统线程开销十分小：起始栈只有 2KB，创建、切换与销毁的代价都很低，可以创建成千上万甚至更多，所以 Go 应用惯例是为每个新建立的连接、甚至每个传入请求配一个 goroutine，好处是实现十分简单、写代码心智负担低。〔TB35 p2〕但"廉价"不是免费，最明显的就是规模化后非零成本成为瓶颈：按一个 goroutine 分配 2KB 执行栈计，100 万个 goroutine 就是 2GB 的内存消耗；其次，goroutine 越多，Go 运行时调度它们的处理器消耗越大，成为阻碍应用性能提升的重要因素。〔TB35 p2〕2KB 这个数至今成立：go1.26.4 运行时里 `stackMin = 2048` 字节，新建 goroutine 就按它分配初始栈。〔go1.26.4 src/runtime/stack.go:77-78〕〔go1.26.4 src/runtime/proc.go:5319-5322〕最小的 pool 只需要一个任务 channel 和 N 个 worker：
+每请求一个 goroutine 在中小规模完全合适；规模上去、或下游资源有限（数据库连接、文件句柄）时，就要限制同时在跑的数量。〔TB35 p2〕为什么"规模上去"要管住数量？goroutine 相对操作系统线程开销十分小：起始栈只有 2KB，创建、切换与销毁的代价都很低，可以创建成千上万甚至更多，所以 Go 应用惯例是为每个新建立的连接、甚至每个传入请求配一个 goroutine，好处是实现十分简单、写代码心智负担低。〔TB35 p2〕但"廉价"不是免费，最明显的就是规模化后非零成本成为瓶颈：按一个 goroutine 分配 2KB 执行栈计，100 万个 goroutine 就是 2GB 的内存消耗；其次，goroutine 越多，Go 运行时调度它们的处理器消耗越大，成为阻碍应用性能提升的重要因素。〔TB35 p2〕2KB 这个数至今成立：go1.26.4 运行时里 `stackMin = 2048` 字节，新建 goroutine 就按它分配初始栈（runtime/stack.go 77-78 行、proc.go 5319-5322 行）。最小的 pool 只需要一个任务 channel 和 N 个 worker：
 
 ```go
 package main
@@ -330,16 +330,16 @@ func main() {
 2022/01/02 10:08:59 handle job: 2
 ```
 
-每个 job 约处理 2 秒、信号量容量 3：10:08:55 三个、10:08:57 三个、10:08:59 两个，8 个 job 按 3+3+2 三批完成。虽然创建了很多 goroutine，同一时刻处于活动状态处理 job 的最多 3 个。〔TB33 p17〕同批内先处理哪个 job 由调度决定，三批的节奏才是信号量决定的。〔自〕goroutine 一个都没少起（8 个 job 照样起了 8 个 goroutine）：信号量限制的是"进入业务处理段"的并发数，已有 3 个 goroutine 持有信号量时，第 4 个执行 `active <- struct{}{}` 会阻塞，直到某个活动 goroutine 处理完执行 `<-active` 腾出空位。〔TB33 p4-5,16-17〕它和 worker pool 怎么选：信号量版每个任务仍独享一个 goroutine，代码最少，适合任务数不大、不想维护 worker 的场景；要把 goroutine 本身的数量也钉死、让 N 个 goroutine 反复重用时，才需要下面的池。〔自〕
+每个 job 约处理 2 秒、信号量容量 3：10:08:55 三个、10:08:57 三个、10:08:59 两个，8 个 job 按 3+3+2 三批完成。虽然创建了很多 goroutine，同一时刻处于活动状态处理 job 的最多 3 个。〔TB33 p17〕同批内先处理哪个 job 由调度决定，三批的节奏才是信号量决定的。〔自〕goroutine 一个都没少起（8 个 job 照样起了 8 个 goroutine）：信号量限制的是"进入业务处理段"的并发数，已有 3 个 goroutine 持有信号量时，第 4 个执行 `active <- struct{}{}` 会阻塞，直到某个活动 goroutine 处理完执行 `<-active` 腾出空位。〔TB33 p4-5〕〔TB33 p16-17〕它和 worker pool 怎么选：信号量版每个任务仍独享一个 goroutine，代码最少，适合任务数不大、不想维护 worker 的场景；要把 goroutine 本身的数量也钉死、让 N 个 goroutine 反复重用时，才需要下面的池。〔自〕
 
 ### workerpool：把 M 个任务调度到 N 个 goroutine 上
 
-Goroutine 池的核心思想是对 goroutine 的重用：把 M 个计算任务调度到 N 个 goroutine 上，而不是为每个计算任务分配一个独享的 goroutine，从而提高计算资源利用率。〔TB35 p3〕workerpool 的工作逻辑通常很简单，即便是用于生产环境的实现，代码规模也都在千行左右。实现方式有很多种，原文为了更好地演示 Go 并发模型的应用模式以及并发原语间的协作，采用完全基于 channel+select 的实现方案：不使用其他数据结构，也不使用 sync 包提供的 Mutex、RWMutex、Cond 等同步结构：这是教学取向的取舍，生产实现不受此限；原文小结也再次申明这个实现只是演示项目，不能直接用于生产。〔TB35 p3,16-17〕
+Goroutine 池的核心思想是对 goroutine 的重用：把 M 个计算任务调度到 N 个 goroutine 上，而不是为每个计算任务分配一个独享的 goroutine，从而提高计算资源利用率。〔TB35 p3〕workerpool 的工作逻辑通常很简单，即便是用于生产环境的实现，代码规模也都在千行左右。实现方式有很多种，原文为了更好地演示 Go 并发模型的应用模式以及并发原语间的协作，采用完全基于 channel+select 的实现方案：不使用其他数据结构，也不使用 sync 包提供的 Mutex、RWMutex、Cond 等同步结构：这是教学取向的取舍，生产实现不受此限；原文小结也再次申明这个实现只是演示项目，不能直接用于生产。〔TB35 p3〕〔TB35 p16-17〕
 
 workerpool 的实现主要分三部分：pool 的创建与销毁；pool 中 worker（goroutine）的管理；task 的提交与调度，其中后两部分是"精髓"所在，原文用一张原理图表示这两部分。〔TB35 p3-4〕原理两句话：〔TB35 p4〕
 
 - **worker 管理**：capacity 是 pool 的属性，代表整个池中 worker 的最大容量；用一个带缓冲 channel `active` 作 worker 的"计数器"，这正是 33 讲的计数信号量模式。运行规则按顺序三步：active 可写时，就创建一个新 worker，处理用户通过 Schedule 提交的请求；active 满了就停止创建 worker；直到某个 worker 因故退出、active 又空出一个位置，pool 才创建新 worker 填补那个空位。
-- **task 提交与调度**：用户要提交的请求抽象为 Task（本质是 `type Task func()` 函数类型），通过 Schedule 提交到一个 task channel，已创建的 worker 从这个 task channel 中读取 task 并执行。〔TB35 p4,8〕
+- **task 提交与调度**：用户要提交的请求抽象为 Task（本质是 `type Task func()` 函数类型），通过 Schedule 提交到一个 task channel，已创建的 worker 从这个 task channel 中读取 task 并执行。〔TB35 p4〕〔TB35 p8〕
 
 骨架如下（节选自原文 workerpool1，略去编号与日志，不能独立编译）：〔TB35 p5-8〕
 
@@ -469,7 +469,7 @@ func trySend(c chan<- int, i int) bool {
 }
 ```
 
-无缓冲、带缓冲通吃：无缓冲 channel 没有接收方时发送无法实施，带缓冲 channel 空时接收、满时发送无法实施，统统走 default，两个函数都不会阻塞在空 channel 或元素个数已达容量的 channel 上。〔TB33 p26〕原文的 producer/consumer 演示里双方都不阻塞：channel 空时 consumer 打印 `[consumer]: try to recv from channel, but the channel is empty` 再试，channel 满时 producer 打印 `[producer]: try send [7], but channel is full` 再试。〔TB33 p20-21,26〕
+无缓冲、带缓冲通吃：无缓冲 channel 没有接收方时发送无法实施，带缓冲 channel 空时接收、满时发送无法实施，统统走 default，两个函数都不会阻塞在空 channel 或元素个数已达容量的 channel 上。〔TB33 p26〕原文的 producer/consumer 演示里双方都不阻塞：channel 空时 consumer 打印 `[consumer]: try to recv from channel, but the channel is empty` 再试，channel 满时 producer 打印 `[producer]: try send [7], but channel is full` 再试。〔TB33 p20-21〕〔TB33 p26〕
 
 代价要看清：这种侦测会改变 channel 的状态：tryRecv 成功就真收走了一个元素，trySend 成功就真写入了一个元素。想不改变 channel 状态、单纯侦测且不阻塞，目前没有适用于所有场合的方法；"多发送单接收""多接收单发送"两个特定场景可以退而用 len 判断（06 讲与 33 讲的 len 小节有展开）。〔TB33 p21-22〕
 
@@ -486,7 +486,7 @@ func sendTime(c interface{}, seq uintptr) {
 }
 ```
 
-Go 1.26.4 源码里 sendTime 仍是同样的非阻塞 select 发送，但签名已演化为 `func sendTime(c any, seq uintptr, delta int64)`，发送的是 `Now().Add(-delta)`，delta 补偿运行时延迟发送的偏差。〔go1.26.4 src/time/sleep.go:179-190〕
+Go 1.26.4 源码里 sendTime 仍是同样的非阻塞 select 发送，但签名已演化为 `func sendTime(c any, seq uintptr, delta int64)`，发送的是 `Now().Add(-delta)`，delta 补偿运行时延迟发送的偏差。（sleep.go 179-190 行，本机 go1.26.4）
 
 **二式：超时。**带超时机制的 select 是 Go 中常见组合：通过超时事件既可避免长期陷入某种操作的等待，也可做异常处理：〔TB33 p27〕
 
@@ -501,7 +501,7 @@ func worker() {
 }
 ```
 
-原文写作时的告诫：使用带超时的 select 要特别注意 timer 使用后的释放，尤其大量创建 timer 时；标准库 timer 由 Go 运行时自行维护、不是 OS 级定时器资源，使用代价比 OS 级低许多，但仍应尽量减少给运行时和 GC 的压力，及时调用 timer 的 Stop 方法回收资源。〔TB33 p27〕这条告诫有一个版本边界，按 go1.26.4 标准库修订：time.After 等价于 `NewTimer(d).C`；Go 1.23 之前，GC 不会回收尚未到期且未 Stop 的 timer，所以惯用法是 NewTimer 后紧跟 `defer t.Stop()`；从 Go 1.23 起，GC 能回收未被引用的 timer，即使它未到期、未 Stop，Stop 不再是为帮助 GC 所必需（仍可因"让计时提前停下来"等功能性原因调用），After 的文档也改写为"没有理由在 After 能胜任时偏好 NewTimer"。〔1.26 修正〕〔go1.26.4 src/time/sleep.go:120-141〕〔go1.26.4 src/time/sleep.go:192-204〕这条边界与 §一比较超时方案时给过的是同一条；Stop 的去留判断到这里就完整了：为了 GC 不必调，为了提前停表仍要调。兼容开关：GODEBUG=asynctimerchan=1 可恢复 Go 1.23 前的旧行为（未到期 timer 不被 GC 回收），该设置可能在 Go 1.27 或以后移除。〔go1.26.4 src/time/sleep.go:137-141〕timer 确由运行时维护也有旁证：Timer 的 stopTimer/resetTimer 通过 `//go:linkname` 直连 runtime 实现。〔go1.26.4 src/time/sleep.go:74-78〕
+原文写作时的告诫：使用带超时的 select 要特别注意 timer 使用后的释放，尤其大量创建 timer 时；标准库 timer 由 Go 运行时自行维护、不是 OS 级定时器资源，使用代价比 OS 级低许多，但仍应尽量减少给运行时和 GC 的压力，及时调用 timer 的 Stop 方法回收资源。〔TB33 p27〕这条告诫有一个版本边界，按 go1.26.4 标准库修订：time.After 等价于 `NewTimer(d).C`；Go 1.23 之前，GC 不会回收尚未到期且未 Stop 的 timer，所以惯用法是 NewTimer 后紧跟 `defer t.Stop()`；从 Go 1.23 起，GC 能回收未被引用的 timer，即使它未到期、未 Stop，Stop 不再是为帮助 GC 所必需（仍可因"让计时提前停下来"等功能性原因调用），After 的文档也改写为"没有理由在 After 能胜任时偏好 NewTimer"。（按 go1.26.4 标准库 time/sleep.go 120-141、192-204 行核实）〔1.26 修正〕这条边界与 §一比较超时方案时给过的是同一条；Stop 的去留判断到这里就完整了：为了 GC 不必调，为了提前停表仍要调。兼容开关：GODEBUG=asynctimerchan=1 可恢复 Go 1.23 前的旧行为（未到期 timer 不被 GC 回收），该设置可能在 Go 1.27 或以后移除（sleep.go 137-141 行注释）。timer 确由运行时维护也有旁证：Timer 的 stopTimer/resetTimer 通过 `//go:linkname` 直连 runtime 实现（sleep.go 74-78 行声明）。
 
 **三式：心跳。**结合 time 包的 Ticker，可以在监听 channel 的同时执行周期性任务：〔TB33 p27-28〕
 
