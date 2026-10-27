@@ -1,6 +1,6 @@
 # 05 错误与资源：错误是值，清理靠 defer
 
-> 详细程度：深入 · 约 45 分钟
+> 详细程度：深入 · 约 50 分钟
 > 材料：TB18、TB22、TB23、TBX09 · 旧长版：`notes/p2_5-idiom.md`、`notes/p1_5-basics.md`、`notes/p19-ecosystem.md`
 > 前置：04 接口与组合（error 本身就是一个接口）
 
