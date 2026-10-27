@@ -14,6 +14,91 @@
 先把全景铺开。技术栈按课程出现顺序：Gin、GORM 与 MySQL、Redis（含 Lua 脚本）、Kafka、Prometheus 与 Grafana、OpenTelemetry 与 Zipkin、etcd、gRPC 与 Protobuf、Elasticsearch、Canal、K8s；装配用 wire，配置用 viper，日志用 zap。主线分层是 `Handler → Service → Repository → (DAO + Cache)`。〔W02-2 p14-17〕〔W21-1 p25〕
 这条分层里最实在的一条设计结论：Repository 负责"一切与存储有关的事"，包括缓存一致性、预加载、存储层降级；缓存与否、怎么缓存是技术问题，不是业务逻辑，所以放 Repository 不放 Service。〔W21-1 p25〕这与 10 节的分层原则是同一句话的两种说法。
 
+## 第一刀的底稿：W02 的 Gin 接请求与三层落位
+
+这条分层在第 2 周还只是几行注册代码和一个空壳调用链。把它按原课事实铺开，后面每一周的"痛点"才有落点：Gin 怎么接住第一个请求，数据库代码为什么不进 Handler，三层怎么立起来。路由、绑定、校验、CORS 与 middleware 的完整展开在 11 节正文和它的 W02-1 干货块；本小节只收支撑主线顺序必需的部分。
+
+**gin.Context 的双职责。** 最简 Gin 应用三步：引入 gin 依赖，`server := gin.Default()` 初始化 Engine，`server.Run(":8080")` 监听启动。Engine 是逻辑上的 Web 服务器，一个 Go 进程可以创建多个 Engine〔W02-1 p6〕。注册只是把"`GET /hello` 该由谁处理"登记进路由表，真正的读写都发生在处理函数拿到的 `*gin.Context` 上，它是贯穿请求处理的统一入口类型〔W02-1 p6〕：
+
+```go
+server := gin.Default()
+server.GET("/hello", func(ctx *gin.Context) {
+    ctx.String(http.StatusOK, "hello, world")
+})
+```
+
+`gin.Context` 是 Gin 里的核心类型，日常开发最常和它打交道，两个核心职责：处理请求、返回响应。这两个职责在结构体上就对应两个字段：`Request *http.Request` 承载请求侧（请求方法、路径、头部、body 都从它读），`Writer ResponseWriter` 承载响应侧（状态码、响应头、响应体都往它写）〔W02-1 p10〕。上面例子里 `ctx.String(http.StatusOK, "hello, world")` 走 Writer 侧，把状态码和响应体一起写出；读的例子是下文的 `Param` 与 `Query`，它们从 Request 侧取值。
+
+**三类路由，一种取值。** Gin 支持三类路由〔W02-1 p13〕：静态路由完全匹配（如 `/hello`）；参数路由在路径中带参数；通配符路由任意匹配。取值统一用 `Param`，它是 `c.Params.ByName(key)` 的快捷方式〔W02-1 p14〕：
+
+- 注册 `/users/:name` 后请求 `localhost:8080/users/daming`，`Param("name")` 得到 `daming`，响应"这是你传过来的名字 daming"。
+- 参数值连斜杠一起截取：请求 `/user/john` 时 id 是 `john`；请求 `/user/john/`（带尾斜杠）时 id 是 `john/`〔W02-1 p14〕。
+- 通配符匹配上了什么也用 `Param` 取：注册 `/views/*.html` 后请求 `localhost:8080/views/home.html`，`Param(".html")` 得到 `/home.html`，匹配值自带斜杠，因为通配符匹配的是带斜杠的那一段〔W02-1 p16〕。
+- 硬边界：`*` 不能单独出现，`/users/*`、`/users/*/a` 这类路由不能注册〔W02-1 p16〕。
+
+查询参数是另一回事：`/order?id=123` 的 `id` 附着在 URL 后面，用 `Query("id")` 取，与参数路由是两套机制〔W02-1 p15〕。
+
+**从快捷方法到 handle：注册的三层。** Gin 为每一个 HTTP 方法都提供了一个注册路由的方法（GET/POST/DELETE/PATCH/PUT/OPTIONS/HEAD），这些方法基本上都收两个参数：路由规则（如 `/hello` 这种静态路由）加处理函数〔W02-1 p12〕。提示列表里还有 `Any`（任意方法都注册）、`Match`（收 `methods []string`，自选方法组合）和 `StaticFile`〔W02-1 p12〕；`Any` 的实际用例见 11 节微信扫码的回调路由（回调请求的方法不确定，Any 比只注册 GET 稳，那里引 W05-1 p15）。所以 `server.POST("/users/signup", handler)` 背后是三层：快捷方法按 HTTP 方法转调 `Handle`，`Handle` 再落到底层的 `handle`。OCR 里的源码形态：`GET is a shortcut for router.Handle("GET", path, handlers)`，内部 `return group.handle(http.MethodGet, relativePath, handlers)`，DELETE 同型〔W02-1 p11〕。课件顺带给的方法论：灵活运用 IDE 的代码提示功能和源码查看功能，通过查阅 API 定义来快速掌握 API 用法〔W02-1 p11〕。
+
+**UserHandler：集中还是分散。** 用户模块最先设计的接口是注册和登录，而后才考虑编辑和查看用户信息。作者的研发偏好是"从前端往后端"：先定义 Web 接口，再考虑数据库设计，早期先定数据库时经常遇到前端要加字段的问题〔W02-1 p21〕。组织方式：定义 UserHandler，把所有和用户有关的路由都定义在这个 Handler 上，给它一个 `RegisterRoutes(server *gin.Engine)` 方法注册路由，处理逻辑就是定义在 UserHandler 上的方法〔W02-1 p22〕：
+
+```go
+func (c *UserHandler) RegisterRoutes(server *gin.Engine) {
+    server.POST("/users/signup", c.SignUp)
+    server.POST("/users/login", c.Login)
+    server.POST("/users/edit", c.Edit)
+    server.GET("/users/profile", c.Profile)
+}
+```
+
+这是分散注册；另一种是集中注册，在 main 函数里 `c := &web.UserHandler{}` 后逐条 `server.POST("/users/signup", c.SignUp)`。取舍是原文的两列对照：集中注册打开就能看到全部路由，但路由太多的时候找起来很费劲；分散注册比较有条理，但找路由的时候不好找〔W02-1 p23〕。作者对这种 Handler 组织方式的评价带前提：**在简单的应用里面**这是不错的 Web 代码组织方式，比如后续可以有 ArticleController 之类的并列 Handler〔W02-1 p22〕。分散注册跑一阵还会遇到具体痛点：四条路由全带 `/users` 前缀，手一抖就有可能写错，这时用分组路由，前缀只写一次：
+
+```go
+ug := server.Group("/users")
+ug.POST("/signup", c.SignUp)
+ug.POST("/login", c.Login)
+ug.POST("/edit", c.Edit)
+ug.GET("/profile", c.Profile)
+```
+
+作者给分组功能的定位是一种便利手段，为了方便组织代码而引入，没有引入新的语义〔W02-1 p24〕。
+
+**Handler 为什么不直接碰 GORM。** 数据库准备好了，课程问：增删改查代码放在哪里？能不能直接在 UserHandler 里面操作数据库（GORM）？答案是否定的，不能：因为 Handler 只负责和 HTTP 有关的东西，需要一个代表数据库抽象的东西〔W02-2 p14〕。解法是直接引入 Service-Repository-DAO 三层结构，其中 service、repository 的提法参考的是 DDD 设计；同时还需要一个 domain，代表领域对象〔W02-2 p15〕。三层各自代表：service 代表领域服务（domain service），代表一个业务的完整处理过程；repository 按 DDD 的说法代表领域对象的存储，可以直观理解为存储数据的抽象；dao 代表数据库操作〔W02-2 p15〕。作者对 DDD 的态度是边界说明：DDD 看起来很简单但实际上很难理解，这时先不要去探究什么是 DDD，先记住每层放什么、调用链怎么走。
+
+**repository 和 dao 为什么不合并。** 原文自设一问：为什么有 repository 之后还要有 dao？repository 是一个整体抽象，里面既可以考虑用 ElasticSearch，也可以考虑使用 MySQL，还可以考虑用 MongoDB，它只代表数据存储，但是不代表数据库；dao 只对应"数据库操作"这一种实现。service 拿来干嘛：组合各种 repository、domain，偶尔也会组合别的 service，来共同完成一个业务功能（"偶尔组合别的 service"是原文给出的边界）。domain 被认为是业务在系统中的直接反应，可以直接理解为一个业务对象，或者一个现实对象在程序中的反应〔W02-2 p16〕。按这套分工做一个教学推论（原文逻辑的自然延伸）：哪天把存储从 MySQL 换成 MongoDB 或 ElasticSearch，动的是 repository 底下接的那个实现，repository 往 service 暴露的形态不变，存储后端可替换性由 repository 层承担，这也是两层不合并的理由。
+
+**一次注册穿过四层。** 课程总结的预期调用链：web 和 HTTP 打交道，service 放主要业务逻辑，repository 是数据存储抽象，dao 是数据库操作，链路 web→service→repository→dao〔W02-2 p17〕。落到注册接口，p18 的改造代码分三段（OCR 可见字段与调用）：
+
+```go
+type UserService struct {
+    repo *repository.UserRepository
+}
+
+func (svc *UserService) Signup(ctx context.Context, u domain.User) error {
+    return svc.repo.Create(ctx, u)
+}
+
+type UserRepository struct {
+    dao *dao.UserDAO
+}
+
+func (ur *UserRepository) Create(ctx context.Context, u domain.User) error {
+    return ur.dao.Insert(ctx, dao.User{Email: u.Email, Password: u.Password})
+}
+
+type UserDAO struct {
+    db *gorm.DB
+}
+
+func (ud *UserDAO) Insert(ctx context.Context, u User) error {
+    return ud.db.WithContext(ctx).Create(&u).Error
+}
+```
+
+划清原页与补足的边界：p18 OCR 能证实的是三个结构体的字段（`repo *repository.UserRepository`、`dao *dao.UserDAO`、`db *gorm.DB`）和三行调用，Signup 里 `return svc.repo.Create(ctx, u)`，Create 里 `return ur.dao.Insert(ctx, dao.User{Email: u.Email, Password: u.Password})`，Insert 里 `return ud.db.WithContext(ctx).Create(&u).Error`。方法签名在 OCR 截断处，入参类型按调用形态补足；三个依赖字段怎么被赋值（构造注入）原页未展示，按本节"想深入"的 DI 两条铁律（B 是字段就从构造函数传入〔W21-1 p5〕）补足。能从原页直接读出的结论有三条：service 基本上不做什么事情（原话），repository 也没做啥、最关键的都在 dao 里面（原话），domain 用户的字段转成 dao.User 字段（OCR 可见 Email、Password）的类型转换只发生在 repository 这一层，GORM 调用只出现在 dao 层。web 层原课未给代码：按课程分层推演，web 层的 SignUp 校验完请求字段后把字段装进 domain.User 交给 service（这一步是示意，不当作原页事实。
+
+这页的三层全是透传骨架，是"先立分层骨架"，不是最终实现形态，业务逻辑要后续章节再往里填〔W02-2 p18〕；透传的另一面是让"业务逻辑、存储抽象、SQL 细节"各自只有一个变化理由，哪层开始写业务，分层的钱就花在哪层（见本节"想深入"的 W02-2 干货条）。dao.User 与 domain.User 为什么要分成两个类型：domain.User 是业务概念，不一定和表或列完全对得上（比如数据库以 JSON 存的字段，在 domain 里会转成结构体），dao.User 则直接映射到表里面〔W02-2 p20〕；10 节的最小骨架就是这个形状（那里把 dao 层类型命名为 UserRow，课程原页叫 dao.User）。注册业务的异常后果课程也有固定去向：邮箱撞唯一索引时 dao 判 MySQL 1062 错误码转成 `ErrUserDuplicateEmail`，沿层往上传导，Handler 据此返回冲突响应，链条展开在 12 节。minifeed 阶段 1 是这条主线的自建练习骨架（非原课实现）：路由装配在 `minifeed/server.go:113-117` 的 `newMux`（`POST /users` 对应原课的 `POST /users/signup`），`handleSignup`（`minifeed/server.go:155-156`）校验字段后调 `auth.Hash` 再交 Store，按 400/409/201 返回；它把 service 与 repository 压掉、handler 直依赖 Store 接口，对照课程四层正好看清每层各自承担了什么。
+
 ## 一、21 周与手册各节的对应
 
 | 周 | 做什么 | 手册节 |
