@@ -93,7 +93,7 @@ type error interface {
 
 任何实现了 `Error() string` 方法的类型，其实例都可以作为错误值赋给 `error` 接口变量，这是第 04 章讲的隐式实现：不需要 `implements` 声明，方法集合满足接口即可。那么问题来了：构造一个错误值，难道每次都要自定义一个新类型？为了免去这一步，标准库提供了两个便捷构造函数：`errors.New` 和 `fmt.Errorf`。〔TB22 p4〕
 
-`errors.New(text)` 直接返回 `&errorString{text}`；`errorString` 是 errors 包未导出的结构体，只有一个 `s string` 字段，`Error()` 返回 `e.s`（src/errors/errors.go:64-75）。`fmt.Errorf` 不带 `%w` 时走的也是这条路，返回同一个 `errorString` 的实例。带 `%w` 时动态类型就换了：一个 `%w` 返回带 `Unwrap() error` 方法的 `*fmt.wrapError`，两个及以上返回带 `Unwrap() []error` 的 `*fmt.wrapErrors`（src/fmt/errors.go:44-64、79-94），这是错误链得以存在的物理载体。〔TB22 p4；分叉为现行源码核实，原课写作时未展开〕
+`errors.New(text)` 直接返回 `&errorString{text}`；`errorString` 是 errors 包未导出的结构体，只有一个 `s string` 字段，`Error()` 返回 `e.s`（src/errors/errors.go:64-75）。`fmt.Errorf` 不带 `%w` 时走的也是这条路，返回同一个 `errorString` 的实例。带 `%w` 时动态类型就换了：一个 `%w` 返回带 `Unwrap() error` 方法的 `*fmt.wrapError`，两个及以上返回带 `Unwrap() []error` 的 `*fmt.wrapErrors`（src/fmt/errors.go:44-64、79-94，此段为现行源码核实，原课写作时未展开），这是错误链得以存在的物理载体。〔TB22 p4〕
 
 这两种便捷构造的共同局限：它们能提供的错误上下文只限于字符串形式，也就是 `Error()` 方法返回的那段描述。处理方想从错误值里提取结构化信息来选择处理路径，这两种方法就不够了，需要自定义错误类型（第 4 条策略的入口）。〔TB22 p4-5〕
 
