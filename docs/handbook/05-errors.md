@@ -80,67 +80,162 @@ func handle(name string) error {
 
 ## 二、错误是值：四种处理策略，按耦合从低到高
 
-`error` 就是 `interface{ Error() string }`。`errors.New` 与不带 `%w` 的 `fmt.Errorf` 返回的是同一个未导出类型 `*errors.errorString`，带 `%w` 时才换成会包装的 `*fmt.wrapError`（两点都用 `%T` 在本机实测过）。〔TB22 p4〕既然错误是值，调用方**怎么检视它**，就决定了两端耦合多深。标准做法按推荐优先级从上到下排，耦合逐级升高：〔TB22 p15-16〕
+### error 接口与错误值构造
+
+`error` 是 Go 内置的接口类型，定义在语言自带的 `builtin` 包里，方法集只有一个方法：
+
+```go
+// $GOROOT/src/builtin/builtin.go:317-319
+type error interface {
+	Error() string
+}
+```
+
+任何实现了 `Error() string` 方法的类型，其实例都可以作为错误值赋给 `error` 接口变量，这是第 04 章讲的隐式实现：不需要 `implements` 声明，方法集合满足接口即可。那么问题来了：构造一个错误值，难道每次都要自定义一个新类型？为了免去这一步，标准库提供了两个便捷构造函数：`errors.New` 和 `fmt.Errorf`。〔TB22 p4〕
+
+`errors.New(text)` 直接返回 `&errorString{text}`；`errorString` 是 errors 包未导出的结构体，只有一个 `s string` 字段，`Error()` 返回 `e.s`（src/errors/errors.go:64-75）。`fmt.Errorf` 不带 `%w` 时走的也是这条路，返回同一个 `errorString` 的实例。带 `%w` 时动态类型就换了：一个 `%w` 返回带 `Unwrap() error` 方法的 `*fmt.wrapError`，两个及以上返回带 `Unwrap() []error` 的 `*fmt.wrapErrors`（src/fmt/errors.go:44-64、79-94），这是错误链得以存在的物理载体。〔TB22 p4；分叉为现行源码核实，原课写作时未展开〕
+
+这两种便捷构造的共同局限：它们能提供的错误上下文只限于字符串形式，也就是 `Error()` 方法返回的那段描述。处理方想从错误值里提取结构化信息来选择处理路径，这两种方法就不够了，需要自定义错误类型（第 4 条策略的入口）。〔TB22 p4-5〕
+
+既然错误是值，调用方**怎么检视它**，就决定了两端耦合多深。标准做法按推荐优先级从上到下排，耦合逐级升高：〔TB22 p15-16〕
 
 1. **透明处理**：不看内容，`err != nil` 就走错误路径，最多加一层上下文往上返回。80% 以上的场景属于这种，两端零耦合。〔TB22 p7〕
 2. **行为特征检视**：错误类型实现某个小接口（比如 `Timeout() bool`），调用方只问行为、不问身份。这是透明处理之外最松的耦合，`net.Error` 是范本。〔TB22 p13-15〕（材料里的 `net.Error` 还带 `Temporary() bool`，现在该方法在标准库里已标注 Deprecated，只用 `Timeout()`。）
 3. **哨兵错误**：包导出 `var ErrXxx = errors.New(...)`，调用方用 `errors.Is` 比较。哨兵成为包 API 的一部分，要长期维护。〔TB22 p8-10〕
 4. **错误类型**：包导出 `XxxError` 类型，调用方用 `errors.As` 取字段。同样成为 API，而且耦合到具体字段。〔TB22 p10-13〕
 
-一条反模式必须先记住，它和上面四条都相反：**永远不要拿 `err.Error()` 的字符串内容做分支**。构造方改一个字就破坏处理方，而且是隐式耦合，编译器帮不了你。〔TB22 p7-8〕下面这段代码把四条策略连同反模式的对立面跑一遍：
+### 反模式：按 err.Error() 字符串分支
+
+最松的策略之外，先看一个必须绕开的反模式。当处理方觉得只凭 `err != nil` 不够、想按错误的种类分支时，最直觉的写法是拿唯一拿得到的信息，即错误描述字符串，做 switch：
 
 ```go
-package main
+data, err := b.Peek(1)
+if err != nil {
+	switch err.Error() {
+	case "bufio: negative count":
+		// ...
+		return
+	case "bufio: buffer full":
+		// ...
+		return
+	case "bufio: invalid use of UnreadByte":
+		// ...
+		return
+	default:
+		// ...
+		return
+	}
+}
+```
 
-import (
-	"errors"
-	"fmt"
+这段代码是 `bufio.Reader.Peek` 的真实错误场景，三个 case 的字符串和现行标准库 `bufio` 的哨兵错误文案一字不差（src/bufio/bufio.go:23-26），也就是说，写这段代码的人是在用字符串分支手工复刻哨兵值本该承载的信息。〔TB22 p7-8〕原课把它定性为反模式，代价有两条：
+
+1. **隐式耦合**：构造方不经意间改动错误描述字符串的一个词，处理方的分支就悄悄变了：没有编译错误，没有测试报警，行为直接变。
+2. **性能差**：字符串比较逐字符进行，比接口值的比较（类型指针加数据指针）慢得多。
+
+`Peek` 返回哪些错误，取决于调用参数和缓冲区状态：`n < 0` 返回 `ErrNegativeCount`；`n` 超过缓冲区大小返回 `ErrBufferFull`；连 `UnreadByte` 的误用错误也是哨兵值（bufio.go:145、156、288）。这些信息本来就有稳定出口，拿文案字符串反推等于把依赖架在了别人代码里最常变的一行上。
+
+### 哨兵策略与 errors.Is
+
+正路是策略三：包作者把这类错误定义成导出的**哨兵错误值**，用 `errors.New` 构造，命名惯例 `ErrXxx`：
+
+```go
+// $GOROOT/src/bufio/bufio.go:22-27
+var (
+	ErrInvalidUnreadByte = errors.New("bufio: invalid use of UnreadByte")
+	ErrInvalidUnreadRune = errors.New("bufio: invalid use of UnreadRune")
+	ErrBufferFull        = errors.New("bufio: buffer full")
+	ErrNegativeCount     = errors.New("bufio: negative count")
 )
+```
 
-var ErrNotFound = errors.New("not found")
+处理方改为对哨兵做值比较：`switch err { case bufio.ErrNegativeCount: ... }`。和透明策略相比，这让有检视需求的处理方"有的放矢"，分支依据从一段会漂移的文案变成了一个稳定的值。〔TB22 p8-9〕
 
-type ParseError struct{ Line int }
+代价也要清楚：哨兵一旦导出，就和包的公共函数、方法一起成为 API 的一部分，作者发布后必须长期维护；使用它的处理方也对这些值产生了依赖。〔TB22 p9〕
 
-func (e *ParseError) Error() string { return fmt.Sprintf("syntax error at line %d", e.Line) }
+而哨兵比较直接写 `==` 有个坑：只要中间有人加了上下文包装，比较就失效了。这正是开头的现象：
 
-func load() error { return fmt.Errorf("open db: %w", ErrNotFound) }
+```go
+var ErrSentinel = errors.New("the underlying sentinel error")
+
+err1 := fmt.Errorf("wrap sentinel: %w", ErrSentinel)
+err2 := fmt.Errorf("wrap err1: %w", err1)
+```
+
+`err2 == ErrSentinel` 是 false：`==` 比较的是接口值，`err2` 的动态类型已经是 `*fmt.wrapError`，和 `ErrSentinel` 底下的 `*errors.errorString` 既不同型也不同值。但从 `err2` 出发沿链是 `err2 → err1 → ErrSentinel`，哨兵就在链底。〔TB22 p9-10〕
+
+Go 1.13 起标准库 errors 包提供 `Is(err, target)`，形式上像 `err == ErrOutOfBounds` 的比较，但当错误变量底层是包装错误时，它会沿错误链与链上所有被包装错误比较，直到找到匹配为止。上面例子的输出是：
+
+```text
+false
+err2 is ErrSentinel
+```
+
+`errors.Is` 从最外层的 `err2` 开始比较，不命中就经 `Unwrap()` 下行一层，再比较、再下行，命中链底哨兵即返回 true，走到链底仍不命中才返回 false。〔TB22 p9-10〕现行实现核实（src/errors/wrap.go:45-84）：`is()` 每层先比较 `err == target`（要求 target 可比较），再检查错误自身是否实现 `Is(error) bool` 方法，然后才经 `Unwrap() error` 下行；链分叉（`Unwrap() []error`，即 Go 1.20 起 `errors.Join` 或多个 `%w` 的产物）时逐支递归，比原课"单链逐层"的描述覆盖面更广，链的形状是树。所以 Go 1.13 及以后，检视某错误值是否是（或包装了）某个预期哨兵值，优先用 `errors.Is`。〔TB22 p10〕
+
+### 错误类型策略与 errors.As
+
+哨兵错误值除了供值比较，不提供其他有效上下文；需要更多上下文时就得自定义错误类型构造错误值，即策略四，错误值类型检视策略。标准库的例子是 `encoding/json` 的 `UnmarshalTypeError`，它携带五个上下文字段 Value、Type、Offset、Struct、Field（src/encoding/json/decode.go:127-133）。json 包内部用 type switch 检视并填充字段：
+
+```go
+// $GOROOT/src/encoding/json/decode.go:255-267
+func (d *decodeState) addErrorContext(err error) error {
+	if d.errorContext != nil && (d.errorContext.Struct != nil || len(d.errorContext.FieldStack) > 0) {
+		switch err := err.(type) {
+		case *UnmarshalTypeError:
+			err.Struct = d.errorContext.Struct.Name()
+			fieldStack := d.errorContext.FieldStack
+			if err.Field != "" {
+				fieldStack = append(fieldStack, err.Field)
+			}
+			err.Field = strings.Join(fieldStack, ".")
+		}
+	}
+	return err
+}
+```
+
+条件 `d.errorContext != nil && (Struct != nil || len(FieldStack) > 0)` 是现行源码，比原课展示的代码多一个 nil 判断（decode.go:256）。类型 switch 得到 `err` 的动态类型和值，匹配 `*UnmarshalTypeError` 的 case 分支里把 Struct 名和以 `.` 连接的 FieldStack 填进字段。〔TB22 p10-11〕调用方拿到 `err` 后，再用类型断言、type switch 或下面的 `errors.As` 把字段取出来。
+
+命名惯例是 `XxxError`。和哨兵策略一样：导出的错误类型成为 API 的一部分，发布后须维护，处理方也对其产生依赖。〔TB22 p11-12〕
+
+Go 1.13 起 errors 包提供 `As(err, target)`，形式上类似类型断言 `e, ok := err.(*MyError)`；当动态错误值是包装错误时，As 沿错误链与链上所有被包装错误的类型比较，直到找到匹配类型，机制与 `errors.Is` 相同。〔TB22 p12〕
+
+```go
+type MyError struct {
+	e string
+}
+
+func (e *MyError) Error() string { return e.e }
 
 func main() {
-	// 策略 1：透明，不关心内容
-	if err := load(); err != nil {
-		fmt.Println("load failed:", err)
+	var err = &MyError{"MyError error demo"}
+	err1 := fmt.Errorf("wrap err: %w", err)
+	err2 := fmt.Errorf("wrap err1: %w", err1)
+	var e *MyError
+	if errors.As(err2, &e) {
+		println("MyError is on the chain of err2")
+		println(e == err)
+		return
 	}
-
-	// 策略 3：哨兵，errors.Is 沿 %w 链逐层比较
-	err := fmt.Errorf("load rules: %w", fmt.Errorf("read file: %w", ErrNotFound))
-	fmt.Println("errors.Is:", errors.Is(err, ErrNotFound))
-	fmt.Println("== :", err == ErrNotFound)
-
-	// 策略 4：错误类型，errors.As 取字段
-	pe := &ParseError{Line: 7}
-	err2 := fmt.Errorf("parse config: %w", pe)
-	var got *ParseError
-	if errors.As(err2, &got) {
-		fmt.Println("parse line:", got.Line)
-	}
-
-	// Go 1.26 的泛型版 AsType，不用先声明变量
-	got2, ok := errors.AsType[*ParseError](err2)
-	fmt.Println("AsType:", ok, got2.Line)
+	println("MyError is not on the chain of err2")
 }
 ```
 
 ```text
-load failed: open db: not found
-errors.Is: true
-== : false
-parse line: 7
-AsType: true 7
+MyError is on the chain of err2
+true
 ```
 
-对照开头的现象，这里把关键区别放在一起看：`err == ErrNotFound` 是 false，因为 `==` 只比较最外层包装，看不到链底；`errors.Is` 沿 `%w` 链逐层往下比，命中底层的 `ErrNotFound`，所以是 true。`errors.As` 同理，只是匹配目标是类型而非值，命中后把字段带出来。
+`println(e == err)` 输出 `true`，证明 As 存入第二参数的正是链上被包装的原始错误值。外层的普通类型断言 `e, ok := err2.(*MyError)` 只检查最外层的动态类型，这里是 `*fmt.wrapError`，断言失败；`errors.As` 才能沿链找到深处的 `*MyError`。〔TB22 p12-13〕
 
-策略 2（行为特征）和策略 4 用的是同一个 `errors.As`，区别只在目标类型：策略 4 的目标是具体错误类型，策略 2 的目标是一个只含行为方法的小接口：
+精确语义（现行源码核实，src/errors/wrap.go:99-147）：As 在错误树中找第一个类型可赋值给 target 的错误并写入 `*target`；第二参数必须是非 nil 指针，指向实现 error 的类型或任意接口类型，否则 panic。匹配是深度优先遍历，原课示例中唯一匹配节点恰在链的最深处，"找到最深处"对那个例子成立；"As 总取最深的错误"这一记忆化说法在错误树可能分叉后不再可靠（正文外干货有补充）。
+
+Go 1.13+ 建议尽量用 `errors.As` 检视错误值是否为某自定义错误类型的实例。〔TB22 p13〕本机 go1.26 工具链另有泛型版 `errors.AsType[E error](err error) (E, bool)`（源码注解："For most uses, prefer [AsType]"），不用先声明变量，正文示例已在 Go 1.26.4 上实测。
+
+### 策略 2 与策略 4 的共同底座与差别
+
+这两条策略用的是同一个 `errors.As`，区别只在目标类型：策略 4 的目标是具体错误类型，策略 2 的目标是一个只含行为方法的小接口：
 
 ```go
 var t interface{ Timeout() bool }
@@ -151,7 +246,7 @@ if errors.As(err, &t) && t.Timeout() {
 
 问"是否超时"比问"是不是这个哨兵错误"更稳：超时可能来自好几处，本机实测 `context.DeadlineExceeded` 的 `errors.Is(e, os.ErrDeadlineExceeded)` 是 false，但 `Timeout()` 是 true；只比哨兵就会漏掉它。这一层在判断题第 3 题展开。
 
-Go 1.26 本机已有泛型版 `errors.AsType[E error](err error) (E, bool)`，上面的 `errors.As` 可以写成 `pe, ok := errors.AsType[*ParseError](err)`，不用先声明变量。〔实测〕`go doc errors.AsType` 与上面的例子都在 go1.26.4 上跑过。
+顺带修正一处边界：`As` 的第二参数形式上是 `any`，传具体类型的指针（如 `&got`）或接口指针（如 `&t`）都可以，只要指向实现 error 的类型或接口类型；不做这层限定的话，传任意其他指针会直接 panic。
 
 ## 三、什么时候包装，什么时候切断
 
