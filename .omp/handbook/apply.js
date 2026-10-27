@@ -22,7 +22,7 @@ export function validateRun(run, text, expectedScript) {
   assert.equal(r?.status, 'reviewed', '本批没有通过独立双审')
   assert.equal(r.target, run.args?.target, '返回的目标与原始任务不一致')
   assert.equal(r.revision, run.args?.revision, '返回的版本与原始任务不一致')
-  assert.match(r.target, /^guide\/handbook\/(?:0[1-9]|1\d|2[0-7])-[a-z-]+\.md$/)
+  assert.match(r.target, /^guide\/handbook\/(?:0[1-9]|1\d|2[0-7])-[a-z0-9-]+\.md$/)
   const ids = Array.isArray(run.args.items) ? run.args.items : String(run.args.items).split(',').filter(Boolean)
   assert(ids.length > 0 && ids.length <= 8 && new Set(ids).size === ids.length, '任务清单非法')
   const exact = entries => Array.isArray(entries) && entries.length === ids.length
@@ -59,7 +59,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const key = `${path.basename(root).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').slice(0, 48)}-${hash(root).slice(0, 12)}`
   const runPath = path.join(homedir(), '.omp/workflows/projects', key, 'runs', `${runId}.json`)
   const run = JSON.parse(fs.readFileSync(runPath, 'utf8'))
-  assert.match(run.args?.target || '', /^guide\/handbook\/(?:0[1-9]|1\d|2[0-7])-[a-z-]+\.md$/)
+  assert.match(run.args?.target || '', /^guide\/handbook\/(?:0[1-9]|1\d|2[0-7])-[a-z0-9-]+\.md$/)
   const target = path.join(root, run.args.target)
   assert(fs.realpathSync(target).startsWith(`${fs.realpathSync(path.join(root, 'guide/handbook'))}${path.sep}`), '目标解析到了手册目录之外')
   const text = fs.readFileSync(target, 'utf8')
