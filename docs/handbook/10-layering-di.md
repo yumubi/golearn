@@ -93,7 +93,53 @@ mem: 0 login: memory repo: user 138 not found
 - **领域对象和数据库行分开定义**。`domain.User` 是业务概念，`dao.UserRow` 直接映射表行，两者在 repository 里互相转换。表结构变了，只会波及 dao 和 repository 的转换代码，不会一路烧到 service。〔W02-2 p20〕
 - **缓存放在 repository 层**。缓存属于"如何存数据"的范畴，service 对它无感知，构造函数同时收 dao 和 cache 两个依赖。〔W04-1 p16〕
 
-分层的另一个实战价值：**业务规则集中到 domain 和 service**。课程发帖模块的状态管理是标准形状：文章状态常量定义在 domain 层（Unknown=0/Unpublished=1/Published=2/Private=3），注意**零值不做有意义的状态**：Go 的结构体零值是 0，新建对象还没设状态时自动是 Unknown，天然安全。Service 层统一设状态（edit 一律设 Unpublished，发表走独立接口），Web 层完全不关心状态，DAO 的转换函数负责领域状态到存储 uint8 的映射。〔W06-2 p4-5〕
+为什么这么放？故事要从压测说起：课程压测后，在前面写下的代码里定位出两个性能瓶颈。一个是加密算法，它耗费 CPU，会让 CPU 成为瓶颈；另一个是数据库查询，原文只点了名，没有像加密算法那样写明它耗费什么资源。〔W04-1 p12〕针对数据库查询这一项，引入 Redis 后一次读请求的路径是：先从 Redis 里查询，在缓存未命中的情况下，才直接从数据库查询；从数据库查到数据之后还要回写缓存，下一次同样的请求就能由缓存接住。〔W04-1 p12〕所以课程连用两级"不直接"：我们并不会直接使用 Redis，而是要引入一个缓存，来避免上层业务直接操作 Redis；也不是引入一个通用的 Cache，而是为业务编写专门的 Cache，也就是 UserCache。〔W04-1 p13〕专门 Cache 要屏蔽三件事：屏蔽过期时间设置，使用 UserCache 的人不再关心过期时间；屏蔽 key 的结构，调用者不用知道缓存里 key 是怎么组成的；屏蔽序列化与反序列化协议，结构体写入 Redis 时要决定如何序列化和反序列化。〔W04-1 p14〕
+
+原课的 UserCache 只有两个字段：cmd redis.Cmdable（注入的 Redis 客户端接口）和 expiration time.Duration；构造函数 NewUserCache(cmd redis.Cmdable) 在构造时把 expiration 固定为 `time.Minute * 15`，也就是 15 分钟。〔W04-1 p13〕key 的结构封装在方法里：func (cache *UserCache) Key(id int64) string { return fmt.Sprintf("user:info:%d", id) }，user:info:7 就是 id=7 的用户。〔W04-1 p14〕Set 的完整步骤：json.Marshal(u) 把结构体转成 []byte，检查 err，再 cache.cmd.Set(ctx, key, data, cache.expiration).Err() 写入 Redis，过期时间一并写入；Get 的完整步骤：先用 Key(id) 拼出 key，cache.cmd.Get(ctx, key).Result() 取出字节串，再 json.Unmarshal([]byte(data), &u) 还原成结构体返回。〔W04-1 p14-15〕原文给的定义：序列化是结构体转化为 []byte（Go 里一般叫 Marshal），反序列化是 []byte 转化为结构体（一般叫 Unmarshal），二者是一对相反操作。〔W04-1 p15〕所以调用方调 Get(ctx, id) 时，既不用知道 key 怎么拼，也不用关心过期时间，这两件事都封在 UserCache 里。
+
+把要点拼起来，UserCache 就是下面的样子（字段、TTL、key 拼法、Set/Get 步骤出自原文，方法签名与包名按文意整理）：
+
+```go
+// 按原课要点还原的 UserCache：字段、TTL、key 拼法、Set/Get 步骤均出自原文（W04-1 p13-15）
+type UserCache struct {
+	cmd        redis.Cmdable // 注入的 Redis 客户端接口
+	expiration time.Duration
+}
+
+func NewUserCache(cmd redis.Cmdable) *UserCache {
+	return &UserCache{cmd: cmd, expiration: time.Minute * 15}
+}
+
+func (cache *UserCache) Key(id int64) string {
+	return fmt.Sprintf("user:info:%d", id)
+}
+
+func (cache *UserCache) Set(ctx context.Context, id int64, u *domain.User) error {
+	data, err := json.Marshal(u) // 序列化：结构体 -> []byte
+	if err != nil {
+		return err
+	}
+	return cache.cmd.Set(ctx, cache.Key(id), data, cache.expiration).Err() // 写入 Redis，TTL 一并带上
+}
+
+func (cache *UserCache) Get(ctx context.Context, id int64) (*domain.User, error) {
+	data, err := cache.cmd.Get(ctx, cache.Key(id)).Result() // 按 key 读出字节串
+	if err != nil {
+		return nil, err
+	}
+	var u domain.User
+	err = json.Unmarshal([]byte(data), &u) // 反序列化：[]byte -> 结构体
+	return &u, err
+}
+```
+
+本节下面的演示示例为了不引 Redis 依赖，用内存 map 代替它；两者差在哪，见示例输出后的说明。
+
+分层的另一个实战价值：**业务规则集中到 domain 和 service**。课程发帖模块的状态管理是标准形状，但完整状态图里的"被删除"一态被课程砍掉了，作者明确说：我这里不会实现被删除状态，因为不会提供真正的删除功能。〔W06-2 p4〕简化之后，制作库保留三个状态：未发表、已发表、不可见；线上库保留两个状态：已发表、不可见。〔W06-2 p4〕制作库里的流转：新建的文章落在未发表；未发表经"发表"进入已发表；已发表经"隐藏"进入不可见；图上还画了"修改"与"重新发表"的路径，正文没有逐条解释箭头语义，重新发表的方向只能按图与常识理解。〔W06-2 p4〕原课交代了这一节的任务前提：已有的实现都还没完全实现右边的状态流转，后面的 edit/publish/withdraw 接口就是来补全这套流转的。〔W06-2 p4〕
+
+文章状态常量定义在 domain 层，用 iota 编排：ArticleStatusUnknown=0（注释"未知状态"）、ArticleStatusUnpublished=1、ArticleStatusPublished=2、ArticleStatusPrivate=3（仅自己可见）。〔W06-2 p5〕作者的 PS：一般定义常量，最好不要把零值做成有意义的值。〔W06-2 p5〕这样编排有个直接的好处（教学推导，不是原课原话）：Go 的结构体零值是 0，新建对象还没设状态时自动落在"未知"而不是任何业务状态上，忘设状态也不会被误当成未发表或已发表。
+
+状态由谁设？课程统一放在 Service 层。Save（edit 路径）里显式 art.Status = domain.ArticleStatusUnpublished，art.Id > 0 走 svc.update，否则走 svc.create；Publish 里显式 art.Status = domain.ArticleStatusPublished，然后走 repo.Sync；Web 层完全不关心状态，它只和 HTTP 打交道。〔W06-2 p7-8〕保存为什么一律设成未发表？因为保存共有三种子情况：新建-保存，直接就是未发表；修改-保存，依旧保持未发表；发表-修改-保存，应该是从发表状态变回未发表状态。〔W06-2 p6〕DAO 侧的 toEntity 负责把领域状态转成存储状态：Status: uint8(art.Status)，注释说这一步就是将领域状态转化为存储状态，有些情况下这里可能是借助一个 map 来转。〔W06-2 p7〕
 
 "发表"要同时写制作库与线上库，withdraw（撤回）走 DAO 层事务双表更新，同步位置三选的取舍标准见 14 节 TDD 小节。跨库无事务时的补偿（Saga/TCC/outbox）是 18 节一致性话题。〔W06-2 p6〕〔W06-2 p8-9〕
 
@@ -207,7 +253,7 @@ repository: cache hit
 login result: 7 <nil>
 ```
 
-〔实测〕`go run .` 跑出上面的输出：第一次读 dao，第二次命中缓存，上层无需知道这一变化。示例仅以 map 模拟存储与缓存，不支持并发，也没有实现密码验证；`Login` 只是展示依赖关系，不能作为真实登录实现。
+〔实测〕`go run .` 跑出上面的输出：第一次读 dao，第二次命中缓存，上层无需知道这一变化。示例仅以 map 模拟存储与缓存，不支持并发，也没有实现密码验证；`Login` 只是展示依赖关系，不能作为真实登录实现。它和前面按原文还原的 Redis 版 UserCache 不是代码等价：map 版没有 TTL、没有 key 拼装（直接拿 phone 当 key）、没有 JSON 序列化，只是把"先查缓存、未命中落库、回写缓存"这条读路径演出来。
 
 装配永远是**自底向上**：先 new 最底层（连接、缓存），再 new repository，再 service，最后 handler 和路由。这就是课程说的"初始化七步链"。〔W04-3 p4〕上面 `main` 里的五行就是它的迷你版。这个顺序是硬约束：上面的层需要下面的实例，所以下面必须先生成。
 
@@ -249,6 +295,8 @@ cannot use &buf (value of type *bytes.Buffer) as *os.File value in argument to S
 3. **handler 不抽接口**。没有人调用它的方法，也看不到需要不同实现的地方，就先不留；注册路由虽然也算用了它，可以推迟到将来再抽。〔W04-3 p32〕
 4. **超前设计最小化**。只留接口，不写多余实现；抽象时只考虑有限的几种情况，别想太长远。〔W04-3 p35〕
 
+四条判据在课程里有现成的正反对照。UserService "从理论上来说不太可能有别的实现"，但课程依旧为它保留了接口：当下引入接口就是为了测试，将来还可能有不同版本、是否 VIP 之类的不同实现；实现类直接叫小写的 userService，作者自认不是好命名。〔W04-3 p31〕UserHandler 则相反，两个条件都不沾（见上面第 3 条），原话是：没有人用它，而且现在也没有看到需要引入不同实现的地方，所以暂时保留。〔W04-3 p32〕注意原话里"用"的含义：用它，是指调用它的方法；注册路由虽然也算用了，但可以推迟到将来再来抽取接口，所以它不构成抽接口的充分理由。〔W04-3 p32〕归纳成一句话（教学推导，原文给的是"没人调用"和"看不到多实现需求"两个事实）：接口在被调用方一侧才有意义，为测试而 mock 的正是服务的调用方；UserHandler 处在调用链最外层，没有谁需要 mock 它，自然不抽。反面例子课程也给了：CodeCache 依赖的是 *CodeRepository 结构体，所以肯定不是面向接口编程；CodeService 依赖 sms.Service 接口，就是面向接口编程，可以注入不同的实现，比如腾讯云的实现，或者基于内存的实现。〔W04-3 p25-26〕
+
 一个和 Go 惯例冲突的地方要专门记住：wire 场景里构造函数最好返回接口，这样 wire 可以直接按类型匹配，而 Go 社区的惯例是"接受接口，返回结构体"。课程原话是：初始化方法（形如 `NewUserRepo` 这样的构造函数）最好返回接口，Go 的推荐做法是返回具体类型，这和 wire 是冲突的。返回具体类型时，就得像下面课程仓库的片段那样再用 `wire.Bind` 补一条接口到实现的映射；不用 wire 就回到惯例。〔W04-3 p33〕
 
 ## 三、依赖注入：手写够用，wire 是省样板
@@ -263,7 +311,7 @@ cannot use &buf (value of type *bytes.Buffer) as *os.File value in argument to S
 
 ### wire：编译期生成装配代码
 
-wire 的模型只有三个词：**Provider**（构造函数的集合）、**Bind**（接口到实现的映射）、**Injector**（要生成的入口函数）。你写一个带 `wireinject` 构建标签的文件，里面是 `wire.Build(...)`，运行 `wire` 命令后生成真正的 `wire_gen.go`。〔W04-3 p8-9〕Provider、Bind、Injector 这三个词是 wire 自己的术语，课程代码里的注释也用它们。下面是课程仓库里的真实片段：
+wire 的使用分两步。第一步，在 wire.go 里用 wire.Build 注册全部初始化方法，函数体随便 return 一个值就行，文件头带 go:build wireinject 编译标签；这一步是告诉 wire"我有什么东西、每个东西怎么初始化"。第二步，运行 wire 命令行工具完成组装。〔W04-3 p8〕wire 采用代码生成技术：根据传入的构造方法分析依赖，把"真正的初始化方法"生成到 wire_gen.go。〔W04-3 p9〕它的模型只有三个词：**Provider**（构造函数的集合）、**Bind**（接口到实现的映射）、**Injector**（要生成的入口函数），这是 wire 自己的术语，课程代码里的注释也用它们。下面是课程仓库里的真实片段：
 
 〔C:go_frame/dependency_injection/wire/provider_injector.go:20-39〕
 
@@ -279,9 +327,24 @@ wire.Build(service.SvrSet, handler.HdlSet, database.DbSet)
 
 - `wire.Bind(new(接口), new(*实现))` 补上"接口由谁实现"的信息，wire 不会自己推断。
 - 返回值里的 `func()` 被识别为 cleanup，所有依赖的 cleanup 会**按顺序合并**进 injector 的第二个返回值。〔C:go_frame/dependency_injection/wire/provider_injector.go:36-39〕
-- 生成物是普通 Go 代码，运行期零反射。代价是改了构造函数就要重新跑 `wire`，忘了就会编译失败或用旧装配。
+- 生成物是普通 Go 代码。原课的原话只说 wire 利用了代码生成技术，全篇没有出现"反射"二字；"运行期零反射"是从生成代码形态推出来的教学结论，见下面的例子。
 
-wire 的缺陷课程也点名了：**不能按环境选不同实现**（要自己在函数体里写条件）、**找不到某接口的所有实现**、**找不到某类型的所有实例**（gin 中间件只能手写列表）。结论是"矮子里拔将军"：好处是清晰、可控、比手写装配快。〔W04-3 p17-19〕〔W04-3 p20-21〕wire 不支持单例，重复调用同一个初始化函数会得到多个实例，需要单例就在构造函数里自己用 `sync.Once`。〔W04-3 p9〕〔C:go_frame/dependency_injection/database/gorm/connection.go:14-31〕
+生成的 wire_gen.go 里没有魔法。以课程生成的 InitUserRepository 为例，函数体就是普通顺序调用〔W04-3 p9〕（签名按文意还原）：
+
+```go
+func InitUserRepository() *repository.UserRepository {
+	db := InitDB()
+	userDAO := dao.NewUserDAO(db)
+	userRepository := repository.NewUserRepository(userDAO)
+	return userRepository
+}
+```
+
+正因为装配在编译期就展开成这样一条条普通函数调用，运行期才没有反射开销；拿它对照在运行期用反射做装配的 Spring 容器，正好是两类方案。维护代价来自"生成产物"这个身份：每次增加新的 DAO、Repository 等，都要修改 wire.go 里面的代码，再由 wire 命令重新生成；改了某个构造函数，同样要重跑一次 wire。忘了跑轻则编译失败，重则拿着上一次的旧装配继续运行，这个后果是工程化展开，原课只交代了"要重新生成"。课程的原话是：不过一句话，再怎么修改，也比直接手写要来得快。〔W04-3 p20-21〕
+
+wire 的缺陷，课程逐个点名过。第一个：wire 有一个缺陷，就是没有办法指定在不同的环境下使用不同的实现，所以这里我们只能直接写死，必要的时候再切换。〔W04-3 p17〕课程里的"切换"是注释切换：InitSmsService 函数体里 return initSmsTencentService() 被注释掉，实际 return 的是 initSmsMemoryService()；腾讯云实现要靠 os.LookupEnv 读 SMS_SECRET_ID、SMS_SECRET_KEY 这类真实凭据，缺了就 panic。〔W04-3 p17〕想在运行时按环境（profile）自动切换，wire 帮不上忙，得自己在函数体外再包一层，读环境变量或配置，再决定返回哪个实现；课程只说"必要的时候再切换"，没给现成方案，这句是工程化展开。〔W04-3 p17〕另外两个是查找类缺陷：不能找到某个类型的所有实例，gin 中间件只能手写列表（GinMiddlewares 函数里写死数组）；不能找到某个接口的所有实现。而在类似的 Java 的 Spring 全家桶里面，是不需要自己写的。〔W04-3 p18-19〕
+
+缺点这么多，课程为什么仍然推荐 wire？一句话：wire 也就是矮个子里面挑高个，最大的好处是很清晰、可控性非常强；而且每次增加新 Handler、middleware、DAO 虽然要改代码，仍比手写组装快。〔W04-3 p20-21〕另外 wire 不支持单例模式：假如多次调用 InitDB，就会生成多个 gorm.DB 实例，课程说"后面我们会解决这个问题"；需要单例就在构造函数里自己用 `sync.Once`。〔W04-3 p9〕〔C:go_frame/dependency_injection/database/gorm/connection.go:14-31〕
 
 另一条路是运行时容器：`notes/p5-deepsearch.md` 里的 `di` 包用 `reflect.TypeFor[T]()` 当 map key、`Invoke` 时惰性构造，`exercises/p5deep` 的 `TestProvideInvoke` 验证了它的单例语义。运行时容器灵活但出错晚（缺依赖在第一次 `Invoke` 才报），wire 严格但要多一步生成。两条路的取舍在"想深入去哪查"里可以继续追。
 
