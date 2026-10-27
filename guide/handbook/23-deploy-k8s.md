@@ -313,6 +313,6 @@ K8s 自身的 API 是 HTTP，client-go 是它的 Go SDK。资料里的 krm 是�
 - 危险操作的确认强度不一：命名空间删除要输入名字确认，用户删除只弹确认框；同一产品里强度应当统一。〔K:krm-frontend/src/view/namespace/List.vue:60-90〕
 - labels 和 annotations 在表单里编辑成 key、value 数组，提交时 list2Object 合回对象；中间少同步一步就丢编辑，这是 reactive 对象与数组手动互转的代价。〔K:krm-frontend/src/utils/utils.js:1-32〕
 
-- 补页码引用:W03-2 p2 是该单元的一句话总览(声明式 YAML 部署整套 webook:Pod/Deployment/Service、MySQL PV/PVC、Redis NodePort、nginx Ingress、编译标签切配置),逐项机制正文一至四节均已展开,不另立条目。说明：有意省略的部分：W03-1 的 Session 刷新策略、JWT 结构与 CORS 配合、四种限流算法属认证与稳定性主题，分别在 11 节和 16 节展开；W03-2 的两条练习条目（副本数改动预测、ClusterIP 端口语义）正文语义已给足；krm 三端的 jwtutil 细节、路由注册清单、菜单与图标配置与部署无关，从略。
+- 补页码引用:W03-2 p2 是该单元的一句话总览(声明式 YAML 部署整套 webook:Pod/Deployment/Service、MySQL PV/PVC、Redis NodePort、nginx Ingress、编译标签切配置),逐项机制正文一至四节均已展开,不另立条目。说明：W03-1 的 Session 存储选型与四种刷新策略正文第二节已展开，不再单列条目；有意省略的部分：JWT 结构与 CORS 配合、四种限流算法属认证与稳定性主题，分别在 11 节和 16 节展开；W03-2 的两条练习条目（副本数改动预测、ClusterIP 端口语义）正文语义已给足；krm 三端的 jwtutil 细节、路由注册清单、菜单与图标配置与部署无关，从略。
 
 ## 想深入去哪查
