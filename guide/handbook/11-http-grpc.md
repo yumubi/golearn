@@ -93,7 +93,7 @@ mux.HandleFunc("GET /books/{id}", func(w http.ResponseWriter, r *http.Request) {
 2. `Write` 之前没调 `WriteHeader`，就隐式按 200 发。
 3. `WriteHeader` 之后再 `w.Header().Add` 无效。〔实测〕Go 1.26 下先 `WriteHeader(201)` 再 `Add` 一个头，客户端读不到。
 
-配套的另一半是客户端侧：**用完必须关 `resp.Body`**，否则这条连接不复用，每次请求都新建连接，协程和内存一起泄漏。便捷方法 `http.Get` 也一样要关。〔C:go_basic/http/client/main.go:25〕
+客户端用完必须关闭 `resp.Body`，释放资源。HTTP/1.x 中通常还需把响应体读到 EOF 才能复用连接；提前关闭可能使连接无法复用。便捷方法 `http.Get` 也一样要关。〔C:go_basic/http/client/main.go:25〕
 
 ### 超时：只设一个远远不够
 
@@ -249,13 +249,13 @@ client sees X-Note: set-before-write
 
 ### Session：状态存在服务端
 
-登录成功后服务端建一张会话，会话 ID 放进 Cookie，会话数据（user_id 之类）存在服务端存储里。gin-contrib/sessions 的存储实现有 cookie、memstore、redis、gorm 等一排，选型一句话：**单机随便，多实例必须选 redis**，否则实例 0 签发的会话实例 1 认不得。sess_id 永远放 Cookie，Session 数据才是 store 里存的东西，别搞混。〔W03-1 p6-8〕
+常见服务端 Session 把会话 ID 放进 Cookie，会话数据存在服务端存储。gin-contrib/sessions 也有 cookie store：它把会话数据放在客户端 Cookie 中，不属于这种服务端存储模式。多实例使用服务端会话时，可以选 Redis 等共享存储，或者设计其他一致的会话访问方式；各实例还需共享合适的密钥。〔W03-1 p6-8〕
 
 过期策略有四种：每次访问都刷（性能差）、快过期才刷、固定间隔刷、长短 token。前三种都能用「登录校验中间件顺手刷新」实现，第四种在下面讲。固定过期时间的问题很具体：设 10 分钟，9:59 还能用、10:01 就被踢,这对持续活跃的用户反而体验差。〔W03-1 p16-18〕
 
 ### JWT：把状态签进 token
 
-JWT 是三段式：header.payload.signature，前两段是 base64 的 JSON，第三段是对前两段的 HMAC 签名。它的哲学和 Session 正相反：**状态不在服务端，由签名保证不可篡改**。用标准库就能把签发与校验的全过程走一遍：〔W03-1 p22-23〕
+本例使用签名 JWT：header.payload.signature，前两段是 base64url 编码的 JSON，第三段使用 HMAC 签名。JWT 也可以使用非对称签名，并非都用 HMAC；签名提供完整性保护，不提供保密性。下面只演示 HS256 的基本过程：〔W03-1 p22-23〕
 
 ```go
 package main
@@ -307,7 +307,7 @@ func validate(token string, key []byte) (int64, error) {
 	if err := json.Unmarshal(raw, &claims); err != nil {
 		return 0, err
 	}
-	if time.Now().Unix() > claims.EXP {
+	if time.Now().Unix() >= claims.EXP {
 		return 0, fmt.Errorf("已过期")
 	}
 	return claims.UID, nil
@@ -345,7 +345,7 @@ func main() {
 过期: 已过期
 ```
 
-四行输出就是 JWT 的全部性质：payload 只是 base64 不是加密（谁都能解开看），但改一个字节签名就废；换密钥等于全量登出；过期是 payload 里的一个时间戳比较。课程接 gin 时用 `golang-jwt/jwt/v5` 的原始 API 而不是插件，因为插件把签发校验包起来反而看不清机制；token 走 `x-jwt-token` 响应头下发、`Authorization: Bearer` 上送，CORS 要相应放行 `AllowHeaders: Authorization` 和 `ExposeHeaders: X-Jwt-Token`，否则浏览器读不到。〔W03-1 p24-30〕课程里的校验写法：`GetHeader("Authorization")` 后 `strings.SplitN(authcode, " ", 2)` 取第二段（最多切两段，token 里不会再有空格），再 `jwt.ParseWithClaims(tokenStr, &uc, keyfunc)`。前端配合是响应拦截器读 `x-jwt-token` 存 localStorage、请求拦截器统一 `setAuthorization("Bearer "+token)`、401 跳登录页。〔W03-1 p27-28〕
+示例说明 payload 可读、篡改后签名不符，以及过期时间的判断；更换密钥会使依赖旧密钥且不再接受旧密钥的 token 失效。它不是生产级 JWT 校验器：生产代码应使用成熟库，限制允许的算法并校验 issuer、audience、过期时间等要求，妥善保管密钥。课程接 gin 时用 `golang-jwt/jwt/v5`；token 通过响应头下发、`Authorization: Bearer` 上送，CORS 要放行相应头。浏览器将 token 存入 localStorage 会暴露于 XSS，存储方案须按威胁模型选择。〔W03-1 p24-30〕
 
 ### 登出：无状态的代价
 
@@ -361,7 +361,7 @@ JWT 不可变，"退出登录"没法把已签发的 token 变无效:多实例下
 
 ### 短信验证码登录：一次"检查并写入"的原子化
 
-验证码一般是 6 位数字，只有十万种可能，因此要深入考虑两个安全问题（两条安全线）。第一条是控制发送频率，防止一下子发几百万条短信，手段有三：同一手机号一分钟以内只能发送一次；验证码有效期十分钟；整个系统本身也有限流，可以兜底保护系统。第二条是防暴力破解，不能让用户频繁输入试错，作废规则有二：一个验证码验证通过后就不能再用了；一个验证码三次验证失败后就不再可用。三次失败之后只告诉用户输入的验证码不对，不提示"过于频繁失败"。刻意模糊是不暴露重试上限，让攻击者探测不到还剩几次机会。作者强调这些规则是业务复杂度而非技术复杂度：理论上都是产品经理要告诉你的，换一个业务场景这些规则全部用不上，不需要仔细琢磨。〔W04-2 p26〕
+验证码若允许前导零，6 位数字有一百万种可能，因此仍要严格限流并防暴力破解。第一条安全线是控制发送频率：同一手机号一分钟以内只能发送一次；验证码有效期十分钟；系统本身也有限流。第二条是限制验证尝试：验证通过后立即作废，三次失败后也作废。失败时不暴露剩余次数。〔W04-2 p26〕
 
 代码上这两条线分别落在两个方法里：在 service 包里放一个 CodeService，里面只定义两个接口。`Send(ctx context.Context, biz string, phone string) error`：根据业务、手机号码生成一个随机验证码并发送，在这个接口里要控制住发送频率；`Verify(ctx context.Context, biz string, phone string, inputCode string) (bool, error)`：验证验证码，在这个接口里要保证验证码不会被暴力破解。两个接口天然按"业务 biz + 手机号"两个维度组织，发送与验证各自的安全职责分别落在两个方法上，而不是混在一个接口里。〔W04-2 p27〕
 
@@ -504,7 +504,7 @@ case int:
 2. **本次读一开头就是分隔符**(`pos == 0`):若 buffer 非空,说明上次的半包到这条分隔符为止凑齐了,打印并 `Reset`;buffer 为空说明收到一条空报文,跳过即可。
 3. **本次读里找不到分隔符**:整段余量写进 buffer 当半包攒着,退出内层循环等下一次 `Read` 拼后续字节。
 
-演示场景里客户端连发 3 条 `"china"+MAGIC` 就 Close,服务端 `Accept` 后故意 `Sleep 5` 秒,让 3 条报文先堆进内核缓冲区再开始读,于是读到的字节流几乎必然是粘成一坨的 `chinachinachina` 加分隔符,切分循环把它拆回三条。收到 `io.EOF`(对方关闭连接)时,先把 buffer 里残留的内容打印出来再退出循环并 `Close`,半包不会因为对端退出就丢掉。〔C:dachang/my_rpc/transport/client/tcp.go:17-20〕〔C:dachang/my_rpc/transport/server/tcp.go:28-31〕
+演示场景里客户端连发 3 条 `"china"+MAGIC` 就关闭，服务端延迟读取以增加多条消息合并到一次读取的机会。〔C:dachang/my_rpc/transport/client/tcp.go:17-20〕〔C:dachang/my_rpc/transport/server/tcp.go:28-31〕但上述示例只在每次读取的数据中搜索分隔符：分隔符跨两次 Read 时可能漏掉，正文中出现分隔符也会误切；固定读取缓冲区也不能限制累计 buffer 的大小。生产协议应处理跨读取边界、限制帧大小，并使用长度前缀或明确的转义规则。
 
 ### UDP 报文语义与 xid 请求关联
 
@@ -558,7 +558,7 @@ service student{
 }
 ```
 
-`stream` 写在请求前、响应前还是两边，决定四种形态：一元、服务端流、客户端流、双向流。读法：请求前写了 `stream`，客户端就是流式发送；响应前写了 `stream`，服务端就是流式返回；两边都写就是双向流。四种流的生命周期有一处不对称，最容易被忘：**客户端创建的流最终要调 `CloseSend`（双向流）或 `CloseAndRecv`（客户端流），服务端不用关**。课程里的类比是 HTTP 客户端要关 response body，而服务端不用关 request body。〔C:go_basic/grpc/client/main.go:119〕〔C:go_basic/grpc/client/main.go:155〕
+`stream` 写在请求前、响应前还是两边，决定一元、服务端流、客户端流和双向流。客户端流发送完成通常调用 `CloseAndRecv`，双向流不再发送时调用 `CloseSend`，并继续接收直到结束；服务端处理函数返回即可结束流。提前放弃接收时应取消调用的 context，以释放资源。〔C:go_basic/grpc/client/main.go:119〕〔C:go_basic/grpc/client/main.go:155〕
 
 ### 拦截器链：签名变了，骨架没变
 
@@ -769,7 +769,7 @@ HTTP 侧的坑（超时只设一个、忘关 `resp.Body`、把 `http.ErrServerCl
 ### C:go_basic/http、C:go_basic/grpc、C:go_basic/protoc 的补充点
 
 - 服务端逐行 Flush 做流式响应：先设 Content-Length，断言 `w.(http.Flusher)` 后每行 Write 加 Flush 强制写到 TCP；客户端提前 Close 断开，服务端 Write 会报错退出，必须检查 err 并 break，否则 goroutine 忙等。不声明长度则走 chunked。〔C:go_basic/http/server/main.go:93-115〕
-- header key 写入自动正规化（tRAce-id 变 Trace-Id），大小写不敏感，读取用 `http.CanonicalHeaderKey`；同一 header 第二次 `SetCookie` 无效（header key 不可重复），客户端 `request.AddCookie` 可以加多个同名不同值，服务端解析出两个。〔C:go_basic/http/server/main.go:41-44〕〔C:go_basic/http/server/main.go:117-135〕
+- header 名大小写不敏感。`http.SetCookie` 可以追加多个 `Set-Cookie` 响应头，浏览器按各 Cookie 的名称、Domain、Path 等处理；它们不能简单合并成一个逗号分隔的头。客户端可用 `request.AddCookie` 添加 Cookie。〔C:go_basic/http/server/main.go:41-44〕〔C:go_basic/http/server/main.go:117-135〕
 - 客户端便捷方法 `http.Get/Post/PostForm/Head` 不能设 header，要设就用 NewRequest 加 `client.Do`，超时挂在 `http.Client{Timeout}`；生产应复用 Client 实例（自带连接池）。〔C:go_basic/http/client/main.go:200-227〕
 - Recv 循环里 `io.EOF` 是正常结束标志，其他错误才需要处理，把 EOF 当错误会误报。〔C:go_basic/grpc/server/student.go:60-72〕
 - gRPC 默认单条消息上限 Recv 4M（Send 默认 MaxInt32），传大对象要 `MaxCallRecvMsgSize` 显式调大；TLS 一行开启：服务端 `grpc.Creds(credentials.NewServerTLSFromFile(...))`，客户端 `NewClientTLSFromFile`，即使 insecure 也必须设 `WithTransportCredentials`。〔C:go_basic/grpc/server/main.go:52-68〕

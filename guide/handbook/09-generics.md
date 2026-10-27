@@ -93,7 +93,7 @@ func main() {
 
 1. **类型参数** `T`：方括号里的类型占位符，声明时不知道它具体是什么，调用时才确定。跟普通参数一样，只是它占的是"类型"这个位置。
 2. **约束** `Number`：规定 `T` 可以是哪些类型。约束就是接口，Go 把它扩展成还能写**类型集合**：`~int | ~int64 | ~float64` 意思是"底层类型是 int、int64、float64 之一的类型"。
-3. **具化**：调用时编译器把 `T` 替换成具体类型，生成一份真正的函数。`Sum(1, 2, 3)` 背后是编译器先做 `sumInt := Sum[int]`，再调 `sumInt(1, 2, 3)`。
+3. **实例化**：调用时用具体类型实参替换类型参数并检查约束。`Sum(1, 2, 3)` 的类型实参可推断为 `int`，也可显式写成 `Sum[int](1, 2, 3)`；是否为每个类型生成独立机器码是编译器实现细节。
 
 类型实参大多能由编译器从实参推断出来，所以通常不用写 `Sum[int](...)`，写 `Sum(1, 2, 3)` 就行。`MyInt` 能传进去，靠的是约束里的 `~`：`MyInt` 底层类型是 `int`，`~int` 把它框了进来；去掉波浪线，`MyInt` 就进不去。〔TBX05 p11-12〕下一节细看这一点。
 
@@ -123,7 +123,7 @@ main.Vector[int]{1, 2, 3, 4}
 main.Vector[string]{"a", "b", "c", "d"}
 ```
 
-`Vector[int]` 和 `Vector[string]` 是两个不同的类型，底层分别是 `[]int` 和 `[]string`，各有一份自己的 `Dump`。C++ 里 `vector<int>` 和 `vector<string>` 各生成一份代码。Go 同样在编译期具化、不靠 Java 那样的擦除，但实现上更折中：编译器按类型的内存形状（GC shape）分组生成代码，所有指针类型共用一份，再通过隐含的字典传入具体类型信息。这一点材料没讲，细节以官方设计文档为准，写代码时不必依赖它。
+`Vector[int]` 和 `Vector[string]` 是两个不同的实例化类型，底层分别是 `[]int` 和 `[]string`，都可以调用 `Dump`。编译器如何共享或生成机器码属于实现细节，不应作为语言保证。
 
 ## 二、`~` 和类型集合：约束能框住谁
 
@@ -223,9 +223,9 @@ http://api/user/1
 17
 ```
 
-API 从想象中的 `client.Get[User](url)` 变成 `NewGet[User](client, path, decoder).Do()`，少一层优雅，但能编译。`dec` 是"拿到原始响应后怎么解析成 `T`"的回调，类型参数 `T` 落在了 `GetReq` 和 `NewGet` 上，绕开了方法不能带类型参数的限制。Java 背景会觉得别扭，因为这是过程式设计，`Client` 被降级成配置载体。
+API 从想象中的 `client.Get[User](url)` 变成 `NewGet[User](client, path, decoder).Do()`；类型参数落在 `GetReq` 和 `NewGet` 上，绕开了方法不能声明额外类型参数的限制。这里的 `Do` 只是拼接字符串并调用回调，**没有发起 HTTP 请求**；真实客户端还需要处理网络、解码和错误。
 
-### 限制二：约束不能当类型声明
+### 限制二：含类型项的接口不能当普通值类型
 
 想限制一个接口只接受几种特定类型（比如 SQL Builder 的 `Select` 只收 `string` 和 `Aggregate` 两种列），有人会想用约束当参数类型：〔TBX04 p7-8〕
 
@@ -249,7 +249,7 @@ func main() {}
 cannot use type Selectable outside a type constraint: interface contains type constraints
 ```
 
-约束只能和类型参数一起用，不能独立当类型。所以"处理有限几种输入"这件事，泛型约束帮不上忙，长期看 `interface{}` 参数仍会留在中间件设计里。〔TBX04 p7-8〕
+含类型项的非基本接口只能作为约束，不能作为普通参数类型；只包含方法的基本接口则既可作值类型也可作约束。泛型函数可以限制同一个类型参数的输入，但不能用这个约束直接创建同时容纳 `string` 和 `Aggregate` 的异构参数列表。〔TBX04 p7-8〕
 
 **绕法：标记接口**。用一个带私有方法的接口当"准入标记"：〔TBX04 p10-11〕
 
@@ -265,9 +265,9 @@ func (Aggregate) aggr() {}
 func (s *Selector) Select(cols ...Selectable) *Selector
 ```
 
-为什么不能用空接口？因为空接口所有类型都实现它，等于没拦。塞进一个未导出的方法 `aggr()`，只有包内实现它的 `Column`、`Aggregate` 能进来，外部无法冒充。代价是哪怕只用普通列，也得写成 `Select(Column("name"))`，不能再裸传字符串。
+空接口允许任何类型，不能限制输入。未导出方法让其他包无法自行声明同一个包私有方法，但其他包仍可能通过嵌入该接口或已有实现来满足接口，所以这不是严格封闭的类型枚举。代价是普通列要写成 `Select(Column("name"))`。
 
-### 限制三：约束只能是接口，不能是结构体
+### 限制三：嵌入结构体不形成子类型约束
 
 业务里常见需求：ORM 的 `Insert` 只接受嵌入了 `BaseEntity`（共享字段和公共方法）的实体。自然会想写 `func Insert[E BaseEntity](e *E)`，让所有嵌入 `BaseEntity` 的实体通过，行不通：〔TBX04 p8-9〕
 
@@ -275,7 +275,7 @@ func (s *Selector) Select(cols ...Selectable) *Selector
 in call to Insert, E (type User) does not satisfy BaseEntity
 ```
 
-Go 的约束必须是接口，不能是结构体，这条路走不通。它堵死的是"共享字段"这条路，对业务开发的影响比中间件更大。〔TBX04 p8-9〕
+约束可写具体类型，`[E BaseEntity]` 相当于只接受 `BaseEntity` 本身，并非接受所有嵌入它的结构体。嵌入不会建立子类型关系；Go 也没有直接表达“包含某个字段”的通用约束。〔TBX04 p8-9〕
 
 **绕法：Getter/Setter 接口**。把共享字段提取成方法，约束写成接口，再配合嵌入一个 `BaseEntity` 让每个实体不用重复实现：〔TBX04 p11-12〕
 
@@ -423,7 +423,7 @@ func (pq *PriorityQueue[T]) Pop() interface{} {
 
 ### 泛型 Set：comparable 约束与 struct{} 值
 
-第四个例子回到"类型本身带参数"。用 map 模拟 set 是 Go 社区多年的惯用法，Go 1.24 起泛型类型别名转正，可以给它一个带类型参数的具名类型：〔C:go_basic/v24/generic_type_alias.go:1-11〕
+第四个例子回到“类型本身带参数”。用 map 模拟 set 是 Go 社区多年的惯用法，Go 1.18 起就可以定义这样的泛型具名类型；它不是 Go 1.24 引入的泛型类型别名。〔C:go_basic/v24/generic_type_alias.go:1-11〕
 
 ```go
 type Set[T comparable] map[T]struct{}
@@ -434,9 +434,9 @@ func NewSet[T comparable](n int) Set[T] {
 }
 ```
 
-三个设计点：**约束必须是 `comparable`**,map key 要求可比较，若约束放宽为 `any`，函数、map、切片这类不可比较的类型也能实例化 `Set`，`map[T]struct{}` 那行无法通过编译；`comparable` 把 key 合法性交给类型系统在编译期保证。**值类型选 `struct{}`**,零大小、所有空结构体同址零内存，只借 key 的存在性表达成员关系，不像 `map[T]bool` 每个值还要占一个字节。**`NewSet` 的参数 n** 用于 `make(map[T]struct{}, n)` 预分配容量、减少扩容；`make` 返回的是匿名 map 类型，最后要 `Set[T](m)` 显式转换一次回具名类型再返回。〔C:go_basic/v24/generic_type_alias.go:1-37〕
+三个设计点：**`comparable` 约束**允许 `T` 作为 map key；不过 Go 1.20 起接口类型也可能满足它，接口动态值若不可比较，作为 key 时仍会 panic。**`struct{}` 值**不携带成员数据，只借 key 的存在性表达集合。**参数 n** 是 `make` 的容量提示，不是硬上限；`Set[T](m)` 显式转换成具名类型，也可以直接 `make(Set[T], n)`。〔C:go_basic/v24/generic_type_alias.go:1-37〕
 
-五操作与底层 map 操作一一对应：`Add` 置 `set[ele] = struct{}{}`；`Len` 复用 `len(set)`；`Remove` 复用 `delete(set, ele)`；`Exists` 用 `_, exists := set[ele]` 的 comma-ok 双返回判存在；`Range` 用 `for key := range set` 遍历并对每个 key 调用回调 `f func(ele T)`，回调式设计不暴露内部 map，调用方拿到的是元素而非底层容器。`Exists` 必须用双返回：值类型 `struct{}` 的零值不含任何信息，直接读 value 无法区分 key 存在与否，只能靠第二个返回值 exists。〔C:go_basic/v24/generic_type_alias.go:12-37〕
+五操作与底层 map 操作一一对应：`Add` 置 `set[ele] = struct{}{}`；`Len` 复用 `len(set)`；`Remove` 复用 `delete(set, ele)`；`Exists` 用 `_, exists := set[ele]` 的 comma-ok 双返回判存在；`Range` 用 `for key := range set` 遍历并对每个 key 调用回调。调用方从回调拿到元素，但这里的 `Set` 本身是导出的 map 类型，仍可直接访问底层 map。`Exists` 必须用双返回，因为 `struct{}` 的零值无法区分 key 存在与否。〔C:go_basic/v24/generic_type_alias.go:12-37〕
 
 官方测试 `TestSet` 位于外部测试包 v24_test、只依赖公开 API：`NewSet[int](10)` 后 `Add 2、4、6`，断言 `Len()==3`、`Exists(2)` 为真；`Remove(2)` 后断言 `Exists(2)` 为假、`Len()==2`；最后 `Range` 逐个回调打印，实测输出 4、6（map 遍历无序）。实测 TestSet PASS。〔C:go_basic/v24/generic_type_alias_test.go:9-52〕〔实测：work/run/C_go_basic__v24/E1/out.txt〕
 
@@ -445,7 +445,7 @@ func NewSet[T comparable](n int) Set[T] {
 - 泛型二分的边界是 `begin <= end`：区间剩一个元素时仍要比较一次；区间版 `BinarySearch4Section` 用 begin/end 双端短路找第一个 `>=target` 的下标。多命中只返回其中某一个，不保证最左或最右。〔C:go_frame/data_structure/binary_search.go:26-52〕
 - 手写堆用数组隐式存完全二叉树（左 2i+1、右 2i+2、父 (i-1)/2）；`Build` 自底向上按三角形逆序下滤是 O(N) 建堆；`Push` 上滤、`Pop` 尾换头后下滤；`ReplaceTop` 一次下滤，比 Pop+Push 少一半调整。〔C:go_frame/data_structure/heap.go:22-125〕
 - `container/heap` 适配五方法 `Len/Less/Swap/Push/Pop`；Less 方向决定小根/大根，Push/Pop 改 slice header 必须指针接收者。〔C:go_frame/data_structure/std_heap.go:1-36〕
-- `type Set[T comparable] map[T]struct{}` 是 Go 1.24 起的惯用法类型化：comparable 保证 key 可比较，struct{} 值零成本，五操作各自对应一个 map 操作。〔C:go_basic/v24/generic_type_alias.go:1-37〕
+- `type Set[T comparable] map[T]struct{}` 自 Go 1.18 可用；`comparable` 允许类型参数作 key，但接口动态值仍须可比较。〔C:go_basic/v24/generic_type_alias.go:1-37〕
 
 这些结构都不是玩具：第十三节榜单 TopN 的小顶堆、业务里常见的去重集合，落点就是它们。判断"这里能不能用泛型"的判据，下一节展开。
 
@@ -484,7 +484,7 @@ BenchmarkSpecialized-10    	     318	   3789612 ns/op	  802817 B/op	       1 all
 
 1. 泛型把算法和类型解耦：类型参数 `[T 约束]` 是占位符，约束是接口（可含类型集合），具化在编译期替换类型参数。
 2. `~int` 表示"底层类型是 int 的一切类型"；漏写 `~`，`MyInt` 这类自定义类型传不进去。
-3. 三个限制：方法不能有类型参数（用 Builder 绕）、约束不能当类型声明（用标记接口绕）、约束只能是接口（用 Getter/Setter 接口绕）。
+3. 三个限制：方法不能声明额外类型参数；含类型项的接口不能作为普通值类型；嵌入结构体不形成子类型约束。
 4. 适合：操作容器且不假设元素类型、通用数据结构、多次出现的样板代码。不适合：只调用一个方法、让代码更复杂。
 5. 泛型的性能收益来自"标准库能用更快的专用实现替换内部"，不是泛型本身更快。
 
@@ -507,9 +507,9 @@ BenchmarkSpecialized-10    	     318	   3789612 ns/op	  802817 B/op	       1 all
 
 **答案**
 
-1. 不能。去掉 `~` 后约束只收底层类型恰好是 `int`/`float64` 的类型；`MyInt` 的底层类型是 `int` 但本身不是 `int`，进不去。`~int` 才把"底层类型是 int 的一切类型"框进来。
+1. 不能。去掉 `~` 后约束只收类型本身是 `int` 或 `float64` 的类型；`MyInt` 底层虽是 `int`，本身却是不同的定义类型。
 2. 因为 Go 的方法（有 receiver 的函数）本身不能带类型参数，这是语法限制，编译器报 `method must have no type parameters`；普通函数没有 receiver，可以带。
-3. 用标记接口：`type Selectable interface{ aggr() }`，让 `Column` 和 `Aggregate` 实现 `aggr()`，`Select(cols ...Selectable)` 就能在编译期只收这两种。不能用空接口，因为它所有类型都实现。
+3. 用未导出方法的标记接口限制直接实现，再用 `Column` 和 `Aggregate` 实现；注意外部仍可能通过嵌入满足接口，不能把它当严格封闭的枚举。
 4. `ReadAll(r io.Reader)` 更易读也不慢；`ReadAll[R io.Reader]` 多一层类型参数，代码更复杂，没有收益。对某个值做的全部操作只是调用它的一个方法时，就用接口，不用类型参数。
 
 练习包 `exercises/p33gen/` 里有排序基准（`SortInts`、`SlicesSort`、`Specialized`）、`Set`、标记接口和编译错实拍，可以直接跑。
@@ -533,7 +533,7 @@ BenchmarkSpecialized-10    	     318	   3789612 ns/op	  802817 B/op	       1 all
 ### TBX04 三个限制的完整影响面与绕法代价
 
 - 限制一的影响面：客户端类应用最想要方法级泛型 API（`func Get[T any](url string) (T, error)`），Redis、Kafka 这类中间件客户端和 ORM、HTTP 框架全部受阻；把类型参数挪到接口上则每种模型一个实例（`Orm[User]`、`Orm[Order]`），模型数等于实例数，不可接受。〔TBX04 p2-5〕
-- 限制三的报错在 1.18 前版本有误导性：`myEntity does not implement BaseEntity` 让人以为实体没实现接口，实际是 `BaseEntity` 是结构体而约束只能是接口，现行报错文案已更准确。受影响最大的是 ORM 实体、前端参数接收这类要共享字段的业务代码，不只中间件。〔TBX04 p8-9〕
+- 结构体名称可以作为约束类型项，但只匹配该具体类型；嵌入不产生子类型关系，因此无法用它接受所有嵌入该结构体的实体。〔TBX04 p8-9〕
 - 三种绕法的代价对齐看：Builder 换编译可行，代价是链式样板与过程式风格；标记接口换编译期类型检查，代价是每列包一层（`Select(Column("name"))`）加私有方法噪音，但远好于 `interface{}` 参数拖到运行期 panic；Getter/Setter 换约束可行，代价是违背 Go 直接访问字段的习惯、代码量接近翻倍。〔TBX04 p9-12〕
 - 当年的悲观预判部分落空：泛型已进入标准库（`slices`、`maps`）和主流框架（ent、go-zero），但"泛型方法"缺位仍压制客户端 API 设计，标准库因此把容器辅助做成包级函数（`slices.Sort`）而不是方法。〔TBX04 p12〕〔TBX05 p15〕
 

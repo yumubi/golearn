@@ -173,22 +173,32 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 func main() {
-	// 复现"读出来加一再写回"的丢更新：两个请求同时读到 41
+	// 两次读取都完成之后才写回：每次访问受锁保护，但整个读改写不是原子操作。
 	cnt := int64(41)
+	var mu sync.Mutex
+	read := make(chan struct{}, 2)
+	write := make(chan struct{})
 	var wg sync.WaitGroup
 	for range 2 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			v := cnt                          // 1. 读：两个 goroutine 都读到 41
-			time.Sleep(10 * time.Millisecond) // 模拟业务耗时，放大交错窗口
-			cnt = v + 1                       // 2. 写回：都写 42，一次更新被覆盖丢失
+			mu.Lock()
+			v := cnt
+			mu.Unlock()
+			read <- struct{}{}
+			<-write
+			mu.Lock()
+			cnt = v + 1
+			mu.Unlock()
 		}()
 	}
+	<-read
+	<-read
+	close(write)
 	wg.Wait()
 	fmt.Println("读加写回:", cnt)
 	// 数据库里的正解：UPDATE SET cnt = cnt + 1，行级锁保证原子
@@ -211,7 +221,7 @@ func main() {
 原子自增: 43
 ```
 
-两次自增，正确结果是 43，"读加写回"得到 42：第二个 goroutine 的写回把第一个的覆盖了，这就是丢更新（示例里的 `cnt` 故意不加同步，它本身是个数据竞争，只为复现交错）。放到数据库里，`read_cnt = read_cnt + 1` 是一条语句，在行级锁保护下"读和写"不会被别的事务插进来；"先读后写"是两个语句，中间的窗口谁都能进。Java 的 `AtomicLong.incrementAndGet`、Rust 的 `fetch_add` 是同一层语义，Go 单进程里对应 `atomic.Int64.Add`，跨进程对应数据库的自增表达式或 Redis 的原子命令。新帖没有记录时用 Upsert：不存在则插入，存在则自增，表上 `biz` 加 `bizId` 的联合唯一索引是关键，没有它 Upsert 判不了冲突。〔W07-1 p8〕
+两次自增的正确结果是 43，分开的读和写却得到 42：两个 goroutine 都先读到 41，再各自写回 42。示例用锁保护每次访问、用 channel 固定交错，因此没有数据竞争，但整个读改写仍不是原子操作。数据库中 `read_cnt = read_cnt + 1` 在行级锁保护下一条语句完成；先读后写则需要事务锁或其他并发控制。单进程可用 `atomic.Int64.Add`，跨进程可用数据库自增或 Redis 原子命令。新帖没有记录时用 Upsert，`biz` 加 `bizId` 的联合唯一索引用于判定冲突。〔W07-1 p8〕
 
 ### 缓存侧：hash、HINCRBY 与一段 Lua
 缓存侧用 Redis 的 hash，一个 key 存三个计数（read_cnt、like_cnt、collect_cnt）。〔W07-1 p9〕缺数据有两种情形：key 不存在（数据只在数据库），或者 key 存在而 field 不存在。后者不用管，`HINCRBY` 遇到 field 不存在会先当 0 再自增。〔W07-1 p10〕要处理的是前者：自增前先检查 key 是否存在，存在才自增，不存在就跳过、等后续查询回写。检查加自增是典型的"检查-做某事"场景，这类场景在并发下都不安全（检查完到动手之间，别的请求可能已经改了状态），所以用 Lua 脚本保证原子：〔W07-1 p11〕
@@ -429,7 +439,7 @@ Kafka 的基本概念：producer、consumer、broker（一个 broker 就是一�
 
 1. **分区内有序，全局无序**。要全局有序就单分区；要"同一业务有序"就让同一业务的消息进同一分区，即按 key 哈希选分区。〔W07-2 p9〕〔W07-2 p8〕
 2. **消费者组内，一个分区最多一个消费者**。N 个分区最多 N 个消费者有效，多出来的闲着；消息积压时不能靠无限加消费者提速，这是面试热点。〔W07-2 p10〕〔W07-2 p11〕
-3. **`acks` 三档**：0 是发了不管（TCP 确认即可），1 是写入主分区，-1 是同步所有 ISR；性能递减、可靠性递增，要性能选 0，要消息不丢失选 -1。〔W07-2 p22〕〔W07-2 p23〕
+3. **`acks` 三档**：0 不等待 broker 确认，1 等 leader 确认，-1（all）等待所有当前 ISR 确认。〔W07-2 p22〕〔W07-2 p23〕all 仍不是绝对不丢：还要结合副本数、`min.insync.replicas`、生产者重试与幂等等配置。
 4. **主从分区分散在不同 broker**，主分区之间不在一起、主从也不在一起，目标单 broker 崩溃影响最小。ISR（In Sync Replicas）就是跟上了节奏的从分区。〔W07-2 p7〕〔W07-2 p24〕
 
 Go 客户端三家：Sarama 用户最多（现在在 IBM 名下），segmentio/kafka-go 没大缺点，confluent 版需要 cgo、跨平台差。课程选 Sarama，因为你出去工作遇到它的概率最大。〔W07-2 p17〕积压了怎么办：增加分区现实中基本不可能；异步消费（goroutine 并发消费最后合并提交）；批量消费（凑一批一次处理，下面第八部分的阅读数就是这么改的）。〔W07-2 p54〕
@@ -437,8 +447,8 @@ Go 客户端三家：Sarama 用户最多（现在在 IBM 名下），segmentio/k
 ### RabbitMQ：另一种模型
 RabbitMQ 是交换机把消息路由到队列、消费者确认的模型，不是 Kafka 那种分区日志，上面的分区与 `acks` 语义不适用。资料代码里值得记三条：
 
-- 消息持久化需要**队列 durable 加消息 persistent 两个条件同时满足**，即使如此也不保证立即落盘（中间有缓冲，broker 突然挂掉缓冲里的数据会丢）。〔C:go_frame/mq/rabbitmq/producer/direct.go:33-36〕
-- `autoAck=false` 时消费后必须显式 `Ack`；没 ack 的消息在 channel 关闭后会重新放回队列尾部，所以**消费者要能容忍重复**。〔C:go_frame/mq/rabbitmq/consumer/direct.go:40〕
+- 消息持久化通常需要 durable 队列和 persistent 消息；还应使用 publisher confirms，并结合队列类型、复制及故障模型评估可靠性。〔C:go_frame/mq/rabbitmq/producer/direct.go:33-36〕
+- `autoAck=false` 时消费后显式 `Ack`；未确认的消息在 channel 关闭等情况下会重新入队，具体顺序不保证，因此消费者要能容忍重复。〔C:go_frame/mq/rabbitmq/consumer/direct.go:40〕
 - `Qos(prefetch)` 限制单个消费者未 ack 的消息数，值越小负载越均衡，但单消费者吞吐越低。〔C:go_frame/mq/rabbitmq/consumer/direct.go:61-65〕
 
 ## 八、幂等：重复无害
@@ -580,7 +590,7 @@ order:42 处理次数: 3
 - 同步 producer 必须设 `Return.Successes=true`，SendMessage 返回分区号和 offset；异步 producer 把 Successes 和 Errors 都设为 true，从 Input channel 发、用 select 同时监听成功和失败两个 channel。〔W07-2 p19〕〔W07-2 p21〕
 - Sarama 的 Partitioner 有 Random、RoundRobin、Hash、Manual、ConsistentCRC（CRC16 一致性哈希）、Custom（参数化 Hash），典型用法就是同业务同分区保业务有序。〔W07-2 p20〕
 - channel 三条语法要记牢：close 后再写 panic、读得到零值（用第二返回值判关闭）、重复 close 也 panic；for range channel 在 close 后自然退出；select 无 default 会阻塞到某个 case 成功，多 case 就绪随机挑一个，case 后不用 break。〔W07-2 p25-29〕
-- Sarama 消费者的形状：NewConsumerGroup 后循环调 `cg.Consume(ctx, topics, handler)`；ConsumeClaim 里 for range claim.Messages()，消费成功必须 `session.MarkMessage(msg, "")` 提交位点，Setup/Cleanup 用得少；消费者退出靠传进去的 ctx 超时或 cancel。〔W07-2 p30-32〕
+- Sarama 消费者循环调用 `cg.Consume(ctx, topics, handler)`；消费成功后 `session.MarkMessage(msg, "")` 标记待提交位点，标记本身不等于已持久提交，提交仍受配置与时机影响。消费者退出靠 context 取消。〔W07-2 p30-32〕
 - 重置位点消费历史消息可以在 Setup 里 ResetOffset，但更建议走离线渠道操作集群，不是每次部署都要重置。〔W07-2 p33〕
 - 消费者接口化给依赖注入用：`events.Consumer{Start()}` 统一接口，InteractiveReadEventConsumer 解包 ReadEvent 后调 `repo.IncrReadCnt(biz:"article")`；再加一个阅读历史消费者订阅同一事件，读文章接口零改动，这就是解耦的验证方法。〔W07-2 p41〕〔W07-2 p47〕
 - 消息队列的基本形态：N 个生产者、N 个消费者经队列解耦，两侧互不感知；Kafka、RocketMQ、RabbitMQ 同属此类，实践和面试里都是热点。〔W07-2 p3〕
@@ -607,7 +617,7 @@ order:42 处理次数: 3
 
 ### W09-1 榜单工程细节
 
-- Ticker 和 cron 的具体写法：`time.NewTicker` 必须 `defer Stop()`，否则 goroutine 泄露；for 加 select 里同时监听 `ctx.Done()` 和 `ticker.C`。robfig/cron/v3 用 `cron.New(cron.WithSeconds())` 开秒域，AddFunc 线程安全，Stop 返回的 ctx 用来等任务真正结束，表达式写不准就用 `@every 1m`。〔W09-1 p14-17〕
+- Ticker 和 cron 的具体写法：`time.NewTicker` 在不再需要时调用 `Stop` 以停止后续触发；Go 1.23 起不可达的 ticker 可以被垃圾回收，ticker 本身不创建用户 goroutine。循环还应监听 `ctx.Done()` 并退出。robfig/cron/v3 用 `cron.New(cron.WithSeconds())` 开秒域，Stop 返回的 context 可用于等待任务结束。〔W09-1 p14-17〕
 - Job 是和 Web、gRPC 同层的对外暴露方式，不是 DDD 概念；RankingJob 的 Run 里用 `ctx.WithTimeout(30s)` 包住 RankTopN，超时就放弃这一轮。〔W09-1 p25-26〕
 - TDD 思路：gomock 模拟"两批有数据加第三批为空"的 ListPub 和每批的 GetByIds，scoreFunc 直接简化成常数，聚焦流程不聚焦公式。〔W09-1 p20-21〕
 - CronJobBuilder 装饰器给 Job 加观测：记录开始结束日志，Prometheus histogram 按"任务名加成败"打点 Observe 耗时；偶发失败不用管，连续失败要靠 Grafana 告警。〔W09-1 p27〕

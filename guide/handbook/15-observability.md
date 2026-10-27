@@ -54,9 +54,9 @@ func main() {
 {"level":"INFO","msg":"没有 ctx 的日志","svc":"dns"}
 ```
 
-三行对着看：调用处没写 `req_id`，前两条却有；`With("svc", "dns")` 换过 logger，`req_id` 没丢；第三条没传 `ctx`，`req_id` 立刻消失。干这事的既不是业务代码也不是库，是一个二十行的 `slog.Handler`：从 `ctx` 取出请求 ID，塞进每条日志。这个 ID 就是三根支柱的连接线：指标告警说"有问题"，靠它翻到那次请求的日志；链路说"慢在哪一段"，还是它把日志串起来。〔W08-1 p3-5〕
+三行对着看：调用处没写 `req_id`，前两条却有；`With("svc", "dns")` 换过 logger，`req_id` 没丢；第三条没传 `ctx`，`req_id` 消失。注入字段的是这个 `slog.Handler`。请求 ID 可以关联日志；要从链路找到对应日志，还需要明确把 trace ID 或其他关联字段写进日志。指标通常按聚合维度告警，不能直接用请求 ID 检索某次请求；可以先按时间和服务查链路，或使用支持的 exemplar 关联。〔W08-1 p3-5〕
 
-Go 把这条线做成显式的：进程内它活在 `context.Context` 里，所以**所有可能阻塞或调用外部的方法，第一个参数都应该是 `ctx`**。〔W08-2 p10〕〔W08-2 p11〕本节反复出现的形状就是：ID 放进 ctx，让每个环节自动带上，而不是每个函数手动传。
+进程内可用 `context.Context` 传递请求范围内的关联信息；需要取消、截止时间或请求元数据的 API 通常把 ctx 放在第一个参数。并非每个方法都需要 ctx。〔W08-2 p10〕〔W08-2 p11〕
 
 ## 和你已知语言的差异
 
@@ -66,11 +66,11 @@ Go 把这条线做成显式的：进程内它活在 `context.Context` 里，所�
 | 指标 | Micrometer | `metrics` / `prometheus` crate | `client_golang`，OpenTelemetry 也行 |
 | 链路 | OTel agent 字节码注入，无侵入 | `tracing-opentelemetry`，靠 span 宏 | 手动或中间件、插件接入，没有字节码 agent |
 
-Java 的 MDC 靠线程局部变量，agent 靠字节码注入，都是运行时魔法；Go 没有线程局部存储，也没有 JVM 式的字节码 agent，换来一条明路：ctx 是唯一载体，中间件注入，`slog.Handler` 取出。Rust 的 `tracing` 靠 `#[instrument]` 和 subscriber 自动带字段，最接近 Java 的体验；`slog` 没有对应的宏。所以缺口都得自己写中间件补，这正是本节的重点。
+Java 的 MDC 常用线程局部变量，跨线程执行时也需要考虑传播；Go 通常显式传递 ctx，也可以用中间件注入、handler 提取。跨进程还需要传播协议，并不是 ctx 本身自动跨越边界。Rust 的 `tracing` 可借助 `#[instrument]` 和 subscriber 添加字段；`slog` 则通过 handler 等机制扩展。
 
 ## 一、日志：先定级别和纪律，再选库
 
-四级足够：DEBUG（线上不打）、INFO（线上默认）、WARN（不好但可容忍）、ERROR（需要关注）。多一级就多一份使用成本，FATAL 和 ERROR 很难分清。〔W05-4 p4〕打日志的时机不用纠结：与外部交互（数据库、缓存、RPC）的请求响应用 DEBUG 记，疑似不严重的问题用 WARN，原则是**怀疑该不该打，就打**，宁滥勿缺。〔W05-4 p5〕
+常用四级：DEBUG、INFO、WARN、ERROR。线上级别应按诊断需要和成本配置；FATAL 等级别也可按具体库和退出策略决定是否使用。〔W05-4 p4〕与数据库、缓存、RPC 交互时，可以记录必要的诊断信息，但先限制敏感字段、数据量和噪声，不应无条件记录完整请求响应。〔W05-4 p5〕
 
 几条硬纪律，动机都来自"日志会被谁看"：
 
@@ -111,7 +111,7 @@ func main() {
 ctxHandler does not implement slog.Handler (missing method WithAttrs)
 ```
 
-编译器把"忘了转发"挡在上线之前，前提是你真的实现了这个接口。脱敏交给 `LogValuer`：值在输出时才展开，明文长在类型里，任何调用点都泄露不出去：
+编译器要求实现全部方法，但无法保证转发和重新包装的语义正确。下面用 `LogValuer` 集中处理脱敏：只有值仍以 `phone` 类型交给支持该接口的日志处理器时，才会调用 `LogValue`；先转成普通字符串或通过其他渠道输出仍可能泄露。
 
 ```go
 package main
@@ -146,7 +146,7 @@ func main() {
 {"level":"INFO","msg":"login","user":"138****5678"}
 ```
 
-显式传入的字段和注入的字段撞名是另一个边界。同一个 handler，调用里再写一个 `req_id`（ctx 里注入 id 是 `q-1791`），〔实测〕`go run main.go` 输出：
+这个简化实现假设号码至少七字节，实际使用应先校验输入，避免切片越界，并审查其他输出路径。显式传入的字段和注入的字段撞名是另一个边界。同一个 handler，调用里再写一个 `req_id`（ctx 里注入 id 是 `q-1791`），〔实测〕`go run main.go` 输出：
 
 ```text
 {"level":"INFO","msg":"显式优先示例","key":"a","req_id":"manual-1","req_id":"q-1791"}
@@ -181,7 +181,7 @@ demo_queries_total{outcome="hit"} 3
 demo_queries_total{outcome="miss"} 1
 ```
 
-这就是 Prometheus 拉到的：每行一条时间序列，大括号里是 label。`hit` 除以总数是命中率，`miss` 加 `upstream_error` 是错误率。计时用 Histogram：
+这就是 Prometheus 拉到的：每行一条时间序列，大括号里是 label。`hit` 除以总数是命中率；`miss` 通常表示未命中缓存，不一定是错误，上游错误率应按 `upstream_error` 等实际失败类别计算。计时用 Histogram：
 
 ```go
 var latency = promauto.NewHistogram(prometheus.HistogramOpts{
@@ -201,7 +201,7 @@ demo_upstream_duration_seconds_sum 0.4002
 demo_upstream_duration_seconds_count 2
 ```
 
-桶的原则是**让落到各区间的数据个数在同一个量级**，响应时间跨几个数量级，所以用非等间距。〔W08-1 p22〕看分位数有三个视角：绝对值（99 线慢不慢）、增长率（发版前后对比）、相对值（平均线和 99 线差距大，说明长尾明显）。〔W08-1 p29〕
+桶应围绕实际延迟分布和服务目标选择，尤其在告警阈值附近设置足够的边界；响应时间跨几个数量级时，非等间距常有帮助。课程建议参考各区间的数据量，但不必强求同量级。〔W08-1 p22〕看分位数有三个视角：绝对值（99 线慢不慢）、增长率（发版前后对比）、相对值（平均线和 99 线差距大，说明长尾明显）。〔W08-1 p29〕
 
 然后是生死纪律。每个不同的 label 组合是一条独立时间序列，进程内不会自动回收，label 选错内存就爆：
 
@@ -271,7 +271,7 @@ func upstreamErrReason(err error) string {
 
 ## 三、链路：trace、span 与 ctx 传播
 
-链路的核心是 trace 和 span：一个请求一个 trace，每段调用一个 span，span 有父子关系；span 的长度是执行时间，span 之间的空隙是父 span 自己代码的时间，空隙又长又多就该补打点。〔W08-1 p3-5〕〔W08-1 p6〕
+链路的核心是 trace 和 span：一次追踪由多个 span 组成，span 通常有父子关系，长度表示该操作耗时。子 span 之间的空隙可能是父操作自身的工作、等待或未埋点的调用，不能仅凭空隙判断原因。〔W08-1 p3-5〕〔W08-1 p6〕
 
 OpenTelemetry（otel）是 CNCF 主导的标准，统一 API，可以把数据发往 Jaeger、Prometheus 等后端，优先用 otel 的 API。〔W08-2 p3〕课程里链路后端用的是 Zipkin。〔W08-2 p22〕初始化设置 Propagator 和 TracerProvider，**Provider 要关闭**。〔W08-2 p4〕不关的后果是：批量上报的 span 还缓冲在内存里，进程退出时最后一批丢失。〔自〕span 生命周期一条规则：`Start` 传入的 ctx 里带着 span 信息，新 span 自动挂为子节点；每个 `Start` 配对一次 `End`，谁创建谁结束，惯用 `defer span.End()`。〔W08-2 p6〕接入位置有规律：
 
@@ -279,7 +279,7 @@ OpenTelemetry（otel）是 CNCF 主导的标准，统一 API，可以把数据�
 2. **数据库自动**：GORM 加 tracing 插件，span 里带 SQL 等丰富的调试信息。〔W08-2 p16-17〕
 3. **手动打点**：关键步骤、易错步骤、程序出口（调第三方）才手动加；缓存性能敏感，默认不打。〔W08-2 p18〕
 
-没有 otel 时，最小实现也是这个形状：`traceMW` 从 header 取追踪 ID 塞进 ctx，业务代码只管 `logger.InfoContext(r.Context(), "kv get", "key", "a")`（logger 就是开头的 `ctxHandler`）：
+没有 otel 时，可以先演示关联 ID 的传递：`traceMW` 从 header 取 ID 塞进 ctx，业务代码调用 `logger.InfoContext(r.Context(), "kv get", "key", "a")`（logger 就是开头的 `ctxHandler`）。这只是关联日志，不会创建 trace 或 span；固定回退值 `t-local` 也不能区分请求，生产环境应生成唯一 ID、校验外部输入并采用标准传播协议。
 
 ```go
 func traceMW(next http.Handler) http.Handler {
@@ -305,7 +305,7 @@ gRPC 的 metadata key 必须匹配 `[0-9a-z-_.]+`，大写不合法，HTTP heade
 
 span 里的三类数据各有分工：Tag 侧重查询，Log 记录事件发生的时间点，Baggage 随 trace 传播给所有子孙 span，普通 Tag 和 Log 传不给后代。〔C:dachang/trace/open_trace/local_tracer.go:49-56〕span 之间的引用有两种：`ChildOf`（父依赖子的结果，例如等推荐服务返回）和 `FollowsFrom`（父不依赖子的结果，例如异步上报 UV）。〔C:dachang/trace/open_trace/local_tracer.go:68-77〕
 
-context 的纪律全部适用：ctx 只做方法参数且是第一个参数；公共方法都带上；**不要放进结构体字段**，除非结构体本身就表达上下文。〔W08-2 p11〕父 ctx 取消则所有子 ctx 都取消，控制从上到下；`Value` 查找子先查自己再查祖先，从下到上。〔W08-2 p9〕进程内把 ctx 一路传下去，意味着所有方法都带 ctx 参数，这是 Go 业务代码的固定形状。〔W08-2 p10〕
+context 通常作为需要它的函数的第一个参数，不应为了统一形式给所有方法添加 ctx；一般不要存进结构体字段，特殊情况另行权衡。〔W08-2 p11〕父 ctx 取消则子 ctx 取消，控制从上到下；`Value` 查找从子到祖先。〔W08-2 p9〕需要传播取消、期限或请求信息的调用应继续传递 ctx。〔W08-2 p10〕
 
 ## 四、三根支柱怎么接力
 
@@ -343,7 +343,7 @@ demo_request_duration_seconds_count 1
 demo_requests_total{method="GET",pattern="GET /kv/{key}",status="200"} 1
 ```
 
-第一行是日志，后面是指标，同一次请求。`pattern="GET /kv/{key}"` 是路由模板不是原始 URL，label 基数有限；`time.Since` 在 `next` 返回之后执行，包住整个 handler。
+第一行是日志，后面是指标，同一次请求。`pattern="GET /kv/{key}"` 是路由模板不是原始 URL；`time.Since` 在 `next` 返回之后执行，包住整个 handler。这是简化示例：重复 `WriteHeader` 或先 `Write` 隐式写入状态码时，记录值可能不准，包装器也没有保留 Flusher、Hijacker 等可选接口；生产中应使用正确处理这些语义的实现。
 
 接力这样发生。假设上游开始超时：
 
@@ -369,11 +369,11 @@ logger.InfoContext(ctx, "cache miss, forwarding", "qname", "down.test")
 
 ## 小结
 
-1. 日志记发生了什么，指标回答多少、多快、多频繁，链路回答经过了哪里、每段多久；连接它们的是同一个请求 ID。〔W08-1 p3-5〕
-2. ID 进程内靠 `context.Context` 传，跨进程靠 header 或 gRPC metadata 传；ctx 永远是第一个参数。〔W08-2 p10〕〔W08-2 p11〕
+1. 日志记发生了什么，指标回答多少、多快、多频繁，链路回答经过哪里、每段多久；显式记录关联字段才能把链路与日志关联。〔W08-1 p3-5〕
+2. ID 进程内可用 `context.Context` 传，跨进程靠 header 或 gRPC metadata；需要 ctx 的函数通常把它放在第一个参数。〔W08-2 p10〕〔W08-2 p11〕
 3. 自定义 `slog.Handler` 把 `req_id` 变成基础设施：`Handle` 注入，`WithAttrs`/`WithGroup` 必须重新包装转发，用 `InfoContext` 而不是 `Info`。
-4. `LogValuer` 让脱敏长在类型里，比调用处的小心可靠。
-5. 指标四种类型，先摆 RED；桶让各区间的数据个数同量级；label 值必须是有限集合，基数是生死纪律。〔W08-1 p16-19〕〔W08-1 p22〕
+4. `LogValuer` 可集中脱敏，但仅对经过该类型和处理器的输出有效。
+5. 指标先摆 RED；桶按延迟分布与服务目标选取，label 要控制基数。〔W08-1 p16-19〕〔W08-1 p22〕
 6. 错误先归类再进指标，label 值才收得住。
 7. 链路接入点：入口和数据库自动，关键步骤和程序出口手动，缓存默认不打；每个 `Start` 配对 `End`。〔W08-2 p14-15〕〔W08-2 p16-17〕〔W08-2 p18〕〔W08-2 p6〕
 8. 指标做告警，链路和日志做定位；告警要"超阈值且持续一段时间"。
@@ -402,7 +402,7 @@ logger.InfoContext(ctx, "cache miss, forwarding", "qname", "down.test")
 1. 日志按条存，一条多几个字节无妨；指标每个不同的 label 组合是一条常驻时间序列，`req_id` 每请求都不同，基数无限，内存撑不住。
 2. `With` 返回的新 logger 持有的是 `WithAttrs` 的返回值；不重新包装，返回的就是内层裸 handler，注入逻辑被绕过了。
 3. 不能。ctx 只在进程内有效，跨进程必须显式把 ID 写进 header 或 metadata，由对端中间件取回 ctx。
-4. 不应该。响应时间跨几个数量级，等间距桶要么头部挤在一个桶里，要么尾部大片空桶；要让各区间的数据个数同量级。〔W08-1 p22〕
+4. 不一定。应按延迟分布和服务目标选桶；跨数量级时非等间距常更有效，关键阈值附近需要足够分辨率。〔W08-1 p22〕
 
 练习包：`exercises/p15slog`（JSON 字段、级别、`LogValuer` 脱敏、ctx 关联）、`exercises/p16slogh`（自动注入、`With` 链不丢、显式字段优先、双输出扇出）。
 
@@ -465,7 +465,7 @@ logger.InfoContext(ctx, "cache miss, forwarding", "qname", "down.test")
 - **filter 为什么只需一条 json 指令**：Filebeat 传给 Logstash 的数据里，日志内容就放在 `message` 字段；应用侧用 zap 输出 JSON 结构化日志，`message` 本身就是 JSON，一条 json 指令即完成解析，写入 `data` 字段。grok/kv 这类为非结构化文本准备的插件在此用不上。日志规范好过过滤逻辑。〔W18-1 p22〕〔W18-1 p11〕
 - **按天索引**：索引名内嵌 `%{+YYYY.MM.dd}`，随日期变化，每天一个新索引。原课未展开按天索引的运维动机（如定期清理旧索引）；不按时间分索引则单索引持续膨胀、清理困难。〔W18-1 p22〕
 - **Filebeat 的定位与配置**：轻量采集器，实时盯文件变化、自动发现新文件；output 可以给 Logstash、ES 或 Kafka，与 Logstash 组合即轻量采集加集中过滤。input 侧两个硬性条件：`enabled: true`；paths 用通配符指向日志实际写入的目录（课程场景是 `/var/log`，Windows 需对应修改）。output 两种去向：直发 ES（Kibana 数据源向导默认引导这条）或发给 Logstash。课程选后者，地址配成正确的 Logstash 地址。落盘目录和采集目录必须对齐：应用不往 paths 指的目录写，Filebeat 采不到东西，链路空转。〔W18-1 p20〕〔W18-1 p25〕〔W18-1 p19-20〕
-- **应用侧初始化（zap+lumberjack）**：为让日志写进对应目录，初始化时就要指定好目录；引入管理日志切片的 lumberjack 库，日志文件很大或时间变化时分割成多个文件：
+- **应用侧初始化（zap+lumberjack）**：初始化时指定日志目录。课程提到按大小或时间切分；下面的 lumberjack 配置按大小自动轮转，`MaxAge` 控制旧文件保留时间，按天轮转需要另行安排：
 
 ```go
 lumberjackLogger := &lumberjack.Logger{
@@ -483,7 +483,7 @@ core := zapcore.NewCore(
 L := zap.New(core, zap.AddCaller())
 ```
 
-  这份参数是一份运维契约：磁盘上限约等于 `MaxBackups` 乘 `MaxSize`；`Compress=true` 省六成以上磁盘，但查旧日志要先解压。〔W18-1 p21〕
+  `MaxBackups` 限制旧文件个数，当前文件也占空间；实际磁盘使用还受压缩率、轮转时机和其他文件影响，不能仅以二者乘积作严格上限。〔W18-1 p21〕
 - **展示端**：进 Kibana 的 Discover 后，默认列难读，选字段作列（`data.level`、`message`、`data.msg`）优化展示。〔W18-1 p23-24〕
 - **Kibana vs Grafana**：两者都是流行的数据可视化工具，差别在设计目标、适用场景和特性。Kibana 设计目标是与 Elasticsearch 协同工作、构建实时搜索和分析的仪表板，深度集成 ELK 堆栈、专注日志和指标数据；告警有、能按查询结果设规则，但课件明确它相对较新、相对较简单。Grafana 最初设计为通用的开源仪表板和可视化平台，支持多种数据源；告警更强大成熟，支持电子邮件、Slack、Webhooks 等多种通知渠道，更灵活、允许定义复杂触发条件。所以日志检索偏向 Kibana（ES 原生），多数据源指标监控加告警偏向 Grafana，两者组合而非对立。〔W18-1 p14〕
 

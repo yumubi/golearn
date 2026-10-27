@@ -66,7 +66,7 @@ func main() {
 
 ## 一、`*sql.DB` 是池，不是连接
 
-先回答开头的谜面。`sql.Open(driverName, dataSourceName)` 只按驱动名找到驱动、记下连接串，不保证建立任何连接（具体驱动可能在这一步解析 DSN，但不会去连服务端），所以连一个不存在的地址也照样"成功"，开头示例的前两行就是证据。课程的教学代码把 `sql.Open` 和连接串放在 `db_test.go`。〔C:go_basic/database/db_test.go:24-26〕连接错误要等到第一次真正用连接的操作（`Exec`、`Query`、或者显式的 `PingContext`）才冒出来。所以生产代码的正确姿势是启动时 `db.PingContext(ctx)` 一次，把配置错误在启动阶段暴露，而不是等第一个请求进来才炸。
+`sql.Open(driverName, dataSourceName)` 返回数据库句柄，可能只校验参数而不建立连接；具体行为取决于驱动。〔C:go_basic/database/db_test.go:24-26〕连接错误可能等到 `Exec`、`Query` 或 `PingContext` 才出现。需要启动时确认数据库可达，可以用带超时的 `db.PingContext(ctx)`；它只能证明当时的连接可用，不能保证之后不会故障。
 
 第二个推论：`*sql.DB` 是连接池，不是一根连接。它是并发安全的，全局建一份就够，到处传着用；给每个请求 `sql.Open` 一次是新手常见的错误，既浪费，还丢掉了池的复用。池有三个旋钮：〔C:go_frame/orm/gorm/connection.go:52-60〕
 
@@ -122,13 +122,13 @@ func main() {
 结束后: open=2 idle=2 wait=4
 ```
 
-6 个查询、2 条连接，分三批跑完，总耗时是单个查询的两倍以上（具体秒数随机器波动，所以示例只打印布尔值）。`db.Stats()` 里的 `WaitCount` 记下了有 4 个查询排队等过连接。〔实测〕`go1.26.4` 加 `modernc.org/sqlite`，示例由检查脚本实际运行过。这个排队机制就是 Go 并发模型下"一个请求一个 goroutine 直接查库"不出事的原因：goroutine 非常便宜，来一千个请求就开一千个 goroutine，但真正同时压到数据库上的连接数被池的上限钳住，多出来的 goroutine 在池前排队。池在这里同时是限流器。反过来也要记住它的代价：上限设得太小，吞吐就卡在池上（上面总耗时超过单个查询的两倍就是证据）；设得太大，对 PostgreSQL 这类"一条连接一个进程"的数据库，实例一多就撞服务端的 `max_connections`。PG 的默认上限是 100，生产环境要按"max_connections 除以应用实例数"来规划 `MaxConns`。
+池上限为 2 时，持有连接的操作最多同时有两个，其他操作需要等待。输出中的等待次数和耗时是一次运行结果，调度、机器负载与数据库锁竞争都会影响它们，不能保证每次恰好为 4 或超过两倍。`db.Stats().WaitCount` 是累计等待连接的次数。连接池限制的是连接数，而不是排队 goroutine 的数量；仍需限制请求并发、设置超时并监控等待。配置上限时要结合数据库连接预算、其他客户端以及应用实例数，不能简单把服务器上限全部分给应用。
 
 驱动用之前的另一个坑也要交代：驱动必须**匿名导入**。`database/sql` 通过注册表找驱动，`import _ "modernc.org/sqlite"` 的下划线表示只用它的 `init()` 注册，不直接用包里的任何名字。忘了这一行，编译照样通过，`sql.Open` 运行时才报 `sql: unknown driver "sqlite" (forgotten import?)`。
 
 > 〔W02-2 p7〕GORM 的很多接口都是接收 interface 的，根据你传入不同类型的参数，会执行不同的行为。……虽然 GORM 我用过很多次，但是我还是觉得这些方法语义过于模糊，经常写错。
 
-GORM 在 `*sql.DB` 之上又包了一层，先看它怎么开连接。它的 DSN 必须带 `charset=utf8mb4&parseTime=True&loc=Local`：〔C:go_frame/orm/gorm/connection.go:17-21〕`utf8mb4` 兼容 emoji，`parseTime=True` 才能把数据库的时间列扫进 `time.Time`，少了它，MySQL 驱动把时间列当 `[]byte` 交出来，扫进 `time.Time` 会报错。上面引的那段话点出了 GORM 的学习难点：大量接口收 `interface{}`，同一个方法传不同类型行为不同，典型就是 `Updates`，第四节专门拆它。
+GORM 在 `*sql.DB` 之上又包了一层。课程 MySQL DSN 使用 `charset=utf8mb4&parseTime=True&loc=Local`：〔C:go_frame/orm/gorm/connection.go:17-21〕`utf8mb4` 支持完整 Unicode，`parseTime=True` 让驱动把日期时间列解析为 `time.Time`，`loc` 控制解析时使用的时区；具体配置需按驱动和应用需求选择。大量接口收 `interface{}`，同一个方法传不同类型行为不同，第四节会拆解 `Updates`。
 
 ## 二、事务：靠纪律，不靠语法
 
@@ -265,7 +265,7 @@ lastId, err := res.LastInsertId() //ID自增，用过的id（即使对应的行�
 rows, err := res.RowsAffected() //插入2行，所以影响了2行
 ```
 
-对 UPDATE 或 DELETE 调 `LastInsertId` 恒得 0，不报错：只有插入操作才会给它赋值；`RowsAffected` 是 where 命中几行就影响几行。〔C:go_basic/database/crud.go:41-48〕〔C:go_basic/database/crud.go:72-76〕
+这些返回值依赖数据库和驱动：`LastInsertId` 并非所有驱动都支持，多行插入的 ID 语义也要查对应文档；`RowsAffected` 对更新操作可能受数据库和连接配置影响，不能一概当作 WHERE 命中行数。以下表格只描述课件中 MySQL 示例的观察。〔C:go_basic/database/crud.go:41-48〕〔C:go_basic/database/crud.go:72-76〕
 
 | 操作 | LastInsertId | RowsAffected |
 |---|---|---|
@@ -306,7 +306,7 @@ DSN(data source name)格式：[username[:password]@][protocol[(address)]]/dbname
 
 DSN 参数各管一件事：`parseTime=True` 让 DATE/DATETIME 列扫进 time.Time（漏了它，上一小节的 enrollment 就扫不进去）；`charset=utf8mb4` 支持完整 UTF-8 编码（含 emoji）；`loc` 声明时间解析用哪个时区，课件示例用 Asia/Shanghai。注释明示"db可以并发使用"，全局一份句柄被各测试共享，`db.Close()` 被注释掉，进程生命周期内复用。这条"不调 SetMaxOpenConns"的事实来自课件：课件源码里没有调过连接池参数，那组旋钮留作练习，因此**原课未规定具体数值**。
 
-### 深翻页：offset 越深越慢，游标恒定
+### 深翻页：offset 与游标的代价
 
 同一个"遍历 student 全表"的任务，课件给出两种取"下一页"的写法。Traverse1 通过 limit offset,n 遍历：每轮 `Limit(PAGE_SIZE=100).Offset(offset)`，offset 累加本页行数，取到空页为止。Traverse2 通过 id>x limit 0,n 遍历：每轮 `Where("id>?", maxid).Limit(100)`，源码注释明示"默认会按id排好序"，因此本页最后一行就是本页最大 id，直接拿它当下一轮游标，逐元素比较取最大值的写法被注释掉，注释交代"已按id排好序，所以最后一个students的Id最大"。〔C:dachang/database/limit.go:32-72〕
 
@@ -320,7 +320,7 @@ db.Select("id,name").Where("id>?", maxid).Limit(PAGE_SIZE) //默认会按id排�
 maxid = students[len(students)-1].Id //已按id排好序，所以最后一个students的Id最大
 ```
 
-测试注释留了逐页实测：Traverse1 单页耗时从 515μs 涨到约 1.8ms（1760μs），total 92.646ms；Traverse2 单页基本恒定（多为 0μs，个别 565-630μs），total 26.5669ms，两者相差约 3.5 倍。〔C:dachang/database/limit_test.go:31-58〕慢的机制（摘要解释，源码只呈现现象）：offset 越大，MySQL 要先扫过并丢弃前 offset 行才能取本页，代价 O(offset)；游标法按主键直接定位，代价恒定。前提是排序键单调且可比较，自增主键 id 天然满足；换别的列就得显式 ORDER BY 并保证单调，否则游标会跳行或重复。
+测试注释记录了作者机器上的结果：offset 总计 92.646ms，游标总计 26.5669ms。〔C:dachang/database/limit_test.go:31-58〕深 offset 通常需要扫描并跳过前面的行；游标查询有合适索引时可从边界继续扫描，但代价仍取决于索引、过滤条件和执行计划，并非恒定。课件没有显式排序，SQL 不保证返回顺序；实际使用应写 `ORDER BY id`，并为非唯一排序键增加唯一的并列排序键，才能正确推进游标。
 
 ### SQL 注入：拼接与占位符的一行之差
 
@@ -525,7 +525,7 @@ err: 非法领域状态: 0
 err: 非法领域状态: 9
 ```
 
-两个跨库操作各有一个坑。"仅自己可见"（withdraw）要在一个事务里更新两张表的状态，`RowsAffected != 1` 就返回疑似作者不对的错误；线上库若用 MongoDB 版，发布接口没有跨库事务，靠 `UpdateOne` 加 `$setOnInsert` 控制 ctime 只在插入时写、`$set` 控制更新时不覆盖。〔W06-2 p9〕〔W06-2 p44〕制作库从 MySQL 换 MongoDB 时还有主键问题：没有自增 ID，课程选雪花算法（41 位时间戳+10 位机器+12 位序列）生成 int64，改动最小。〔W06-2 p32-33〕同一事务里还有一个分工细节：同步往线上库写的 `PublishedArticle` 结构体**不带 Content 字段**，正文在同一个事务里被单独 `PutObject` 到 OSS（key 是文章 ID），前端读正文直接访问 OSS，不再回源数据库。〔W06-2 p55〕这是"线上库只服务列表与元数据"的极端化：正文的读放大（大字段、大流量）从数据库挪到了对象存储。
+两个跨存储操作各有一个坑。withdraw 可在同一数据库事务中更新两张表，并检查影响行数；MongoDB 版发布接口则需考虑跨存储的部分失败。〔W06-2 p9〕〔W06-2 p44〕制作库换 MongoDB 时，课程选雪花算法生成 int64 主键。〔W06-2 p32-33〕课程的 OSS 方案把正文放到对象存储、线上库保留元数据，读者直接访问正文。〔W06-2 p55〕数据库事务不能原子提交 OSS 的 `PutObject`，失败或超时需要明确补偿与一致性方案，不能把外部调用当作事务的一部分。
 
 ## 六、树形评论：四种建模，选一种
 
@@ -573,7 +573,7 @@ err: 非法领域状态: 9
 6. GORM 快但接口收 `interface{}`，同参不同型（`Updates` 的 struct/map 之分）；sqlc 以 SQL 为真相源生成类型安全代码。
 7. 树形评论用邻接表加 RootID 冗余：查子节点 `WHERE pid=?`，"更多回复"退化为 root_id 上的 keyset 分页；四种建模里它是查询、写入、删除的综合最优。
 8. 表结构是服务器状态，用带序号的迁移文件管理；严格公司走 SQL 评审，小团队用 `AutoMigrate` 起步。
-9. 全表遍历两式：offset 式按 `offset += len(本页)` 推进、越翻越慢（1 万行 `92.646ms`），id 游标式 `WHERE id>?` 且游标取本页最后一个 id、页耗时不随页码涨（`26.5669ms`）；游标式依赖结果按 id 排序的隐式前提，代码没写显式 `ORDER BY`。
+9. 全表遍历两式：深 offset 需要跳过前面的行；id 游标配合合适索引可以从边界继续。课件测得分别为 `92.646ms` 和 `26.5669ms`；游标写法必须显式按 id 排序，课件未写 `ORDER BY`。
 10. MySQL 唯一键分布式锁：抢锁即向唯一索引列 insert，撞 1062 后走"查旧记录、判过期、删旧重抢"三步非原子；`Create` 失败且 `expiration<=0` 会误报成功；释放即按 `lock_name` 删行。
 11. SQL 注入现场：拼接版被 `or '1'='1` 恒真放行，占位符版把载荷当普通字符串，输入永不进 SQL 语法层。
 12. 批量插入三阶梯：逐条约 63 秒、事务包住约 1.8 秒、事务加每 100 行一条多值 INSERT 约 0.31 秒；教学代码事务内出错只打印就 `return`，无人回滚、连接悬着不还池，是 `WithTx` 纪律的反面教材；GORM 默认给每次写操作包隐式事务。
@@ -639,7 +639,7 @@ func main() {
 
 **答案**
 
-1. 2 条连接先跑，其余 4 个在池前排队，`db.Stats().WaitCount` 记 4；总耗时约等于三批查询之和而不是一批。排队是池的限流行为，不是故障。
+1. 同时持有连接的查询最多 2 个；其余查询若在连接释放前到达就会等待。等待次数和总耗时取决于调度与查询耗时，不保证恰好等待 4 次或正好分成三批。
 2. 返回 `sql.ErrTxDone`，不产生任何效果。所以 `defer tx.Rollback()` 写在 `Commit` 之前是安全且必要的兜底。
 3. GORM 对 `struct` 参数约定"零值等于没赋值"，因为分不清"没赋值"和"赋了零值"；要把字段更新成零值用 `Updates(map)`，`map` 的键显式列出了列名，没有歧义。
 4. 连接被独占，持锁时间随外部接口的延迟和超时放大；外部服务一慢，池被慢慢占光，整个服务不可用。事务里只做数据库操作，外部调用放到事务外。
@@ -662,7 +662,7 @@ func main() {
 - 密码加密的位置四选一都有理由：service（业务概念）、repository（"加密存储"）、dao（数据库自身加密）、domain（User 自己管）；课程选 service，理由是它是业务逻辑但不是 domain 的职责。选定之后连带决定登录时在哪儿调 `CompareHashAndPassword`。〔W02-2 p30〕
 - 敏感信息防两类人：防研发（自己和同事）与防攻击者，密码连日志都不能打。〔W02-2 p29-30〕
 - 算法三级递进：裸 md5 哈希、加盐或多轮哈希、BCrypt/PBKDF2 这类随机盐算法。选择标准就一条：难破解，同一密码密文不同，防彩虹表。〔W02-2 p31〕
-- BCrypt 四个优点：不用自己生成盐、不用另存盐、cost 参数控加密成本、同文本结果不同；不可逆，只能 `CompareHashAndPassword` 比对。两个坑：密码超 72 字节会被静默截断，注册正则要加上限；cost=10 单次加密约 100ms 量级，登录接口要按这个延迟做预算。〔W02-2 p32-33〕
+- BCrypt 自带随机盐，cost 参数控制计算成本，校验使用 `CompareHashAndPassword`。注意 Go 的 `golang.org/x/crypto/bcrypt.GenerateFromPassword` 对超过 72 字节的密码返回错误，不能假定所有实现都静默截断；限制应按字节数与所用实现确定。cost 和机器负载共同决定延迟，应实测预算。〔W02-2 p32-33〕
 - HTTP 无状态，所以登录要靠 Cookie 加 Session 记状态：Cookie 是浏览器本地的键值对，不安全，只放不关键的数据；Session 数据在服务端，浏览器只带一个 `sess_id`。认证是认 ID 不认人，ID 被偷就被冒充。Cookie 安全参数一句话版：Domain/Path 最小化、Max-Age 只留必要时间、HttpOnly 永远 true、Secure 生产永远 true、SameSite 尽量避免跨站；`sess_id` 放 Cookie 是最优解，禁 Cookie 的浏览器退而求其次放 Header 或查询参数。〔W02-2 p41-47〕
 - gin-contrib/sessions 两件套：`sessions.Sessions("ssid", store)` 中间件负责从 Cookie 解出 Session，`CheckLogin` 中间件里 `sessions.Default(ctx).Get("userId") == nil` 就 401，signup/login 路径豁免。注意 `cookie.NewStore([]byte("secret"))` 是把 Session 数据加密后存在 Cookie 本身的客户端存储，数据大会撞 4K 上限，多实例要换 redis store。〔W02-2 p49-51〕
 - 登录优化别上来就加缓存，压测先行。真实瓶颈里 bcrypt 的 100ms 量级延迟往往是第一位，属于第 11 节登录优化的内容。〔W02-2 p7〕

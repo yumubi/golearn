@@ -64,7 +64,7 @@ hello, ann <nil>
 true user not found
 ```
 
-`Service` 依赖的是 `Store` 接口，`main` 里塞的是 `fakeStore`：一个用 map 假装数据库的"能工作的简化实现"。正因为有了这个接口，测试可以不打真数据库地跑全部业务逻辑。反过来，如果 `NewService` 的参数是 `*sql.DB`，上面每一行测试都得先起一个 MySQL。
+`Service` 依赖 `Store` 接口，`main` 注入了 map 实现：测试无需数据库即可覆盖这个服务的逻辑。若直接依赖 `*sql.DB`，仍可使用测试数据库或其他测试手段，只是替换存储行为不如通过小接口直接。
 
 所以这一节要建立的核心认知是：**Go 的测试工具链是语言自带的（`go test` 一个命令覆盖发现、运行、竞态检测、覆盖率、基准和模糊测试），测试质量的差距不在工具，而在被测代码是否可测。**〔自〕课程对应的做法是：单测先行、不碰任何第三方组件〔W04-4 p5-6〕。可测性怎么来、测试怎么写、三层问题各用什么武器，按这个顺序讲。
 
@@ -99,7 +99,7 @@ go test -cover ./...     # 覆盖率
 
 回到开头的现象：为什么 `Service` 能被轻松塞进假仓库？因为依赖是一个接口，而且是从 `main` 一路传进来的。这条链有名字，叫**依赖注入**：A 要调用 B，A 初始化时就要求外面传一个构建好的 B，而不是自己 `gorm.Open` 一个。〔W04-3 p4〕课程里的初始化链是：DB 和 Redis 到 DAO 和 Cache，到 Repository，到 Service，到 Handler，再到路由，层层组装。〔W04-3 p4〕给已有代码补可测性时，改造顺序是**自底向上**：最底层的缓存和 DAO 不依赖别人，先抽它们的接口，再往上改 Repository、Service。〔W04-3 p28-30〕为什么自底向上？因为抽接口要改的是"使用方"的签名，底层类型的使用方少，先改它们代价最小；等上层改完，正好接住下层已经就位的接口。
 
-但有一个必须先说破的问题：**面向接口的好处是扩展性，为什么它成了可测性的前提？** 面向接口本身不提高性能，也不提高可靠性，它的收益只有"将来可以换实现"。〔W04-3 p27〕可测性是同一枚硬币的另一面：**替身也是一种"另一种实现"**。没有接口，测试里的 fake 没有位置可放；有了接口，fake 就是众多实现里的一个。所以结论是：扩展性是主收益，可测性是它免费附送的。
+课程将接口的收益概括为扩展性。〔W04-3 p27〕替身也是一种实现，因此接口与注入常能降低测试成本；但它们不是可测性的唯一前提，函数参数、真实测试数据库等也能形成测试边界。接口同样有维护成本，应围绕实际需要抽取。
 
 先补一段上一讲 wire 收尾时留下的问题：缺点这么多的 wire，为什么还留着？前提是接受它的三个缺陷：不能按环境切换实现、不能按接口查实现、不能按类型找所有实例，这导致依赖注入的代码始终做不到非常清爽。老师对 wire 的定位是"矮个子里面挑高个"，最大的好处是很清晰，可控性非常强。〔W04-3 p20〕代价写在已有代码上，难以避免的修改有三处：每次增加一个新的 Handler，都要修改 ioc.InitWebServer；每次要启用新的 Gin middleware，都要修改 GinMiddlewares；而后每次增加新的 DAO、Repository 等，都要修改 wire.go 里面的代码。不过一句话：再怎么修改，也比直接手写组装来得快。〔W04-3 p21〕
 
@@ -143,7 +143,7 @@ Go 里面，惯常的组织测试的方式是用 Table Driven，主要分成三�
 把开头那个 `Service` 完整测一遍，单测形态是这样的：
 
 ```go
-// 测试文件 test_greet.go（片段）：`package main` 加上上面的类型定义后即可 `go test`
+// 测试文件 greet_test.go：与开头类型放在同一包，并导入 context、errors、testing。
 func TestGreet(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -193,7 +193,7 @@ PASS
 **fake** 是一个能真正工作的简化实现，开头的 `fakeStore` 就是：map 就是它的"存储引擎"。接口小，fake 就小；再进一步，用函数字段能让每个用例自己决定行为：
 
 ```go
-// 测试文件 test_fake.go（片段）：`package main` 加上 `boom` 与上面的类型定义后即可 `go test`
+// 测试文件 fake_test.go：与开头类型放在同一包，并导入 context、errors、testing。
 type boom struct{}
 
 func (boom) Error() string { return "db down" }
@@ -251,7 +251,7 @@ PASS
 
 Handler 初始化时需要 `UserService` 和 `CodeService`，单测就给它们注入 mock。这样在这一层切断真实依赖，不用一路构造到 DAO，也不用往数据库准备数据；被测对象仍然是实际的 Handler。〔W04-4 p24〕
 
-**mock** 是带期望的替身：它断言某个方法被以什么参数、调用了几次、什么顺序。课程用的是 `uber-go/mock`（官方的 `golang/mock` 已停止维护），用 `mockgen` 从接口生成代码。〔W04-4 p25-27〕使用铁律：先 `EXPECT()`，再写同名方法与参数条件（不想匹配具体值就用 `gomock.Any()`），再 `Return()`；**设计了几个模拟调用，就要全部用上，且次序对得上**，多了、少了、乱了都会失败。〔W04-4 p28〕排错口诀：检查多了没、少了没、漏了没、条件对上了没。
+**mock** 是带期望的替身：它可断言方法参数和调用次数，也可显式约束顺序。课程用 `uber-go/mock` 从接口生成代码。〔W04-4 p25-27〕先 `EXPECT()`，再配置参数匹配和 `Return()`；默认期望次数须满足，但多个期望不会仅因书写顺序而自动要求按序调用，确需顺序时应显式设置顺序约束。〔W04-4 p28〕
 
 什么时候用哪个：接口只有一两个方法，或只关心返回值：手写 fake，零依赖；接口大，或要验证"调用了几次、顺序如何"：mock，代价是测试与实现细节耦合，重构时容易整片红；第三方客户端没有暴露接口（比如 GORM）：生成不了 mock，课程用 `sqlmock` 编排 `ExpectBegin`、`ExpectExec`、`ExpectCommit`，最后 `ExpectationsWereMet()`，GORM 初始化要关掉版本探测、ping 和默认事务，避免多出 sqlmock 没编排的调用〔W04-4 p66-69〕。注意 sqlmock 只验证 SQL 字符串的收发，不验证 SQL 真的有效；另一派做法是 DAO 层直接用真实数据库（容器或内存库），按团队取舍。
 
@@ -389,14 +389,14 @@ func Retry(ctx context.Context, max int, base time.Duration, fn func() error) er
 	return nil
 }
 
-func main() {
+func TestRetryTime(t *testing.T) {
 	start := time.Now()
 	err := Retry(context.Background(), 3, 100*time.Millisecond, func() error {
 		return errors.New("fail")
 	})
 	fmt.Println(err, time.Since(start) >= 300*time.Millisecond)
 
-	synctest.Test(new(testing.T), func(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
 		start := time.Now()
 		err := Retry(context.Background(), 3, 100*time.Millisecond, func() error {
 			return errors.New("fail")
@@ -445,8 +445,8 @@ func RetryWrong(ctx context.Context, max int, base time.Duration, fn func() erro
 	return nil
 }
 
-func main() {
-	synctest.Test(new(testing.T), func(t *testing.T) {
+func TestRetryWrongTime(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
 		start := time.Now()
 		err := RetryWrong(context.Background(), 3, 100*time.Millisecond, func() error {
 			return errors.New("fail")
@@ -460,7 +460,7 @@ func main() {
 <nil> 700ms
 ```
 
-〔实测〕go1.26.4 上 `go run .` 输出如上。正确的 `Retry` 在同一个气泡里是精确的 `300ms`（上一个示例），这个错误版本多等了一次 400ms 退避，账本变成 700ms。写成测试时，断言 `time.Since(start) != 300*time.Millisecond` 就会把这类问题直接拦下：`--- FAIL: TestRetryWrongVirtualTime ... elapsed = 700ms`。durably blocked 的清单要背下来：〔自〕
+〔实测〕原记录中错误版本的虚拟耗时为 700ms，正确版本是 300ms。保存为 `_test.go` 并由 `go test -v` 运行上述测试；实际测试应断言期望耗时为 300ms，错误版本才会失败。durably blocked 的清单如下：〔自〕
 
 | 算 durably blocked | 不算 |
 |---|---|
@@ -469,7 +469,7 @@ func main() {
 | `WaitGroup.Wait`（Add 在 bubble 内） | 系统调用（cgo、fork） |
 | `time.Sleep` / 计时器等待 | |
 
-不算的那一列决定了两件事。第一，等锁不能推进时间：一个 goroutine 卡在 `mu.Lock()` 上，其他 goroutine 全部睡完，假时钟也不动，`synctest.Wait` 永不返回，最后 runtime 报 `fatal error: all goroutines are asleep - deadlock!` 退出，这不是 synctest 能 recover 的 panic，是 fatal。第二，气泡根函数返回时若仍有 goroutine 卡在气泡内的 channel 上，会自动 panic 并指认泄漏位置（`main bubble goroutine has exited but blocked goroutines remain`），相当于零成本内置的 goroutine 泄漏检测；代价是泄漏必须阻塞在 bubble 内通道上才测得到，卡真实 I/O 的照旧测不到。〔自〕
+不算 durably blocked 的操作会影响时间推进：如果某个 goroutine 等待 mutex，不能仅凭该等待就判定气泡全部持久阻塞；其他 goroutine 释放锁后仍可继续，只有构成实际死锁才会卡住。真实 I/O 同样依赖气泡外事件，不应当依赖虚拟时间驱动。气泡结束时还必须等待其中的 goroutine 结束，故可帮助发现某些泄漏，但不能代替对所有外部 I/O 的退出控制。〔自〕
 
 ### 输入空间：fuzz
 
@@ -564,8 +564,8 @@ PASS
 5. 只测 happy path；错误分支用函数字段 fake 注入错误来覆盖。
 6. 忘了 `-count=1`，看到的是缓存结果，新加的日志一行没出。
 7. 集成测试不清理数据，下一次运行互相污染；`after` 里验证加 `Del`。
-8. 用单测去"证明"并发安全：mock 和 fake 都做不到，并发 bug 靠 `-race` 加 code review。
-9. 气泡里等待锁（`mu.Lock()`）或真实 I/O：不算 durably blocked，时间不动，最后 fatal deadlock；把共享状态交给气泡内的 channel 或 timer。
+8. 只测无并发的结果就断言并发安全：应增加并发测试、结合 `-race` 和 code review，但这些也不能证明所有执行路径安全。
+9. 气泡内等待 mutex 或真实 I/O 不算 durably blocked；设计测试时应明确谁能解除阻塞，避免依赖虚拟时钟推进外部事件。
 
 ## 判断题与答案
 
@@ -579,10 +579,10 @@ PASS
 
 **答案**
 
-1. 替身（fake/mock）本身就是接口的"另一种实现"；为换供应商留的接口恰好也是测试注入的位置，一次抽象两份回报，所以它虽不为测试而生，却是测试能成立的前提。
+1. 替身可以是接口的另一种实现，因此接口提供了方便的替换点；但函数注入或真实测试依赖等方式也能实现可测性，接口并非必要条件。
 2. 接口只有一两个方法、只关心返回值：fake，零依赖零生成代码；接口大、要断言调用次数和顺序：mock，代价是和实现细节耦合。
 3. 验证是断言的一部分（业务副作用不只是返回值，如 Redis 的 TTL）；清理是隔离的一部分（数据留着，下一次运行就变成"依赖上一个用例"）。
-4. 不前进。等锁不算 durably blocked，快进条件是全部 goroutine durable，卡锁的这一个让全场时间静止，直到 runtime 判定 deadlock。
+4. 等待 mutex 本身不算 durably blocked，不能仅凭它推进虚拟时间；若持锁者继续运行并释放锁，等待者仍可继续，不一定死锁。
 5. 期望值断言"这个输入得到那个输出"，一个用例一个点；性质断言"任何输入都满足这个规律"，一条性质覆盖整个输入空间，由引擎变异出千万个输入去试。
 
 练习包 `exercises/p21test/` 里可以直接跑：`TestBackoffTable`（退避序列）、`TestRetryVirtualTime`（虚拟时钟）、`TestRetryCtxCancelImmediate`（退避中取消）、`TestDebounceSynctest`（防抖）、`TestGoroutineLeakDetection`（泄漏 panic 指认）、`FuzzParseArgs`（三条性质）；`exercises/p2_5idiom/` 的 `TestTableDriven`、`TestFake`。
@@ -604,7 +604,7 @@ PASS
 - wire 生成 `wire_gen.go` 靠的是代码生成技术：根据你传入的各种构造方法分析其中的依赖，生成一个真正的初始化方法，展开就是普通 Go 代码 `db := InitDB()` → `userDAO := dao.NewUserDAO(db)` → `userRepository := repository.NewUserRepository(userDAO)` → `return userRepository`。wire 本身并不支持单例模式：假如你多次调用 InitDB，那么就会生成多个 gorm.DB，课程注明后面会解决这个问题（常见落法是在构造函数里用 `sync.Once` 固化单例〔自〕）。〔W04-3 p9〕
 - 依赖注入是控制反转（IoC）的一种实现形式，另一种是依赖发现/依赖查找：A 调用 B，A 自己去找一个可用的 B。反例：如果 A 用 B 接口的时候需要自己创建一个，比如 UserHandler 里面自己创建一个 UserService 的实现，那么 UserHandler 就和 UserService 的实现耦合在一起了。控制反转的意思是 UserHandler 不会去初始化 UserService：要么外面传入 UserService 给 UserHandler（依赖注入），要么 UserHandler 自己去找一个 UserService（依赖查找）；无论哪种，A 都不初始化 B，从而避免与 B 的具体实现耦合。"面向接口加依赖注入"的定义：写代码时 A 调用 B，B 必须是一个接口，初始化时注入一个实现了 B 接口的实例，也就是编译时依赖接口、初始化时注入实现。〔W04-3 p10〕〔W04-3 p24〕
 - 用 wire 改造整套 Web 服务时，DAO、Repository、Service 和 Handler 都已经有构造方法了，此外还要补三类新方法：一个用于准备接入的 Gin HandlerFunc，一个初始化对应的 sms.Service，一个集成所有 Handler、Gin HandlerFunc 完成路由注册；而后在 main 函数里面直接启动就可以。预期中的 main 什么事情也不干，就是直接启动：`server := InitWebServer(...)`，注册一个 `/hello` 路由，`server.Run(":8080")`。`InitWebServer(funcs []gin.HandlerFunc, userHdl *web.UserHandler) *gin.Engine` 的内部组装顺序：`server := gin.Default()`，`server.Use(funcs...)` 挂上中间件，`userHdl.RegisterRoutes(server)` 注册路由，返回 server。〔W04-3 p13-14〕〔W04-3 p18〕
-- 构造函数/初始化方法返回接口类型时（如 `InitRedis` 声明返回 `redis.Cmdable`，实际创建 `*redis.Client`），必须显式告诉 wire 实现是谁，wire 不会自己推断：在 ioc 包里加绑定声明 `wire.Bind(new(redis.Cmdable), new(*redis.Client))`，第一个参数指接口，第二个参数指实现。这个 ioc 包用于封装提供依赖的逻辑：`InitRedis` 提供一个 Redis 的客户端，`InitDB` 提供一个 gorm.DB；基础部分之后按层注册构造函数：`dao.NewUserDAO`，`cache.NewUserCache` 与 `cache.NewCodeCache`，`repository.NewUserRepository` 与 `repository.NewCodeRepository`。〔W04-3 p15〕
+- 若 provider 返回 `*redis.Client` 而消费者需要 `redis.Cmdable`，可用 `wire.Bind(new(redis.Cmdable), new(*redis.Client))` 显式绑定；provider 已返回接口时可以直接匹配。〔W04-3 p15〕
 - wire 的三条硬缺陷：无法按环境指定不同实现（课程在 `InitSmsService` 里写死 tencent/memory，注释切换）、无法找出某接口的所有实现、无法找出某类型的所有实例（gin middleware 列表只能手写）；另外每次改构造函数都要重新跑 wire 命令，忘了跑就会编译错或用上旧组装。仍用它是因为清晰可控、比手写快，矮子里拔将军。〔W04-3 p17-19〕〔W04-3 p9〕〔W04-3 p20-21〕
 - 构造函数返回接口还是具体类型：wire 场景最好返回接口（配合 `wire.Bind` 做类型匹配），Go 社区惯例是"接受接口，返回结构体"，两者冲突；返回接口还牺牲了具体类型新增方法的可见性，只在确有多实现需求时用。〔W04-3 p33〕
 - 接口定义在提供方还是消费方：课程把接口写在 service/repository 包内（提供方一侧），Go 社区惯例是消费方定义小接口，两种都有人用。〔W04-3 p29-31〕
