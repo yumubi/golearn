@@ -9,7 +9,7 @@ const target = args.target
 const revision = args.revision
 const requiredIds = Array.isArray(args.items) ? args.items : String(args.items || '').split(',').filter(Boolean)
 const task = args.task || args._ || ''
-if (!/^guide\/handbook\/(?:0[1-9]|1\d|2[0-7])-[a-z-]+\.md$/.test(target || ''))
+if (!/^guide\/handbook\/(?:0[1-9]|1\d|2[0-7])-[a-z0-9-]+\.md$/.test(target || ''))
   throw new Error('target 必须是 guide/handbook/01-27 的一个章节')
 if (!/^[a-f0-9]{64}$/.test(revision || ''))
   throw new Error('revision 必须是该文件当前内容的 SHA-256')
@@ -45,13 +45,16 @@ phase('原文精读')
 const sources = await agent(`精读本批每个条目。先读对应 work/digest/<单元>.md，再读 work/text/<单元>.txt 的实际正文页面；源码类条目沿摘要定位真实源码。不要读目标手册。任务：${JSON.stringify({ requiredIds, task })}`, {
   label: 'source-inventory', agentType: 'handbook-source', schema: ledgerSchema,
 })
+const sourceIds = Array.isArray(sources?.items) ? sources.items.map(i => i.id) : []
 if (!sources || sources.complete !== true || !Array.isArray(sources.unreadIds) || sources.unreadIds.length
-  || !Array.isArray(sources.items) || !exactIds(sources.items.map(i => i.id))
-  || sources.items.some(i => !i.references?.length || !i.facts?.length || !i.question?.trim()))
+  || !Array.isArray(sources.items) || new Set(sourceIds).size !== sourceIds.length
+  || !requiredIds.every(id => sourceIds.includes(id))
+  || sources.items.some(i => !requiredIds.includes(i.id) || !i.references?.length || !i.facts?.length || !i.question?.trim()))
   return { ...base, status: 'blocked', reason: '原文读取或完整条目证据不足', sources }
 
-const questions = sources.items.map(i => ({ id: i.id, question: i.question }))
-const references = sources.items.map(i => ({ id: i.id, references: i.references }))
+const inScope = sources.items.filter(i => requiredIds.includes(i.id))
+const questions = inScope.map(i => ({ id: i.id, question: i.question }))
+const references = inScope.map(i => ({ id: i.id, references: i.references }))
 const attempts = []
 let feedback = []
 for (let round = 1; round <= 3; round++) {

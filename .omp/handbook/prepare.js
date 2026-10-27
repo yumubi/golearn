@@ -10,7 +10,7 @@ function print(value) {
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const [target, items, ...description] = process.argv.slice(2)
-if (!/^guide\/handbook\/(?:0[1-9]|1\d|2[0-7])-[a-z-]+\.md$/.test(target || '') || !items || !description.length)
+if (!/^guide\/handbook\/(?:0[1-9]|1\d|2[0-7])-[a-z0-9-]+\.md$/.test(target || '') || !items || !description.length)
   throw new Error('用法: node .omp/handbook/prepare.js guide/handbook/NN-name.md 单元#K1,单元#K2 业务场景说明')
 const text = fs.readFileSync(path.join(root, target))
 print(JSON.stringify({
