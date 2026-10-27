@@ -111,7 +111,7 @@ httpkv_requests_total{method="PUT",path="PUT /kv/{key}",status="201"} 1
 
 这里用 `grep -v _bucket` 滤掉了桶明细。序列正好是 RED：请求数带 `status` 是 R 和 E，耗时直方图是 D。
 
-`httpkv_in_flight_requests` 是饱和度的代理，顶满说明处理能力到头了。P8 写 httpkv 时没人提 RED，手上这套就是它，只是之前没人点破。
+`httpkv_in_flight_requests` 反映当前正在处理的请求数；要判断是否饱和，还需结合并发上限、排队和延迟，单看这个数不能断定处理能力已到头。P8 写 httpkv 时没人提 RED，手上这套就是它，只是之前没人点破。
 
 资源视角另有 USE（Brendan Gregg）：查 CPU、内存、磁盘时用利用率、饱和度、错误三件套。服务用 RED，资源用 USE，两边互补。RED 只对请求驱动型服务成立，批处理任务要另摆一套。
 
@@ -124,7 +124,7 @@ client_golang 有四种指标类型，本章只用前三种：
 - Histogram：观测值落桶，例如 `httpkv_request_duration_seconds`。
 - Summary：直接算分位数，本章不用。
 
-Summary 和 Histogram 的取舍一句话说清：单机上 Summary 的 p99 算得准，但三个副本的 p99 加不出全局 p99。Histogram 存桶，`histogram_quantile()` 在服务端聚合桶再算分位数，所以生产基本用 Histogram。
+Summary 可在客户端估算分位数，但多个副本的 p99 不能直接合成全局 p99；其精度也取决于配置。Histogram 则可以聚合相同桶边界的计数，再用 `histogram_quantile()` 估算分位数，精度受桶边界影响。需要跨副本聚合时，Histogram 往往更合适。
 
 定义即注册。`promauto` 挂默认 registry，重复注册会 panic，错误不会被悄悄吞掉：
 
@@ -281,7 +281,7 @@ $ go run main.go
 暴露文本大小: 35043 字节
 ```
 
-基数就是一个指标的时间序列总数。每个新 label 值都创建一条新序列，永不回收。1000 个不同的 key 就是 1000 条，换成真实流量，Prometheus 的内存涨、查询变慢、抓取超时。最常见的生产事故形态，就是有人把 user id 或原始 URL 塞进了 label。
+基数就是一个指标的时间序列数量，取决于所有 label 值的组合。新组合会创建新序列；客户端可显式删除子序列，服务端也有数据保留期限，但不能指望这些机制抵消无界 label 的成本。1000 个不同的 key 就可能产生 1000 条序列，真实流量下会增加内存、查询和抓取成本。最常见的生产事故形态，就是有人把 user id 或原始 URL 塞进了 label。
 
 三条纪律：
 

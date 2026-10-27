@@ -2,8 +2,7 @@
 
 2026-10-10，同机压测（macOS arm64, go1.26.4 / rustc release）。发包器
 `dnsq/`（Go 写的 UDP 压测器，`-conc 16 -dur 5s`，fake upstream 为 Go 热循环
-回包器 `/tmp/fakeup.go` 同源逻辑）。所有档位零丢包：读出来的差异全是
-代理自身的吞吐/延迟差异，不是网络抖动。
+回包器）。记录的档位均为零丢包；这不能排除系统调用、调度和其他因素对结果的影响。
 
 ## 压测数据
 
@@ -12,7 +11,7 @@ qps 越高越好，P99 越低越好。
 | 场景 | Go qps | Go P50 | Go P99 | Rust qps | Rust P50 | Rust P99 |
 |---|---|---|---|---|---|---|
 | A 无缓存 keyspace=1000 | 10 924 | 1.25ms | 4.5ms | 12 439 | 0.92ms | 5.1ms |
-| A2 无缓存 keyspace=100 | ， | ， | ， | 12 953 | 0.96ms | 5.3ms |
+| A2 无缓存 keyspace=100 | 未记录 | 未记录 | 未记录 | 12 953 | 0.96ms | 5.3ms |
 | B 缓存 on keyspace=1000 | 9 336 | 1.28ms | 6.8ms | 12 156 | 0.65ms | 6.9ms |
 | B2 缓存 on keyspace=100（命中路径） | 9 940 | 1.26ms | 5.6ms | 19 422 | 0.63ms | 2.0ms |
 | C 准入 on keyspace=5000 | 10 288 | 1.09ms | 6.9ms | 15 037 | 0.95ms | 2.4ms |
@@ -21,23 +20,11 @@ qps 越高越好，P99 越低越好。
 
 ## 读数
 
-1. **总量级同档**：Go ~10k qps，Rust ~13-19k qps，差 1.3-1.9×。两版都是
-   "每查询一个临时上游 socket + goroutine/task" 的架构，瓶颈主要在
-   per-query socket 生命周期，不在语言运行时。
-2. **命中路径差距最大**（B2：9.9k vs 19.4k，2×）。缓存命中在 Rust 版是
-   `Arc` 读锁 + 内存拷贝；Go 版是 RWMutex 读锁 + `append([]byte(nil),...)`
-   再拷一次（handleQuery 里应答拷贝）。省一次拷贝是 Go 版现成的优化点，
-   但毕业项目不做：留作练习题。
-3. **准入/老化开销在噪声内**：两版的 C/D 档相对 B 档都没显著回撤。
-   TinyLFU 的 4 次 hash + 4 次 Or、老化 ticker 的每秒 10 周期，在
-   万级 qps 下都不是瓶颈：这正是 D5/D6 课文"预算内做正确性"的实测注脚。
-4. **P50 上 Rust 版稳定更快**（0.6-1.0ms vs 1.1-1.3ms）：tokio 的
-   多线程调度器对这种"收包→查表→回包"的极短任务调度更省；Go 的
-   goroutine per packet 也有 GC 停顿的底噪（max 延迟里偶发 30-170ms）。
-5. **公平性声明**：dnsq 是自写压测器，测的是"这来两版在同机互打"的
-   相对差，不是绝对性能认证；fake upstream 也是 Go 写的，对两版同等
-   公平。Rust 版 B 档 P99 出现过 591ms 的离群点（tokio 首次调度预热），
-   五秒窗口内均值受它污染：比 P99 更该看的是 P50。
+1. **本次测量的量级**：Go 约 10k qps，Rust 约 13–19k qps。两版均为每查询使用临时上游 socket 和 goroutine/task；这些读数本身不能确定瓶颈位置。
+2. **命中路径差距最大**（B2：9.9k vs 19.4k，约 2×）。两版使用不同的锁和拷贝路径，但不能仅凭这个对比断定差距的原因。后续 E4 对拷贝做了单独实验，见下文。
+3. **准入和老化档位**：本次 C/D 与 B 的读数没有明显回撤；不同 keyspace 和负载下不能直接外推。
+4. **P50 在本次记录中 Rust 版较低**。调度和 GC 可能影响延迟，但这里的数据不足以分别量化其贡献。
+5. **测量范围**：dnsq 和 fake upstream 均为自写程序，同机短窗口结果适用于这组配置，不是语言性能的普遍结论。Rust B 档曾出现 591ms P99 离群读数，排查原因需要额外证据。
 
 ## 这门课的 take-away（对照 P6 课表）
 
@@ -57,8 +44,8 @@ qps 越高越好，P99 越低越好。
 ## 复现
 
 ```sh
-# fake upstream（Go，任意目录）
-go run /tmp/fakeup.go &                      # 127.0.0.1:15300
+# fake upstream（从仓库根目录）
+go run ./labs/experiments/hitpath-ab/fakeup -port 15300 &
 # Go 版
 DNS_LISTEN=:15353 DNS_UPSTREAM=127.0.0.1:15300 DNS_CACHE=1 \
   DNS_CACHE_MAX=2048 DNS_CACHE_SAMPLE_K=8 DNS_CACHE_ADMIT=tinylfu \
@@ -74,16 +61,8 @@ go run ./dnsq -target 127.0.0.1:15353 -dur 5s -conc 16 -names 5000
 
 P7-P9 三批实验对本 LESSON 的回改：毕业不是终点，实验会修正它：
 
-1. **读数 2 部分证伪**：命中路径 2× 差距的主因**不是**那次拷贝
-   （E4：micro 快 1.6×，端到端占比 <5% 测不出）。真凶待查：
-   goroutine 唤醒链路 vs tokio waker。
-2. **读数 4 机制坐实**：GC 底噪有了直接证据：mark assist 8.1 万次/3s
-   （E5 trace），分配方被拉去帮 GC 是隐形延迟税。
-3. **生产配置建议**（E6 可复现）：`DNS_HITPATH_POOL=1 DNS_WORKER_POOL=8`
-   ：零分配命中 + 8 worker，p50 163µs→~118µs（B2 档 -25%，三轮复现），
-   qps 持平 90k+。N=8 是与 P 数匹配的档位；N=16 反而 p50 变差。
-   （macOS 裸机测得。Go 1.25 起 Linux 容器里 GOMAXPROCS 默认按
-   cgroup CPU 限额取值，容器里复跑时先看默认值再对 N。）
+1. **读数 2 的后续实验**：E4 中省拷贝的微基准有改善，但端到端未测出明显差异；它不能解释本次两版的全部差距。
+2. **GC 证据**：E5 trace 记录了 mark assist；其出现表明分配路径参与了 GC 工作，但单凭次数不能确定它对 P50 的贡献。
+3. **候选配置而非通用生产建议**：E6 在 macOS、特定 B2 负载和三轮实验中，`DNS_HITPATH_POOL=1 DNS_WORKER_POOL=8` 的 P50 低于逐包 goroutine；吞吐有波动。上线前应以实际流量、资源限制及尾延迟复测，worker 数不能由该实验直接推广。
 
-方法收获：**先估占比再跑端到端**（<10% 直接预测测不出）；
-**micro 显著 ≠ 端到端显著**；**调度形态影响尾延迟，不影响吞吐上限**。
+方法收获：先估计优化路径在端到端中的占比；微基准显著不等于端到端显著。调度形态也可能影响吞吐和尾延迟，需要分别测量。

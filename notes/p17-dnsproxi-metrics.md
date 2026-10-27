@@ -85,7 +85,7 @@ fake upstream on :15330, ttl=60
 打开缓存和 sinkhole（匹配前缀的域名直接回 NXDOMAIN），指标口用默认的 `:9153`：
 
 ```sh
-$ DNS_LISTEN=:15353 DNS_UPSTREAM=127.0.0.1:15330 DNS_CACHE=1 DNS_SINKHOLE=blocked. /tmp/dnsproxi &
+$ DNS_LISTEN=:15353 DNS_UPSTREAM=127.0.0.1:15330 DNS_CACHE=1 DNS_CACHE_MAX=100 DNS_SINKHOLE=blocked. /tmp/dnsproxi &
 ```
 
 还没发任何查询，先看一眼 `/metrics`：
@@ -172,13 +172,13 @@ P13 的 RED 三问照搬，对象换掉：
 
 五个指标各回答一件事：
 
-- `queries_total{qtype,outcome}` 是 Counter，回答量、错误率（`upstream_error` 除以总数）和命中率（`hit/(hit+miss)`）。
+- `queries_total{qtype,outcome}` 是 Counter，但 outcome 并非互斥：一次缓存 miss 并成功转发会同时增加 `miss` 和 `forwarded`。不能直接把所有 outcome 求和当请求总数，也不能直接用这个和作错误率分母。命中率可用缓存路径的 `hit/(hit+miss)`；总请求率需要定义互斥计数口径或另设计数器。
 - `upstream_duration_seconds` 是 Histogram，回答上游慢不慢。
 - `in_flight_queries` 是 Gauge，回答在飞积压。worker pool 模式顶到 N 就是背压点。
 - `cache_entries` 是 Gauge，回答逼近 `CacheMax` 没。
 - `/metrics` 独立端口 `:9153`，抓取口不掺业务端口。
 
-`forwarded` 和 `miss` 要分清。`miss` 是缓存没有，`forwarded` 是真发上游了。缓存关着时只有 `forwarded`。两个数相减，就是"解析失败没发出去的"，告警规则用得上。
+`forwarded` 和 `miss` 要分清。`miss` 是缓存没有，`forwarded` 是真发上游了。缓存关闭或查询不可缓存时也可能转发而没有 miss；上游失败等路径也会影响两者的关系。因此两数相减不能普遍解释成某类失败，告警应使用明确的错误计数与分母。
 
 ## 低基数：qtype 与 outcome
 
@@ -290,8 +290,8 @@ flowchart LR
 
 ```sh
 $ python3 upstream.py 15340 2 &
-$ DNS_LISTEN=:15373 DNS_UPSTREAM=127.0.0.1:15340 DNS_CACHE=1 DNS_CACHE_ACTIVE_TTL=0 /tmp/dnsproxi &
-$ for n in x1 x2 x3; do q $n.test >/dev/null; done
+$ DNS_LISTEN=:15373 DNS_UPSTREAM=127.0.0.1:15340 DNS_CACHE=1 DNS_CACHE_MAX=100 DNS_CACHE_ACTIVE_TTL=0 /tmp/dnsproxi &
+$ for n in x1 x2 x3; do dig +noedns +noad +time=2 +tries=1 @127.0.0.1 -p 15373 "$n.test" A +noall +answer >/dev/null; done
 刚查完:   dnsproxi_cache_entries 3
 过了 4 秒: dnsproxi_cache_entries 3
 ```
@@ -349,7 +349,7 @@ dnsproxi_upstream_errors_total{reason="timeout"} 1
 
 客户端 1 秒放弃，指标要等代理自己的 2 秒 deadline 到了才出现。`reason="timeout"` 是 1，`upstream_duration_seconds_count` 仍是 0。
 
-第二个场景藏着一个考点：错误样本不进时延直方图。混进去会把 P99 拉到 2 秒（deadline 上限），下游告警全部误报。"时延"只量成功路径。
+第二个场景藏着一个考点：本实现的错误样本不进时延直方图，所以这里看到的是成功转发的延迟分布，不代表所有请求的用户体验。超时等失败必须结合错误计数和比例一起看；如果另建覆盖所有请求的延迟指标，则应明确其统计口径和告警阈值。
 
 这条纪律由测试守着。`TestMetricsDeadUpstream` 就是死上游场景的自动化版本，`TestMetricsSinkhole` 和 `TestMetricsForwardCounts` 守着另外两条对账关系：
 
@@ -412,9 +412,9 @@ dnsproxi_queries_total{outcome="miss",qtype="A"} 3
 
 **观察**：用 `dnsq` 压两轮，一轮 `-names 50`，一轮加 `-spread`（均匀随机大键空间，对缓存不友好）。比较两轮之后的命中率、`cache_entries` 和 `cache evict` 日志数量。观察点：
 
-- `hit + miss` 要等于 A 查询总量。
+- 仅在所有 A 查询都走缓存判定路径且没有 sinkhole 等旁路时，`hit + miss` 才等于这批查询量。
 - `cache_entries` 不超过 `CacheMax`。
-- 上游往返的 P99（`histogram_quantile`）与 `dnsq` 的 P99 同量级，但口径不同。
+- 分别观察上游往返的 P99（`histogram_quantile`）与 `dnsq` 的 P99；前者只含成功转发，后者是客户端整体往返，不能要求同量级。
 - `in_flight` 峰值在 worker pool 模式下不超过 N。
 
 **改造**：`upstream_errors_total{reason}` 已落地。试着再加一个 reason，比如上游返回 SERVFAIL 的情况，写出分类规则，并在 `metrics_test.go` 风格的测试里守住"错误样本不进直方图"。

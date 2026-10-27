@@ -41,14 +41,11 @@
 
 - 本实验的形态下两者区间完全交叠（Green Tea 的 min 还略快 0.1-1.8%），
   单轮差被轮间噪声（±5%）吞掉。
-- 机制上不意外：alloc 型微基准的税主要是分配与扫描本身，Green Tea 的
-  收益点在 mark 阶段的局部性（cache 友好的 span 遍历），10000x 短循环
-  里活对象集太小，mark 账差异摊不出来。老 GC 关掉也不会更差，说明
-  baseline 切换在这类负载上无痛。
+- 一种待验证的解释是：此负载的活对象和 mark 工作不足以体现扫描局部性的差异。现有记录未隔离这些因素，因此不能据此断定切换对所有类似负载均无影响。
 - 复现:
 
 ```sh
-cd /Users/akka/Dev/learning/go
+cd /path/to/golearn  # 替换为仓库根目录
 go test -run xxx -bench . -benchtime=10000x -benchmem -count=5 \
   ./labs/experiments/gc-pressure/
 GOEXPERIMENT=nogreenteagc go test -run xxx -bench . -benchtime=10000x \

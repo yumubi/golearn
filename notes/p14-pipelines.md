@@ -59,7 +59,7 @@ $ dd if=/dev/zero bs=1024 count=200 2>/tmp/dd.err | (sleep 1; wc -c); tail -1 /t
 
 写端被拖慢到 1.003 秒，刚好等读端睡醒。写端的速度被读端的消费速度拉平，这就是背压。
 
-channel 是同一个设计：无缓冲 channel 的容量是 0，`make(chan int, n)` 的缓冲区相当于管道缓冲区，下游关闭或取消相当于读端关闭。这章的 pipeline 就是把 shell 管道搬进进程内。
+channel 的容量也会影响背压：无缓冲 channel 的容量是 0，`make(chan int, n)` 则允许最多 n 个值等待接收。但类比有边界：关闭 Go channel 是发送方通知不再发送，向已关闭 channel 发送会 panic；下游停止时通常要通过 ctx 等单独信号通知上游，而不是由下游关闭数据 channel。
 
 ## errgroup
 
@@ -243,7 +243,7 @@ $ go run main.go ctx
 cancel 之后: 1
 ```
 
-`cancel()` 之后 goroutine 数回到基线。`select ctx.Done()` 是唯一的药。
+`cancel()` 之后 goroutine 数回到基线。这里用 `select` 同时等待发送和取消；其他设计也可以用专门的 done channel，或保证下游始终消费完。
 
 ## 流水线
 
@@ -254,13 +254,21 @@ func square(ctx context.Context, in <-chan int) <-chan int {
 	out := make(chan int)
 	go func() {
 		defer close(out)
-		for n := range in {
-			select {
-			case out <- n * n:
-			case <-ctx.Done():
-				return
-			}
-		}
+        for {
+            select {
+            case <-ctx.Done():
+                return
+            case n, ok := <-in:
+                if !ok {
+                    return
+                }
+                select {
+                case out <- n * n:
+                case <-ctx.Done():
+                    return
+                }
+            }
+        }
 	}()
 	return out
 }
@@ -274,6 +282,8 @@ for v := range square(ctx, gen(ctx, 1, 2, 3, 4, 5)) {
 $ go run main.go
 1 4 9 16 25
 ```
+
+接收 `in` 和发送 `out` 都监听取消：如果上游迟迟不发送也不关闭，单纯的 `for n := range in` 即使收到取消也会一直等待。调用方仍需取消共享的 ctx，让所有站点退出。
 
 练习包里的 `Pipeline` 用 errgroup 把这些串起来。再看一下背压在多站里怎么表现，下游每个结果处理 100 毫秒：
 

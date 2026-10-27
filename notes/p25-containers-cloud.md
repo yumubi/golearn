@@ -15,8 +15,8 @@ alpine。镜像层、cgroup、探针三件事完全语言无关，编排器眼�
 ## 体系背景：镜像是一叠只读层的挂载结果
 
 容器文件系统 = 镜像层（只读，一层叠一层）+ 可写层（容器独占）。
-Dockerfile 每条指令生成一层；`COPY`/`RUN` 层有内容，`EXPOSE`/
-`ENV` 层是纯元数据（0B）。docker history 看真实分层：
+Dockerfile 的文件系统变更形成层；`EXPOSE`、`ENV` 等指令修改
+镜像配置，不产生新的文件系统内容层。docker history 可观察记录：
 
 ```text
 $ docker history golearn-httpkv:ms
@@ -99,8 +99,10 @@ $ docker exec hk-lim cat /sys/fs/cgroup/cpu.max
 | 400000/100000（4 核） | 10 | 4 |
 | 无限额 | 10 | 10 |
 
-规律：**GOMAXPROCS = ceil(CPU 限额)，上限是 NumCPU**。内存限额
-（`--memory 64m` → `memory.max=67108864`）不影响 GOMAXPROCS。
+对于这组探针，在未显式设置 GOMAXPROCS 且启用了容器感知时，runtime
+综合逻辑 CPU、CPU affinity 和向上取整的配额，通常不低于 2；若逻辑
+CPU 或 affinity 少于 2 则可更低。Go 语言版本与 GODEBUG 兼容设置也
+会影响默认值。内存限额不影响 GOMAXPROCS。
 
 探针程序就一行（`labs/compose/` 素材的 `probe.go`，交叉编译后
 `docker cp` 进容器跑）：
@@ -131,8 +133,9 @@ GOMAXPROCS 仍是 10：
 $ docker run -d --rm --name hk-mem --memory 64m golearn-httpkv:ms
 $ docker exec hk-mem cat /sys/fs/cgroup/memory.max
 67108864                        ← 64MiB
+$ docker cp probe hk-mem:/tmp/probe
 $ docker exec hk-mem /tmp/probe
-GOMAXPROCS= 10 NumCPU= 10       ← 内存不影响调度器
+GOMAXPROCS= 10 NumCPU= 10       ← 这次内存限额未影响调度器
 ```
 
 为什么这联动重要：Go 的调度器按 GOMAXPROCS 开 P（逻辑处理器），
@@ -162,8 +165,8 @@ $ docker ps --format "{{.Names}} {{.Status}}"
 p26lab-httpkv-1  Up About a minute (healthy)   # ← healthcheck 生效
 ```
 
-httpkv 用 `nc -z` 探端口（进程装死但端口不收包的场景能抓住）。
-更彻底的探法是打一条真实请求：
+httpkv 用 `nc -z` 探 TCP 端口：它能发现连接失败，但连接成功并不
+证明应用已 accept 或 handler 能响应。更彻底的探法是打一条真实请求：
 
 ```go
 mux.HandleFunc("GET /kv/__probe", func(w http.ResponseWriter, r *http.Request) {
@@ -171,20 +174,13 @@ mux.HandleFunc("GET /kv/__probe", func(w http.ResponseWriter, r *http.Request) {
 })
 ```
 
-探针设计三忌：别查下游（下游挂了你也被判死，雪崩）；别太频
-（探针流量也是流量）；`start_period` 给启动留宽限（JVM 类慢启动
-的 Go 服务一般不用）。
+探针要与用途匹配：存活探针通常避免把下游故障直接变成本进程重启；
+就绪探针是否检查必要依赖则取决于服务能否提供有效响应。探针太频繁
+会增加负载，启动较慢时可用 `start_period` 留出宽限。上面的端点是
+改造题蓝图，当前 P26 编排存档仍使用 `nc -z`。
 
-探针端点代码（P22 的 mux 惯用法；当前 P26 编排存档用 nc -z，这段是改造题把探针换成真实请求的蓝图）：
-
-```go
-mux.HandleFunc("GET /kv/__probe", func(w http.ResponseWriter, r *http.Request) {
-    writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-})
-```
-
-与 `nc -z` 的取舍：`nc -z` 只证"端口有 listener 在 accept"，
-不证业务能响应（死锁的 handler 照样探活）；打真实请求才覆盖
+与 `nc -z` 的取舍：`nc -z` 只证 TCP 连接可以建立，
+不证业务能响应（死锁的 handler 照样可能探活）；打真实请求才覆盖
 "handler 链路通"。代价是探针流量进业务日志，`__probe` 前缀
 方便日志里过滤。
 
@@ -196,7 +192,7 @@ P20 的"日志进 stderr/fd 2"和 P22 的"pprof 单独端口"在这里兑现：
 $ docker logs p26lab-httpkv-1          # docker 收容器的 fd 1/2
 {"level":"INFO","msg":"httpkv on :8090 (pprof on :6060/debug/pprof)"}
 $ docker exec p26lab-httpkv-1 sh       # 进容器现场
-$ curl localhost:6060/debug/pprof/heap  # 宿主转发 -p 18090:8090 后也可以
+$ wget -qO- localhost:6060/debug/pprof/heap  # 在容器内访问；对宿主开放需另映射 6060
 ```
 
 指标端点同理：`-p 19153:9153` 转发 dnsproxi 的 /metrics，
@@ -211,10 +207,10 @@ JSON 文件。你的 slog JSON 直接被全文索引，**不打多行栈**（P15
    缓存键（指令+输入）是构建速度的全部来源。
 2. 多阶段构建：`COPY --from=build` 唯一桥接，351MB→26.6MB；
    依赖层前置保缓存，构建上下文最小化。
-3. `--cpus` 写 `cpu.max`；Go 1.25+ 自动按 ceil(限额) 设
-   GOMAXPROCS，限 CPU 不对齐 = 调度毛刺。
-4. healthcheck 区分 alive 与 ready，探自己不探下游；编排器的
-   `depends_on: condition: service_healthy` 靠它。
+3. `--cpus` 写 `cpu.max`；适用配置下 Go 1.25+ 参考 CPU 配额设置
+   默认 GOMAXPROCS，具体取值还受 affinity 和兼容设置影响。
+4. healthcheck 的含义取决于探针内容；Compose 的
+   `depends_on: condition: service_healthy` 可用它控制启动顺序。
 5. 容器内日志 = fd 1/2 被收集；slog 单行 JSON 是日志管线的硬约束；
    pprof/metrics 用独立端口转发。
 
@@ -255,11 +251,11 @@ docker run -d --cpus 1.5 --rm golearn-httpkv:ms   # 对照 cpu.max
 | flag | cgroup 文件 | Go 感知 |
 |---|---|---|
 | `--cpus 1.5` | cpu.max | GOMAXPROCS=2（1.25+ 自动） |
-| `--memory 64m` | memory.max | GC 看不到（要 GOMEMLIMIT 手动） |
+| `--memory 64m` | memory.max | 不自动设置 GOMEMLIMIT；需结合其他内存占用配置 |
 | `--pids-limit` | pids.max | fork 炸弹防护 |
 
-内存限额的 Go 侧联动：`GOMEMLIMIT=48MiB`（限额的 75%惯例）让 GC
-在撞墙前加速，OOMKilled（`$?`=137 的容器版）是撞墙后内核杀。
+内存限额的 Go 侧联动：例如设置 `GOMEMLIMIT=48MiB` 给 64MiB 容器
+留余量，但具体比例取决于非 Go 内存占用；软限制不能保证避免 OOM。
 
 ### Rust 对照总表
 

@@ -3,11 +3,9 @@
 
 **在线阅读：https://yumubi.github.io/golearn/** （GitHub Pages，随 main 自动构建）
 
-**新读者先看 [`guide/handbook/`](guide/handbook/README.md)：Go 后端速通手册，26 节，约 18.5 小时建立体系，之后靠项目补细节。** 下面的章节是细节库。
+**新读者先看 [`guide/handbook/`](guide/handbook/README.md)：Go 后端手册；阅读路线和时间估计见 [学习路线](guide/handbook/26-route.md)。** 下面的章节是细节库。
 
-> 面向「已经写过 Rust/Java/Kotlin 的后端」的 Go 速成课。
-> 配方仿 `rs/rust-for-frontend`（类比表 + 可运行示例 + 练习驱动 + capstone），
-> 交付形态是本地仓库：**每章 = 一份教程 notes + 一个练习包，`go test` 全绿 = 学会**。
+> 面向有其他语言经验、希望系统学习 Go 的开发者。教程结合讲解、可运行示例、练习和项目；测试通过说明所运行的检查通过，不能单独证明已经掌握。
 
 ## 读者路径（两层阅读，先手册后细节）
 
@@ -15,8 +13,8 @@
 
 | 层 | 位置 | 是什么 | 怎么读 |
 |---|---|---|---|
-| 第一层：速通手册 | [`guide/handbook/`](guide/handbook/README.md)，26 节 | 讲课体，18.5 小时建立体系。每节用具体现象开场，示例可直接跑 | 从 [26 七天路线](guide/handbook/26-route.md) 开始；看到 go 代码块先抄下来跑、猜输出，再对答案 |
-| 第二层：细节库 | notes/*.md，27 章（P 编号） | 每个主题更长的讲解、完整练习和复盘记录 | 手册某节卡壳、或工程上真遇到那个问题时，按节末「想深入去哪查」的指引进来查 |
+| 第一层：手册 | [`guide/handbook/`](guide/handbook/README.md) | 从语言机制到后端工程与项目 | 从 [26 学习路线](guide/handbook/26-route.md) 开始；运行标明可独立运行的例子，片段则按上下文补全 |
+| 第二层：细节库 | `notes/*.md` | 各主题的深入讲解、练习和复盘记录 | 按手册的深入指引或下方课程表查阅 |
 
 有 Rust/Java 底子、只想快速能干活的，走下面三条弧替代手册（2-3 天）：
 

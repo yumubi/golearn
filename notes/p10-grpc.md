@@ -86,8 +86,7 @@ PATH="$PATH:$(go env GOPATH)/bin" protoc \
 
 **心智模型**：生成代码 = 你"本可以手写"的那堆样板：message 的 getter、
 接口断言、编解码。不要读它的实现（两份文件近 800 行），读 proto 就够了。
-`option go_package = "...;kvpb"` 里的 `;kvpb` 决定包名，改它就是改
-import 路径。
+`option go_package = "...;kvpb"` 中分号前是 Go 导入路径，后半是包名；改包名不等于改导入路径。
 
 tonic 把生成嵌进 `build.rs`（cargo build 时自动），Go 生成是显式命令：
 CI 里要记得跑（或用 buf generate 统一管理）。忘跑生成命令是 Go 这边
@@ -117,11 +116,7 @@ func (s *KVServer) Put(ctx context.Context, req *kvpb.PutRequest) (*kvpb.PutRepl
 1. **错误 = `error`，状态码用 `status.Errorf` 包**：
    `status.Errorf(codes.InvalidArgument, "...")` ≈ tonic 的
    `Err(Status::invalid_argument("..."))`。客户端用 `status.Code(err)` 取回码。
-2. **`UnimplementedKVServer` 内嵌**是官方给的向前兼容垫片：proto 加了
-   新方法、老二进制没实现时，调用回落到它返回 UNIMPLEMENTED 而不是
-   panic。代价：漏实现方法从编译错误降级成运行时错误。教程代码里保留
-   它（跟着官方走），但你要知道这个 tradeoff：删掉它，结构体不满足
-   生成接口，立刻编译失败。
+2. **`UnimplementedKVServer` 内嵌**提供新增方法的默认 UNIMPLEMENTED 实现，避免服务实现漏掉新增方法时立即失去兼容性。代价是漏实现可能直到运行时才发现。当前生成器默认要求嵌入，直接删除通常因缺少生成接口的私有方法而不能编译；具体以生成配置和代码为准。
 3. **ctx 贯穿**：客户端断开时 ctx.Done() 触发，长操作里要检查
    （P3 的知识直接复用）。
 4. **注册**：`kvpb.RegisterKVServer(srv, server.New())` ≈ tonic 的
@@ -160,9 +155,7 @@ func (s *KVServer) Watch(req *kvpb.WatchRequest, stream kvpb.KV_WatchServer) err
 }
 ```
 
-关键纪律：**每次 `Send` 都检查 error**。客户端掉线时 Send 报
-`codes.Canceled`，不 return 这个 goroutine 就泄漏了（P3 的 goroutine
-泄漏检验法在这里同样适用）。
+关键纪律：**每次 `Send` 都检查 error**。客户端取消或连接失败时发送可能返回错误；状态码取决于失败原因。收到错误后退出，并配合 `stream.Context().Done()` 和订阅清理避免遗留工作。
 
 **客户端流**（BulkSet）：攒一批。
 
@@ -264,8 +257,7 @@ client := kvpb.NewKVClient(conn)             // 真客户端走内存管道
    `codes.InvalidArgument` 这类错误码，只有在真连接上才可靠，mock stub
    给不了。
 2. **不占端口**：`bufconn.Listen` 是内存管道，CI 并行跑多少份都不冲突。
-3. **没有真实网络的不确定性**：无握手、无超时抖动，`-race` 下照样快
-   而稳。
+3. **不依赖真实网络**：避免端口和网络环境干扰，但仍需处理调度、取消和超时；它不能替代真实网络与 TLS 测试。
 
 `passthrough:///bufnet` 是惯用咒语：告诉 grpc 别真的解析这个地址，
 走我们给的 dialer。对照 tonic 测试的 in-memory channel：同一个思路。

@@ -16,7 +16,7 @@ Go 的答案是 goroutine 加 channel：初始栈 2 KB、用户态调度、`go` 
 
 G-M 模型（Go 1.0）只有两个角色：G 是 goroutine，M 是 OS 线程。全局只有一个运行队列，配一把全局锁 Sched.Lock。Dmitry Vyukov 在《Scalable Go Scheduler Design》里数了四大问题：所有 G 操作都要抢全局锁；G 在 M 间传递放大调度延迟；每个 M 都带内存缓存，占用高且局部性差；syscall 频繁阻塞解除阻塞线程。〔TB32 p3〕
 
-Go 1.1 加了间接层 P：G 必须先进 P 的本地运行队列才能运行，P 与 M 绑定后 runq 里的 G 才真正执行；work stealing 同时引入，沿用至今。全局锁的争用被拆成每 P 一个无锁本地队列。〔TB32 p4〕
+Go 1.1 加了间接层 P：M 持有 P 才能执行普通 Go 代码；可运行的 G 可以位于 P 的本地队列或全局队列。调度器从队列取任务，也会从其他 P 窃取工作。〔TB32 p4〕
 
 抢占是这条演进线的关键剧情。协作式时代（Go 1.2 起）靠编译器在函数入口埋点，纯算法循环没有函数调用就抢不动，GOMAXPROCS=1 时整个程序饿死。Go 1.14 引入基于信号的异步抢占（Austin Clements 提案），sysmon 直接向线程发信号。〔TB32 p5-6〕
 
@@ -98,7 +98,7 @@ const forcePreemptNS = 10 * 1000 * 1000 // 10ms
 	}
 ```
 
-preemptM 向目标线程发 `sigPreempt = _SIGURG` 信号（signal_unix.go:74），信号处理器 doSigPreempt 在异步安全点往 G 的执行流里注入 asyncPreempt 调用。你写的 `for {}` 没有任何让出点，照样在 10ms 后被信号打断，这就是"GMP 演进"一节实测里 main 能活下来的原因。
+在所示的 Unix 实现中，preemptM 向目标线程发送 `sigPreempt = _SIGURG`，信号处理器尝试在异步安全点注入 asyncPreempt。10ms 是 sysmon 发起抢占的目标阈值，不是每个 goroutine 必定在 10ms 内被抢占的实时保证；平台和安全点也影响实际时机。
 
 ### 两种阻塞，两种待遇
 
@@ -140,7 +140,7 @@ for range 5 {
 close(groupSignal) // 枪响，5 个同时起跑
 ```
 
-〔实测〕 `go test ./exercises/p31sched/ -run TestBroadcastClose -count=1` PASS。广播靠 close 而不是逐个发信号，因为向多个接收者各发一条要 n 个 channel，close 一声全响。
+〔实测〕 `go test ./exercises/p31sched/ -run TestBroadcastClose -count=1` PASS。close 能一次唤醒所有等待接收者；也可以向同一个 channel 分别发送 n 次，但那不是一次性广播。
 
 ### 替代锁：后台 goroutine 独占状态
 
@@ -152,8 +152,8 @@ type cter struct {
 	i int
 }
 
-// NewCounter：go 出一个后台 goroutine，for range c.c { c.i++; c.c <- c.i }
-// Increase 调用方发一条消息、收一个新值，状态永远只被那个 goroutine 摸
+// NewCounter 的后台 goroutine 持续自增，再通过 c.c 发送新值。
+// Increase 调用方只接收；状态只由后台 goroutine 修改。
 func (c *cter) Increase() int { return <-c.c }
 ```
 
@@ -196,7 +196,7 @@ select 语法 P3 已讲（三规则：随机、只收发、nil 永久阻塞）�
 
 select 加 default 就是 trySend/tryRecv，判定与收发合并成一个"事务"，空/满走 default 不阻塞：`select { case c <- i: return true; default: return false }`。标准库同款：`time/sleep.go` 的 sendTime 就是无阻塞发送。〔TB33 p26〕 注意代价：这个操作改变了 channel 状态（收走或写入一个元素），无副作用的无阻塞侦测没有通用方法。
 
-len(ch) 只在两个特定场景可用："多发送单接收"时接收方 `len>0` 判有，"多接收单发送"时发送方 `len<cap` 判可发。多对多时 len 判完到操作之间状态随时会变，是竞态。〔TB33 p18-22〕
+`len(ch)` 只是一瞬间的快照，不会为接下来的收发预留位置。即便只有单个发送者或接收者，也要考虑关闭、其他操作以及观察与执行之间的变化；需要非阻塞收发时优先使用 select/default。
 
 ### 超时与心跳
 
@@ -210,15 +210,13 @@ len(ch) 只在两个特定场景可用："多发送单接收"时接收方 `len>0
 ```go
 select {
 case v, ok := <-ch1:
-	if !ok { ch1 = nil } // 已 close：置 nil，这个分支永久阻塞
-	out = append(out, v)
+	if !ok { ch1 = nil } else { out = append(out, v) }
 case v, ok := <-ch2:
-	if !ok { ch2 = nil }
-	out = append(out, v)
+	if !ok { ch2 = nil } else { out = append(out, v) }
 }
 ```
 
-〔实测〕 `go test ./exercises/p31sched/ -run TestNilChannelSelect -count=1` PASS（5、7 各收一次后收敛）；退化版（不置 nil）跑 TestDegenerateZeroStorm，1000 次循环里 990+ 次命中已关闭分支拿到 0。〔TB33 p22-25〕 P3 §select 讲过"置 nil 禁用分支"用于读完合并，这里是同一技巧的第二用途：防已 close 源的零值风暴。tokio 的 select! 没有这招，分支不能动态摘除，得用 `Option<Receiver>` 分层。
+上面是 select 片段：外层应在 `ch1 == nil && ch2 == nil` 时结束，否则两个分支都禁用后会永久阻塞。〔实测〕 `go test ./exercises/p31sched/ -run TestNilChannelSelect -count=1` PASS；退化版反复读取关闭的通道，可能产生零值风暴。〔TB33 p22-25〕
 
 ## sync 家族与基准：谁快谁慢
 
@@ -261,7 +259,7 @@ BenchmarkRWMutexReadParallel-10     	149970933	        27.51 ns/op
 BenchmarkRWMutexWriteParallel-10    	51479498	        52.16 ns/op
 ```
 
-四个结论，每个都能从上面的数字直接换算。并发量小时 Mutex 最好：TB34 用 cpu=2 数据得出，本机单核 2.28 对读锁 4.15 同向。RWMutex 读锁适合读多写少，并行读 27.51 比并行 Mutex 67.62 快。RWMutex 写锁在大并发下最差。〔TB34 p8-10〕
+这些数字只反映各自基准的工作量和机器：单线程无争用的 Mutex 在此比读锁便宜，并行读基准中 RWMutex 优于 Mutex。不能据此断言 RWMutex 写锁在所有高并发负载下最差；实际选型应测量读写比例和临界区。
 
 原子读 0.40 ns 是读锁 4.15 ns 的 10 分之 1。"原子读约为读锁 200 倍"在 1.17 时代成立，本机倍数小得多，方向一致。〔TB34 p16-18〕 atomic 的本质是硬件级不可中断指令，x86_64 的 XCHGQ 就是 SwapInt64 的底。它比 OS/运行时同步原语更原始，是 Mutex 与 channel 的实现基础。〔TB34 p14-16〕
 手写 Once 双检查锁的本机复测是 1.150 对 std 0.2800 ns/op。std 热路径用 atomic.Load 免锁，快 3 倍。bench 对照法见 MATERIALS 索引 C:dachang/concurrence#K1。
@@ -273,7 +271,7 @@ sync.Cond 是等待条件成立的 goroutine 容器。调用 Wait 前必须 Lock
 
 ## workerpool 与功能选项
 
-goroutine 不是免费的：2 KB 栈 × 百万 = 2 GB，且连续栈 grow 后不 shrink。M 个任务调度到 N 个 goroutine 上重用，就是池。生产级实现在千行左右，这里的最小版纯 channel+select，价值在看清三个 channel 怎么协作。〔TB35 p2-4〕
+goroutine 不是免费的：初始栈随运行时和平台变化，并可按需增长或收缩。大量任务可交给有限数量的 worker 重用，以限制并发并施加背压。下面的最小版用 channel+select 展示协作。〔TB35 p2-4〕
 
 ### 三部分结构
 
@@ -325,13 +323,13 @@ n++ 结果: 943
 
 ### RWMutex 行为矩阵
 
-源码锚点 rwlock.go 33-67 行〔C:go_basic/concurrence/rwlock.go:33-67〕：读锁可重入（同 goroutine 连续 RLock 不死锁）、写锁不可重入（重入死锁）、有写锁等待时新读锁也阻塞（防写饿死）。
+源码锚点 rwlock.go 33-67 行〔C:go_basic/concurrence/rwlock.go:33-67〕：没有等待写锁时连续 RLock 可能成功；但 RWMutex 不支持递归读锁，因为一旦写锁等待，后续 RLock 会阻塞，持有读锁者再次 RLock 就可能死锁。写锁同样不可重入。
 
 〔实测〕 `go test ./exercises/p31sched/ -run TestRWMutexMatrix -race -count=1` PASS：先 RLock 两次再 RUnlock 两次正常；RLock 持有期间起 goroutine Lock，20ms 后再起 goroutine RLock，新读锁拿不到（select default 探测确认阻塞），原 RUnlock 后两条才依次通过。〔C:go_basic/concurrence/rwlock.go:33-67〕
 
 ### map 并发写是 fatal 不是 panic
 
-数组、slice、struct 并发改只是脏写不崩；map 并发写是另一档：
+数组、slice、struct 的无同步并发访问也可能发生数据竞争，行为不可靠；map 并发写还可能被运行时检测并报告 fatal：
 
 ```text
 fatal error: concurrent map writes
@@ -367,7 +365,7 @@ WithValue 的自定义 key 纪律（StringKey 类型避免碰撞、只用于跨 
 带走这六条：
 
 1. 并发是结构（把程序分成独立执行模块），并行是执行（多核同时跑）；goroutine 加 channel 是 CSP 的 Go 落地，性能敏感区退回 sync。
-2. GMP 三代演进解决全局锁；异步抢占（Go 1.14）让纯循环也在 10ms 内被信号打断，preemptone 把抢占折叠进 stackguard0 的栈检查。
+2. GMP 拆分全局争用；异步抢占（Go 1.14）允许在安全点抢占纯循环，但 10ms 不是实时保证。
 3. channel 阻塞只挂 G；syscall 阻塞 M 并解绑 P，慢系统调用涨线程有 schedtrace 实证。
 4. 四个 channel 惯用法：信号（1 对 1）、广播（close 起跑枪声）、替代锁（后台 goroutine 独占）、计数信号量（容量限流）。
 5. select 三式（default 事务、超时、心跳）加 nil channel 摘坏分支；sync 家族禁止复制，选型照口诀，本机基准 Mutex 2.28 对 chan 21.0 ns/op。
@@ -406,7 +404,7 @@ dnsproxi-go/main.go 是本章三个惯用法的生产形态（行号 go1.26.4 �
 ### 速查与深读
 
 - 调度器参数：GOMAXPROCS=P 数；forcePreemptNS=10ms；runq 256 槽；线程暴涨根源是 syscall 挂 M 解绑 P，空闲 M 不够就 newm。
-- 惯用法口诀：信号用无缓冲、广播用 close、限流用缓冲容量；len(ch) 只在单收或单发场景可靠。
+- 惯用法口诀：信号可用无缓冲、广播用 close、限流用缓冲容量；len(ch) 只是快照，非阻塞收发用 select/default。
 - map 并发写 fatal；recover 拦不住；用 sync.Map 或 RWMutex。
 - 原材料单元：TB31（并发定义与 CSP）、TB32（GMP 演进与抢占）、TB33（channel 惯用法）、TB34（sync 与 atomic 基准）、TB35（workerpool）、C:go_basic/concurrence（行为矩阵实测源码）、C:dachang/concurrence（手写合集，多数进索引）。
 - 旧章交叉：p3 §goroutine 有多便宜（2KB/11 线程实测）、§select（三规则与 time.After 版本史）、§数据竞争（946 与 -race 输出）、§锁与原子操作（选型）、§context（三纪律）、§panic（goroutine panic 杀进程）。

@@ -21,9 +21,9 @@ dnsproxi 要找到 upstream，httpkv 要被探活后 dnsproxi 才起。这三个
 问题（组网、发现、顺序）就是编排器（compose 是它的玩具版，k8s 是
 生产版）的存在理由。
 
-compose 的模型一句话：**同一个 yaml 里声明的服务自动进同一个
-网络，服务名就是 DNS 名**。这个"服务名即 DNS"在 k8s 里原样成立
-（Service 对象），所以 compose 玩熟了，k8s 的心智只差 API。
+compose 默认把同一项目的服务接入默认网络，服务名可通过内置 DNS
+解析；自定义网络时只有共享网络的服务才能互通。Kubernetes 的
+Service 也提供服务发现，但网络、就绪和生命周期模型并不只是换 API。
 
 ## 编排文件：三个服务一张图
 
@@ -67,6 +67,9 @@ services:
 
 ## 起栈：一条命令全家福
 
+在仓库根目录先按 P25 构建 `golearn-httpkv:ms`，并准备 P6 的
+`golearn-dnsproxi` 镜像；这两个 `image:` 项不会由此 compose 文件
+自动构建。然后切到 `labs/compose`，再执行以下命令。
 ```sh
 $ docker compose up -d --build
 [+] Running 4/4
@@ -81,10 +84,9 @@ p26lab-dnsproxi-1   Up 35 seconds
 p26lab-upstream-1   Up 21 seconds
 ```
 
-启动顺序是编排器算出来的：httpkv 和 upstream 并行起 → healthcheck
-探过 httpkv → dnsproxi 启动。**声明式**是关键词：你描述"要什么
-状态"，compose 算"怎么到"（对照命令式脚本：先 ssh 这台、再启动
-那个、sleep 30 等它活，每个环节都是脆弱点）。
+配置只声明 dnsproxi 等待 httpkv 健康；upstream 没有被列为它的
+依赖，因此不能保证 upstream 先于 dnsproxi 启动或已经就绪。
+`service_healthy` 只约束启动时机，不持续保证之后的可用性。
 
 ## 端到端验证：三个面一次看全
 
@@ -110,7 +112,8 @@ $ docker compose exec dnsproxi sh -c 'wget -qO- http://httpkv:8090/kv/hello'
 ```
 
 注意 wget 的是 `httpkv:8090`（内部网络），不是 `localhost:18090`
-（宿主映射）。**"端口映射是给宿主的，服务名是给容器的"**。
+（宿主映射）。服务间通常使用服务名和容器端口；映射端口则供
+宿主或其他可访问该映射的客户端使用。
 
 服务找不到时的第一现场（第一次 up 的真机日志，127.0.0.1 坑）：
 
@@ -171,13 +174,13 @@ $ docker logs p26lab-httpkv-1 2>&1 | tail -1
 | compose | k8s | 差异 |
 |---|---|---|
 | service | Deployment + Service | k8s 多了副本/滚动更新 |
-| depends_on + healthcheck | InitContainer + readinessProbe | 条件依赖显式化 |
+| depends_on + healthcheck | InitContainer / readinessProbe | 各自解决不同问题，不能直接等价 |
 | cpus/mem_limit | resources.limits | 同 cgroup 机制（P25） |
 | ports | Service.ports / Ingress | 集群内不需要映射 |
 | environment | ConfigMap/Secret | 配置与镜像分离 |
 
-学 k8s 的正确路径是先把 compose 的四个面（组网/发现/顺序/限额）
-玩透，再背 API。概念是同一套，只是声明语法更啰嗦。
+先理解 compose 的组网、发现、启动顺序和限额，再学习 Kubernetes
+对应机制及差异；特别注意 readiness 不负责按依赖顺序启动服务。
 
 Rust 对照：actix/axum 服务的 compose 化是同一份 yaml 换镜像名，
 健康探针用 axum 的 health 路由同款写法；停机链路（tokio::signal
@@ -192,7 +195,7 @@ Rust 对照：actix/axum 服务的 compose 化是同一份 yaml 换镜像名，
    编排器敢排拓扑的前提。
 4. 声明式：描述要的状态，编排器算路径；命令式脚本每环节都是
    脆弱点。
-5. compose 到 k8s 是同一概念换语法；四个面玩透了再上集群。
+5. compose 与 k8s 的服务发现和限额可类比，但生命周期和健康语义不同。
 
 ## 练习：跟着做（收官实战）
 
@@ -224,8 +227,8 @@ p26lab-httpkv-1     Up About a minute (healthy)
 
 **改造**（收官题，串起全课程）：
 
-1. 给 compose 加第三个服务：Prometheus（ prom/prometheus 镜像，
-   配置抓 dnsproxi:9153），Grafana 看板里画出 P17 的
+1. 给 compose 加 Prometheus 服务（prom/prometheus 镜像，配置抓
+   dnsproxi:9153），再配置 Grafana 数据源，用看板画 P17 的
    `dnsproxi_queries_total`。
 2. 把 httpkv 的 `mem_limit` 调到 8m，观察 OOMKilled（P25 的
    `$?`=137 容器版）；加 `GOMEMLIMIT=6MiB` 看 GC 先行让步。
@@ -247,7 +250,7 @@ p26lab-httpkv-1     Up About a minute (healthy)
 | 症状 | 第一动作 | 本课对应 |
 |---|---|---|
 | 服务起不来 | `docker compose logs <svc>` | dnsproxi connection refused 实录 |
-| healthy 反复重启 | healthcheck 命令在容器里手动跑 | P25 探针三忌 |
+| unhealthy 或反复重启 | 分别检查 healthcheck 输出与容器退出日志；unhealthy 本身不等于自动重启 | P25 探针 |
 | 服务互相找不到 | `docker compose exec <svc> nslookup <peer>` | 服务名 DNS |
 
 ### Rust 对照总表

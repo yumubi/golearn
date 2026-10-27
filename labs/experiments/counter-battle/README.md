@@ -5,7 +5,7 @@
 ## 复现
 
 ```bash
-cd /Users/akka/Dev/learning/go
+cd /path/to/golearn  # 替换为仓库根目录
 
 # 正确性门禁（先于一切压测）
 go test -run TestCorrectness -count=1 ./labs/experiments/counter-battle/
@@ -13,9 +13,8 @@ go test -run TestCorrectness -count=1 ./labs/experiments/counter-battle/
 # 15 轮战报（min/中位/max/极差）
 go test -run TestBattle -count=1 -v ./labs/experiments/counter-battle/
 
-# 注意：-race 下 hot 模式 channel 方案每迭代发 800 万条,
-# race 检测器通道减速 10-20×, 80s 超时跑不完是**预期行为**,
-# 不是死锁。race 只对正确性测试有意义:
+# -race 会显著增加开销；超时本身不能证明死锁，也不能证明没有死锁。
+# 用正确性测试检查竞争；排查超时时还需查看测试输出或 goroutine 栈。
 go test -race -timeout 300s -run TestCorrectness ./labs/experiments/counter-battle/
 ```
 

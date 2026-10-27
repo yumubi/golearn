@@ -1,6 +1,6 @@
 # 第 15 章 · slog 结构化日志：用户报了一个 404，怎样找到对应请求？
 
-> 这章学完你能干什么：用户报障"GET /kv/ghost 返回 404，几点的我不知道"，服务多实例、日志几十万行。你能在响应头拿到 `X-Request-ID`，用它在 JSON 日志里一行 `jq` 捞出完整请求轨迹，并保证敏感字段不落盘。
+> 这章学完你能干什么：用户报障时，从响应头拿到 `X-Request-ID`，用它在 JSON 日志里查找该请求已记录的事件；通过类型约束减少敏感字段落盘的风险。
 > 前置：P8（net/http）、P13（label 基数纪律）。后续：P16 把 req_id 注入下沉到 handler。
 >
 > 动手方式：开一个空目录，`go mod init demo`，每个例子存成 `main.go`，用 `go run main.go` 运行。片段省略了 `package main` 和 `import`。为了让输出稳定，例子里用 `ReplaceAttr` 去掉了 `time` 字段，真实日志每行都有时间戳。
@@ -136,7 +136,7 @@ func reqID(next http.HandlerFunc) http.Handler {
 }
 ```
 
-用户拿到响应头里的 id，运维拿它去日志里查。JS 读者可以类比 pino-http 给每个请求挂的 `req.id`。
+用户拿到响应头里的 id，运维拿它去日志里查。这里用纳秒时间戳只是演示：并发请求或不同实例可能生成相同值，生产环境应使用适合跨实例关联的唯一 ID 方案。JS 读者可以类比 pino-http 给每个请求挂的 `req.id`。
 
 ## ctx 里的值不会自动出现
 
@@ -193,7 +193,7 @@ $ go run main.go
 {"level":"INFO","msg":"login","user":{"id":7,"email":"a***@example.com"}}
 ```
 
-`Token` 字段从类型层面就不出现，`LogValue()` 在输出时才调用。`TestLogValuerRedact` 断言 "sekrit" 和明文邮箱都不在输出里。
+通过 slog 记录整个 `User` 时，`Token` 不出现在这个 `LogValue` 的结果里。它不保护直接记录 `u.Token`、其他序列化方式或未采用该类型的调用点，因此仍需限制日志字段并检查输出。`TestLogValuerRedact` 断言 "sekrit" 和明文邮箱都不在输出里。
 
 Rust 的 tracing 靠给 field 包一个脱敏类型，思路一致：策略放在类型上，不放在调用点。
 

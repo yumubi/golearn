@@ -26,6 +26,6 @@ golearn 的实验对象是 dnsproxi-go（P6 毕业项目）与 exercises 载体�
 ## 快速开始
 
 ```bash
-cd /Users/akka/Dev/learning/go
+cd /path/to/golearn  # 替换为仓库根目录
 go test -bench . -benchmem ./labs/...
 ```

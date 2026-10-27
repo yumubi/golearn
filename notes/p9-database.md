@@ -62,7 +62,7 @@ Open 返回的 err: <nil>
 Ping 返回的 err: failed to connect to `user=postgres database=p9`: 127.0.0.1:1 (127.0.0.1): dial error: dial tcp 127.0.0.1:1: connect: connection refused
 ```
 
-`Open` 只校验参数，不建连接。`*sql.DB` 是连接池，线程安全，全局一份，等价于 `sqlx::PgPool`、JDBC 的 `DataSource`、`pg.Pool`。连接错误要等到第一次查询或 `Ping` 才知道。
+`Open` 可能校验参数，也可能推迟到建立连接时才发现错误，具体取决于驱动；通常不会等待连接建立。`*sql.DB` 是并发安全的连接池，应用通常为同一数据库配置复用一个实例。用 `PingContext` 可主动检查连接。
 
 池有几个旋钮：
 
@@ -92,7 +92,7 @@ $ go run main.go
 
 2 条连接，6 个查询，分三批跑完，共 0.6 秒。多出来的 4 个排队等连接，`wait=4` 记下了这件事。
 
-这也是 goroutine 在这里不会出问题的原因。`QueryContext` 只是"能被 ctx 取消"，调用本身阻塞当前 goroutine。goroutine 便宜，一个请求一个 goroutine，池帮你限流。练习 `TestPoolConcurrency` 用 4 条连接跑 20 个并发查询。
+`QueryContext` 调用会阻塞当前 goroutine，ctx 提供取消信号。池可以限制数据库连接，但不会自动限制排队 goroutine 的数量；高负载仍需请求限流和超时。练习 `TestPoolConcurrency` 用 4 条连接跑 20 个并发查询。
 
 ## 查询与占位符
 
@@ -114,7 +114,7 @@ Scan 之后: sql: no rows in result set true
 
 查不到数据时，错误要等到 `Scan` 才冒出来，`QueryRowContext` 本身永远不报。写惯 sqlx 的人会想在 QueryRow 后立刻判错，那里判不到。练习 `TestCRUD` 的断言就在 `Scan` 那一行。
 
-占位符还有两个好处：防注入，以及服务端可以复用执行计划。Java 读者把它当 `PreparedStatement` 的 `?` 就行。
+参数化查询可避免把用户输入拼成 SQL；执行计划是否复用取决于驱动、协议和数据库，不应一概而论。Java 读者可把它类比 `PreparedStatement`。
 
 每个 API 都有带 `Context` 后缀的版本，永远用带 ctx 的那个。看看 ctx 超时对 PG 做了什么：
 
@@ -131,7 +131,7 @@ err: timeout: context deadline exceeded
 耗时 < 1s: true
 ```
 
-查询要 5 秒，50 毫秒就被取消了，驱动会通知服务端终止它。Java 的做法是 `Statement.setQueryTimeout`，Node 的 `pg` 有 `query_timeout` 配置，Go 把它统一成 ctx。练习 `TestContextCancel` 用 sqlite 的递归 CTE 造了一个长查询，同样 50 毫秒杀掉。
+这次查询在截止时间后返回。实际是否以及如何终止服务端查询取决于驱动和数据库；应同时按需要设置服务端超时。练习 `TestContextCancel` 用 sqlite 的递归 CTE 造长查询。
 
 ## NULL
 
@@ -246,7 +246,10 @@ serializable
 
 ```go
 pool, err := pgxpool.New(ctx, dsn)
+if err != nil { return err }
+defer pool.Close()
 rows, err := pool.Query(ctx, "SELECT id, name, nick FROM demo_users WHERE id < 3 ORDER BY id")
+if err != nil { return err }
 defer rows.Close()
 for rows.Next() {
 	var nick *string                     // NULL 直接进指针
@@ -309,7 +312,7 @@ $ go run main.go
 连接 2 插入: SQL logic error: no such table: t (1)
 ```
 
-每条连接各有一份独立的空库。正确姿势是 `file:x?mode=memory&cache=shared` 加 `SetMaxOpenConns(1)`，`openTestDB` 就是这么写的。
+每条连接各有独立的 `:memory:` 数据库。可限制池只用一条连接，或使用 `file:x?mode=memory&cache=shared` 让同名连接共享内存库；共享库在最后一条连接关闭后消失。练习的 `openTestDB` 同时使用共享 URI 和单连接上限。
 
 ## 小结
 

@@ -9,7 +9,7 @@
 
 本章最后一半讲 HTTP 服务。先把它下面的一层看清楚，后面的超时配置才不是玄学。
 
-HTTP 不直接发包，它跑在 TCP 上。TCP 是内核维护的一份连接状态：双方先握手三次（SYN、SYN-ACK、ACK）建立连接，才能收发字节流。所以连接是状态，不是管道。
+这里讨论 HTTP/1.1 和 HTTP/2 常用的 TCP 传输；HTTP/3 则使用 QUIC/UDP。TCP 是内核维护的连接状态：双方握手后交换字节流。
 
 写一个最小的服务，监听 8091 端口。用 `curl -v` 看一次请求的原文：
 
@@ -125,7 +125,7 @@ zig true
 
 空切片没有"最大值"。Go 没有 `Option`，惯例是返回 `(T, bool)`，练习 `TestMaxK` 考的就是这个。
 
-约束 `cmp.Ordered` 是内建的，允许 `>`、`<`、`==` 这些运算符。它对应 Rust 的 `T: PartialOrd`，对应 Java 的 `<T extends Comparable<T>>`。TS 的 `<T extends number | string>` 也类似，但 TS 的类型在运行时就擦除了，Go 不会。
+`cmp.Ordered` 是标准库 `cmp` 包中的约束，允许有序类型使用 `>`、`<`、`==`。它的类型集合包含整数、浮点数和字符串及其底层类型相同的定义类型；与 Rust 的 `PartialOrd` 或 Java 的 `Comparable` 不同，它不通过用户自定义比较方法扩展。浮点 NaN 需要特别处理：上面的 `Max` 与内建 `max` 的 NaN 语义不同。
 
 ## 约束与 ~
 
@@ -174,9 +174,9 @@ $ go run main.go
 
 ## 泛型的代价
 
-Go 的泛型实现和 Rust 不同。Rust 为每个类型生成一份代码（单态化），零开销。Go 对内存布局相同的类型共享一份代码，再通过字典传类型信息，叫 GC shape stenciling。Java 是类型擦除，Kotlin 的泛型默认也擦除，除非用 `reified`。
+Go 和 Rust 的泛型实现策略不同；当前 Go 编译器可能在部分类型之间共享代码并传递字典，但这属于实现细节，具体开销取决于版本、类型和优化。不能仅由语言语法断言某一种实现总是零开销。
 
-代价是热路径上有字典查找的开销。`sort.Slice`（反射）和 `slices.SortFunc`（泛型）对比，审读台账 `audit/p8.md` 里的 M4 实测是：10 万元素 int 切片纯排序 8.01 ms 对 6.38 ms，带 clone 的 10 万元素版本 512 µs 对 356 µs，约 1.3-1.4 倍，分配次数 3 对 0。
+下面的排序基准比较的是两个具体 API 与实现，不是直接测量泛型字典的开销：审读台账 `audit/p8.md` 记录了两种不同口径的结果。
 
 本机复跑一遍，同样是 Apple M4，带 clone：
 
@@ -238,7 +238,7 @@ default 7
 
 ## sync.OnceValue
 
-懒初始化，比如第一次用到时才连数据库。手写 `sync.Once` 有两个坑：重入会死锁，闭包的结果要自己存。`sync.OnceValue` 把它们封装掉了：
+懒初始化，例如第一次用到时才构造配置。`sync.OnceValue` 将 `sync.Once` 和结果缓存封装起来，支持并发调用；但如果初始化函数重新调用同一个 `get`，仍会死锁。初始化时 panic 也会在后续调用重现。
 
 ```go
 var calls atomic.Int32
@@ -510,7 +510,7 @@ $ curl -s -w "%{http_code}\n" -X PUT localhost:8090/kv/bad -d '{"value":"x","bog
 
 ## 超时
 
-回到体系背景。`http.Server` 有三个超时，分别管连接的三个阶段：
+下面配置三个常用超时，分别限制读头、写响应和 keep-alive 空闲；`ReadTimeout` 还可以限制读取整个请求（包括 body）的时间。
 
 ```go
 srv := &http.Server{
@@ -565,7 +565,10 @@ go func() {
 <-ctx.Done()
 shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 defer cancel()
-srv.Shutdown(shutdownCtx)
+if err := srv.Shutdown(shutdownCtx); err != nil {
+	log.Printf("shutdown: %v", err)
+	_ = srv.Close() // 超时后强制关闭仍在处理的连接
+}
 ```
 
 在 `/slow` 处理到一半时发 `SIGINT`：
@@ -589,8 +592,8 @@ $ (curl -s localhost:8093/slow; echo "[curl 拿到响应]") & sleep 1; kill -INT
 
 ## 小结
 
-1. 泛型约束是接口，不是 trait。没有特化，热路径优先 `slices.SortFunc`。
-2. 标准库 1.21-1.25 把很多靠 crate 补的东西内建了：`slices`、`maps`、`cmp`、`iter`、`-race`、pprof。先查标准库再找第三方。
+1. 泛型约束是接口；性能取决于具体实现与负载，排序先选择适合的 API 再测量。
+2. 标准库有 `slices`、`maps`、`cmp`、`iter`、race detector 和 pprof；它们的引入版本各不相同。
 3. 门禁三件套：table-driven、`-race`、`go vet`。fuzz 和 benchmark 也是内建的。
 4. HTTP 跑在 TCP 上。连接是状态，`ReadHeaderTimeout` 必设。
 5. 优雅关停是 `signal.NotifyContext` 加 `Shutdown`。

@@ -12,7 +12,7 @@ export default defineConfig({
   base: '/golearn/',
   lang: 'zh-CN',
   title: 'golearn',
-  description: 'Go for Backend：以练代学的速成课（面向 Rust/Java 后端）',
+  description: 'Go for Backend：面向已有其他语言经验的开发者',
   cleanUrls: true,
   ignoreDeadLinks: true, // 指向仓库内相对路径（exercises/…）的链接在站点里不存在，放行
   markdown: {
@@ -40,7 +40,7 @@ export default defineConfig({
         ],
       },
       {
-        text: '速通手册（19 小时，先读）',
+        text: 'Go 后端手册',
         collapsed: false,
         items: [
           { text: '手册总览与目录', link: '/handbook/README' },

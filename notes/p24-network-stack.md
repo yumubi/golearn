@@ -10,9 +10,9 @@
 
 ## 体系背景：分层不是比喻，是封装
 
-OSI 七层背了没用，工程上就四层，且每一层是**字面上的封装**：
-应用字节（DNS 报文）套上 UDP 头（8 字节）套上 IP 头（20 字节）套
-上以太网帧头。ping 一次、dig 一次，网卡上跑的就是这串套娃。
+工程上常用四层模型理解封装：DNS 报文可套上 UDP 头，再套 IP 头，
+最后经链路层传输。以下示例的 IPv4 头为 20 字节；IPv4 选项和 IPv6
+会改变头部形式，回环接口也不一定使用以太网帧。
 
 这层对 Rust 读者不陌生：std::net 的 UDP/TCP 封装、trust-dns 的
 wire 解析，都长在同一套 BSD socket API 上。抓包工具更是语言无关，
@@ -36,12 +36,12 @@ DNS 之前先看更底层的连通性。ICMP 是 IP 的伴生协议（协议号 
 ```sh
 $ ping -c 2 -t 3 1.1.1.1
 2 packets transmitted, 0 packets received, 100.0% packet loss
-↑ 企业网常拦 ICMP echo（reply 被防火墙吃掉），不代表不通
+↑ 没收到 echo 回复；可能被过滤，也可能存在其他网络问题
 
 $ traceroute -m 3 -w 1 1.1.1.1
  1  10.10.54.3 (10.10.54.3)    18.158 ms   11.252 ms  14.699 ms
  2  10.10.150.230 (10.10.150.230) 15.443 ms 12.941 ms 14.301 ms
- 3  * * *                      ← TTL=3 的探测包没有回音（ICMP 被限速）
+ 3  * * *                      ← TTL=3 的探测包没有收到回复，原因待查
 ```
 
 traceroute 的原理就是**操纵 IP 头的 TTL 字段**：发 TTL=1 的包，
@@ -49,10 +49,9 @@ traceroute 的原理就是**操纵 IP 头的 TTL 字段**：发 TTL=1 的包，
 它自己）；TTL=2 问出第二跳，以此类推。**TTL 不是秒，是跳数**
 （和 DNS TTL 是两个东西，后者才是秒）。
 
-应用层的"连不上"到这一层就有三种死法：ICMP 不通（网络断）、
-TCP RST（端口没服务，httpkv 没起时 curl 的
-`Connection refused`）、TCP 握手无应答（防火墙丢包，curl 卡到
-超时）。排障时先定位是哪一种。
+排障时区分现象和原因：ICMP 没有回复不代表网络一定中断；TCP RST
+可能来自目标主机或中间设备；握手超时可能是丢包或过滤。再结合
+目标地址、抓包及服务状态判断原因。
 
 curl 的退出码区分前两种（真跑，httpkv 没起）：
 
@@ -62,9 +61,8 @@ curl: (7) Failed to connect to localhost port 8091: Connection refused
 exit=7                          ← RST：机器活着，端口没服务
 ```
 
-防火墙丢包则是卡满 `--max-time` 后 exit=28（超时），包不是被
-拒绝而是消失。**refused 秒回、timeout 干等**，这就是排障的
-第一分叉。
+握手无响应可能导致 `--max-time` 后 exit=28；超时本身不能证明
+一定是防火墙丢包。refused 和 timeout 是进一步排查的两个入口。
 
 ## UDP：无连接意味着什么
 
@@ -151,33 +149,11 @@ $ dig +time=2 @127.0.0.1 -p 15353 tcpdump.test A +noall +answer
 解析的起点，Rust 版 `parse_header` 同款逻辑：读到 0 结束，遇到
 0xc0 开头是指针跳转。
 
-Go 侧手工解析就是这两条规则的循环（P6 `wire.ParseName` 的骨架）：
-
-```go
-func ParseName(buf []byte, off int) (string, int, error) {
-    var sb strings.Builder
-    for {
-        if off >= len(buf) {
-            return "", 0, fmt.Errorf("name out of bounds")
-        }
-        l := int(buf[off])
-        if l == 0 { // 名字结束
-            return sb.String(), off + 1, nil
-        }
-        if l&0xC0 == 0xC0 { // 压缩指针：高 2 位 + 14 位 offset
-            ptr := int(binary.BigEndian.Uint16(buf[off:]) & 0x3FFF)
-            name, _, err := ParseName(buf, ptr) // 跳转续读
-            return name, off + 2, err
-        }
-        sb.Write(buf[off+1 : off+1+l])
-        sb.WriteByte('.')
-        off += 1 + l
-    }
-}
-```
-
-四个分支对应报文里四种可能：结束、指针、label、越界。Rust 版
-同构，只是索引访问换成显式 `get(off)` 返回 Option。
+解析时沿普通 label 前进，遇到压缩指针就跳到报文中的偏移；解析
+结果需要保留指针之前已经读到的前缀，而返回的下一偏移应指向原位置
+的指针之后。真实输入还必须检查 label 和指针是否越界、限制跳转次数
+以防循环，并处理非法的 label 类型。P6 的 `wire.ParseName` 展示了
+这些边界；不要把省略边界检查的伪代码直接用于不可信报文。
 
 ## TTL 与缓存一致性
 
@@ -216,7 +192,7 @@ httpkv 是 TCP 服务。先抓握手（真机）：
 
 ```text
 $ sudo tcpdump -i lo0 -nn -c 3 \
-    'tcp port 8090 and tcp[tcpflags] & (tcp-syn|tcp-fin) != 0'
+    'tcp port 8090'
 15:45:46.310247 IP 127.0.0.1.53878 > 127.0.0.1.8090: Flags [S]
     seq 289217297, win 65535, options [mss 16344,nop,wscale 6,...]
 15:45:46.310344 IP 127.0.0.1.8090 > 127.0.0.1.53878: Flags [S.]
@@ -238,19 +214,19 @@ tcp4  0  0  127.0.0.1.55403  127.0.0.1.55395  ESTABLISHED
 "两根管子"。状态机关键迁移：
 
 ```
-CLOSED → SYN_SENT（客户端 connect）→ SYN_RCVD → ESTABLISHED（三次握手完成）
+客户端：CLOSED → SYN_SENT → ESTABLISHED
+服务端：LISTEN → SYN_RCVD → ESTABLISHED
 ESTABLISHED → FIN_WAIT_1/2 → TIME_WAIT（主动关方，2MSL 后消失）
 ESTABLISHED → CLOSE_WAIT（被动关方，等应用调 close）
 ```
 
 两条工程铁律：
 
-1. **TIME_WAIT 挂在主动关方**，持续 2MSL（1-4 分钟）。高频短连接
-   打代理（未开 keep-alive）会把客户端端口耗尽，解法是连接池/
-   keep-alive，不是改内核参数。
-2. **CLOSE_WAIT 堆积 = 你家代码漏 close**。对端先关了，你还没调
-   `conn.Close()`，内核条目永远挂着。Go 里 `defer conn.Close()`+
-   `srv.Shutdown`（P23）就是防它。
+1. **TIME_WAIT 通常在主动关闭方**；持续时间依系统实现而异。
+   高频短连接可能消耗客户端临时端口，复用连接可以降低压力。
+2. **CLOSE_WAIT 表示已收到对端 FIN，等待本端应用关闭**。持续
+   堆积可能是连接泄漏，也可能是应用仍在处理；结合连接寿命和
+   调用栈排查。`defer conn.Close()` 有助于明确所有权。
 
 P8 的 slowloris 从这里看也通：每条 TCP 连接是内核要维护状态的
 资源，攻击者开着握手完成的连接慢慢发字节，应用层
@@ -267,21 +243,21 @@ $ dig +tcp +time=2 @127.0.0.1 -p 15353 tcptest.test A
 dnsproxi 只 `net.ResolveUDPAddr` 监听 UDP（P6 的设计决策：教具只
 做 UDP 面），TCP 查询在握手前就被拒。这比"包数变 5"更有教学
 价值：**协议选择是服务端声明出来的，客户端换协议只会撞墙**。
-真想看 TCP 全景，打真 DNS：`dig +tcp +time=2 @1.1.1.1 x.test A +
-noall +answer`，`sudo tcpdump -i lo0 -nn port 53` 里数五包
-（握手 2 + 查询 1 + 挥手 2），IP 头协议字段是 0x06。
+真想看 TCP 全景，可用 `dig +tcp @1.1.1.1 example.com A`，在实际
+出口接口抓 `tcp port 53`；回环接口 lo0 抓不到发往外网的流量。
+握手、查询、响应和关闭的包数会受复用与关闭方式影响。
 
 ## Take-away
 
 1. 分层是字面封装：DNS 报文套 UDP 头套 IP 头；协议号区分 17/6。
-2. UDP 无连接 = 没有握手没有内核状态，代理每查询一个临时 socket；
-   TCP 连接 = 内核 TCB 状态机条目。
+2. UDP 没有 TCP 式握手与连接状态，但 socket 仍有内核状态；本代理
+   每查询使用临时上游 socket。TCP 连接有自己的状态机。
 3. DNS 报文：12B header + len+label qname + 压缩指针 c00c；
    flags 的 QR/RA 位是响应合法性的关键（P17 翻车记）。
-4. TTL 是三级缓存的一致性契约：应答里的 60 秒原样透传；
-   缓存键含请求形（EDNS 位不同即 miss）。
-5. TIME_WAIT 在主动关方（2MSL），CLOSE_WAIT 堆积是你漏 close；
-   慢攻击占的是内核连接状态资源。
+4. DNS TTL 是缓存有效期；缓存命中后应答 TTL 随时间递减，本例
+   的缓存还限制请求形（如 EDNS 和标志位）。
+5. TIME_WAIT 通常在主动关方，持续堆积的 CLOSE_WAIT 值得排查关闭
+   流程；慢攻击占用连接与应用资源。
 
 ## 练习：跟着做（无练习包，抓包就是练习）
 

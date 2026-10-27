@@ -16,18 +16,14 @@ Go 生态的气质和 Rust 最大的不同，根源在**分发模型**：module 
 
 这个模型推出来三件事：
 
-1. **标准库能扛 80%**：没有"选框架"的仪式感，`net/http` 起步
-   就是默认答案。Rust 惯于 tokio+serde+anyhow 起步，Go 默认
-   零依赖。
-2. **`golang.org/x/...` 是半官方特区**：核心团队维护、API 可能
-   变，但事实上生产标配（errgroup、singleflight、crypto 补充）。
-   看到它别当第三方警惕。
+1. **先看标准库能否解决问题**：例如简单 HTTP 服务可以先用 `net/http`，再根据路由、中间件和团队需求评估框架。这是减少依赖的选型策略，不是分发模型保证的比例。
+2. **`golang.org/x/...` 是 Go 项目的扩展库**：例如 errgroup、singleflight 和 crypto 补充包。它们不属于标准库，升级时仍要检查版本、兼容性和维护状态。
 3. **读传递依赖名是免费课程**：`go mod graph` 挑三个查 README，
    比读十篇选型文有用。
 
-## 标准库优先的铁律
+## 从标准库开始评估
 
-这份"标准库就该解决"的清单背下来：
+先看需求能否由标准库满足；遇到缺失功能、维护成本或团队协作问题，再比较第三方方案：
 
 | 领域 | 标准库答案 | 说明 |
 |---|---|---|
@@ -49,8 +45,7 @@ Unmarshal v1 296.8ns/6 allocs vs v2 147.1ns/1 alloc（2 倍速、
 1/6 分配），Marshal 两者相近（v1 71ns vs v2 136ns，v2 反而慢）。
 API 定型前别上生产。
 
-**什么时候破例**：标准库没有的领域。数据库驱动（database/sql 只是
-接口）、gRPC、指标、分布式追踪。这时才看下面的地图。
+**什么时候考虑第三方**：标准库没有的领域，如数据库驱动（`database/sql` 只是接口）、gRPC、指标和分布式追踪；标准库已有基础能力但项目需要更丰富功能时，也可以按成本选库。
 
 ## 默认选型地图（2026）
 
@@ -141,15 +136,10 @@ Gin 示范，但 `r.PathValue` 纳入 ServeMux 后社区风向明确"标准库
 
 重要性递减：
 
-1. **谁维护**：官方（golang.org/x、google、prometheus）> 公司背书
-   （jackc 全职维护 pgx）> 个人。个人库看 commit 活跃度。
-2. **标准库契合**：接不接 `context.Context` 第一参数（不接的多半
-   是老库或坏设计）；error 用不用 `%w`；日志接不接 slog Handler。
-3. **替换成本**：接口小的库（pgx 走 database/sql 驱动接口）替换
-   便宜；框架类（gin→chi）迁移贵。默认选型已帮你算过替换成本，
-   偏离要有理由。
-4. **衰退信号**：README 写 "maintenance mode"、issue 区机器人修
-   版本、最后 commit > 1 年（"完成态"工具如 uuid 除外）。
+1. **谁维护**：看维护责任、发布节奏、问题处理和安全响应，不仅看组织或个人身份。
+2. **生态契合**：涉及取消的操作是否支持 `context.Context`；错误是否按需支持 `errors.Is`/`errors.As`；日志能否接入项目现有体系。
+3. **替换成本**：检查实际使用的 API、数据模型和数据库方言。pgx 的 `database/sql` 驱动接口与原生 pgx API 是不同的接入方式，接口相同也不意味着 SQL 可无代价换库。
+4. **衰退信号**：README 写 maintenance mode、长期未处理的重要 issue 等都值得调查；稳定的小工具提交少并不自动意味着不可用。
 
 对照：crates.io 的 download 数 ≈ pkg.go.dev 的 import 数
 （`go.dev/pkg?importers` 可查）。
@@ -184,8 +174,7 @@ go list -m all | head -20     # 看依赖树
 
 ## 小结
 
-1. 标准库优先是铁律：HTTP/JSON/日志/并发/测试默认零依赖；
-   `golang.org/x/...` 是半官方特区。
+1. 标准库是选型起点，不是禁止依赖的铁律；`golang.org/x/...` 是独立版本的 Go 项目扩展库。
 2. 默认选型：slog（日志）、net/http（服务）、pgx+sqlc+goose
    （PG 栈）、client_golang（指标）、cobra（CLI）、asynq/river
    （队列）。

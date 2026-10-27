@@ -1,6 +1,6 @@
 # P33 · 泛型的边界
 
-> 这章学完你能干什么：说清 Go 为什么拖了十年才加泛型（三个 slow 的取舍），读得懂约束接口的类型集合语义（type set、`~int | ~int32`、具化两阶段），背得出三大局限的报错原文（方法不能带类型参数、约束不能当类型用、约束只能是接口）和三条绕开路（Builder、标记接口、Getter/Setter），并用 1.26 实测判断什么时候值得用（排序三选手已无差，容器与算法才是主场）。前置：P28（方法、接口语法）。
+> 这章学完你能干什么：理解 Go 泛型的设计取舍、类型集合与具化，并通过 ORM 例子辨析方法类型参数、非基本接口和共享字段访问的限制；结合排序基准讨论适用场景。前置：P30（方法、接口语法）。
 
 ## 动机与迟迟不加：三个 slow 的取舍
 
@@ -42,7 +42,7 @@ type C1 interface {
 }
 ```
 
-`~int` 是近似元素，匹配底层类型为 int 的所有命名类型；类型列表用 `|` 分隔。T1 自定义类型 `type T1 int` 实现 M1 后满足 C1；底层 struct{} 的类型虽实现 M1，底层类型不符，编译报 `T does not implement C1`。官方建议：做约束的接口与做传统接口的接口分开定义。〔TBX05 p11-12〕
+`~int` 是近似元素，匹配底层类型为 `int` 的所有类型，包括 `int` 本身和以它为底层类型的命名类型；类型列表用 `|` 分隔。T1 自定义类型 `type T1 int` 实现 M1 后满足 C1；底层 struct{} 的类型虽实现 M1，底层类型不符，编译报 `T does not implement C1`。官方建议：做约束的接口与做传统接口的接口分开定义。〔TBX05 p11-12〕
 
 这背后是 type set 模型（2021.4 取代 type list）：每个类型都有 type set，非接口类型仅含自身；普通接口是无限集合（实现其方法的类型）；约束接口的 type set 是类型列表与方法集合的交集运算，嵌入接口取交集。T 实现 I 当且仅当 T 属于 I 的 type set。〔TBX05 p8-9〕 Rust 的 trait implementors 集合是编译器内部概念，Go 把"类型的集合"提升为一等语法（联合、交集、近似），独此一家。
 
@@ -54,9 +54,9 @@ type C1 interface {
 ./e3b.go:8:8: cannot use type T outside a type constraint: interface contains type constraints
 ```
 
-约束 `C interface{ ~int | ~string }` 不能当普通类型声明变量或别名，它是集合不是类型。
+约束 `C interface{ ~int | ~string }` 属于非基本接口：可以声明它的别名，也可以用作类型约束，但不能用作变量的类型。相对地，只由方法构成的基本接口既能当约束，也能当普通值的类型。
 
-预测：`Set[int64]` 与 `Set[int32]` 共享同一份运行时代码吗？提示：GC shape 按指针形状分组，两种整数形状相同。
+预测：`Set[int64]` 与 `Set[int32]` 是否共享运行时代码？这属于编译器实现细节，不是语言保证；GC shape 等实现策略可能随版本变化，也不应仅凭两者都是整数断定形状相同。
 
 ## 三大局限与绕开：ORM 视角
 
@@ -69,7 +69,7 @@ type C1 interface {
 
 影响面：客户端类应用（Redis/Kafka 客户端、HTTP、ORM）最想要的 `Get[T any](url string) (T, error)` 方法级泛型 API 全部无法编译。〔TBX04 p4-5〕 Rust 侧同类需求用 trait 关联类型或泛型方法表达，不受此限。绕开一 Builder 模式：HttpClient 配置载体加 `GetBuilder[T any]` 链式设置 Path、Do 返回 T，把理想 API `client.Get[User]("/user/123")` 变成过程式链（Rust 的 builder 惯用法同构）。〔TBX04 p9-10〕
 
-**局限二：泛型约束不能当类型用**。报错 `interface contains type constraints` 见"语法核心"一节实拍；推论是无法用约束表达"接口只接受有限几种类型"，interface{} 参数仍将广泛存在于中间件设计。〔TBX04 p7-8〕 绕开二标记接口：Go 不能用空接口当标记（所有类型都实现它），必须至少声明一个私有方法限定实现者集合：
+**局限二：含类型项的非基本接口不能作普通值类型**。报错 `interface contains type constraints` 见“语法核心”；只有方法的基本接口则没有这个限制。若运行时参数要限制为少数实现，可以用标记接口：Go 空接口由所有类型实现，不能用于限制实现者；可声明一个未导出方法，将普通实现限制在声明该接口的包内：〔TBX04 p7-8〕
 
 ```go
 type Selectable interface{ aggr() }
@@ -80,14 +80,14 @@ func (Aggregate) aggr() {}
 
 代价是纯字符串列也要 `Select(Column("name"), Avg("age"))` 包一层，换得编译器类型检查（对比 interface{} 运行期 panic）。〔TBX04 p10-11〕 exercises/p33gen/agg_test.go 可跑：`TestSelect` 断言 `name, avg(age)` 拼接。
 
-**局限三：约束只能是接口，不能是结构体**。想让实体组合 BaseEntity 共享字段（`func Insert[E BaseEntity](e *E)`）不支持，1.26 实拍报错：
+**局限三：结构体字段不能直接作为泛型操作的约束**。约束可以写成非接口类型，`[E BaseEntity]` 是接口 `interface{ BaseEntity }` 的简写，但它只接受类型集合中的 `BaseEntity`，不会因为另一个结构体嵌入了它就接受该结构体。想让实体组合 BaseEntity 共享字段并直接通过类型参数访问字段，不能靠这个约束实现；下面的实拍报错展示了类型不满足约束：
 
 ```text
 ./sc4.go:9:12: struct{ID int64} does not satisfy BaseEntity
 ./sc3.go:11:12: in call to Insert, E (type MyEntity) does not satisfy BaseEntity
 ```
 
-（报错信息不准确，没说 BaseEntity 只能是接口。）堵死共享字段的泛型方法道路，对业务开发影响大于中间件。〔TBX04 p8-9〕 绕开三 Getter/Setter：字段提升为方法凑约束（`type Entity interface{ GetID() int64; SetID(int64) }`），配合组合免重复实现；Go 习惯直接访问字段，这写法 Java 背景会眼熟，不够优雅但少量可用。〔TBX04 p11-12〕 exercises/p33gen/builder_test.go 的 `TestGetterSetterConstraint` 可跑。
+这两条报错反映类型集合不匹配，而不是禁止用结构体名写约束。绕开共享字段访问的问题，可以用 Getter/Setter：字段提升为方法凑约束（`type Entity interface{ GetID() int64; SetID(int64) }`），配合组合免重复实现；Go 习惯直接访问字段，这写法 Java 背景会眼熟，但应权衡额外方法是否值得。〔TBX04 p8-12〕 exercises/p33gen/builder_test.go 的 `TestGetterSetterConstraint` 可跑。
 
 三大限制 1.26 全部未放开。三思路效果不错但不优雅；大明对泛型普及偏悲观，甚至预判有公司会禁用泛型。〔TBX04 p12-13〕
 
@@ -95,7 +95,7 @@ func (Aggregate) aggr() {}
 
 适合场景四条：函数操作 slice/map/channel 等容器且不对元素类型做假设（替代反射拿性能）；通用数据结构（链表、二叉树，Go 无原生支持，替换 interface{} 存储，编译期全面静态检查）；不同类型有共同方法且实现相同时用类型参数；多次写仅类型不同的样板代码时收敛。〔TBX05 p16-17〕
 
-不该用的反例：对某类型值的全部操作只是调用一个方法时用 interface，`func ReadAll(r io.Reader)` 正确，`func ReadAll[reader io.Reader](r reader)` 是错误做法，io.Reader 易读高效。〔TBX05 p17〕 官方节奏：先重复再抽象，第一次写样板就上泛型大概率是滥用。
+不必使用泛型的例子：对参数的全部操作只是调用一个方法时，普通接口通常更直接，`func ReadAll(r io.Reader)` 即可；`func ReadAll[R io.Reader](r R)` 虽然合法，但如果不需要保留具体类型或建立类型关系，额外类型参数可能没有收益。〔TBX05 p17〕 先识别真实的重复与类型关系，再决定是否抽象。
 
 对照：Rust 社区同样按动态/静态分派选 dyn Trait 还是 impl Trait，ReadAll 反例对应 impl Read 过度泛型化；Java 擦除反而鼓励接口编程。改造：审查你项目里一个 `func F(v interface{})` 加类型断言的函数，改成 `func F[T ...](v T)` 对比调用方手感与 allocs/op；若只调用一个方法，维持 interface。
 
@@ -106,7 +106,7 @@ func (Aggregate) aggr() {}
 - 三个 slow（程序员/编译器/执行）不可兼得：Go 选 GC shape 折中，Rust 单态化，Java 擦除。〔TBX05 p5〕
 - 排序三选手 1.18 差近一倍，1.26 已抹平（本机 3.9-4.5 ms 挤在一起）；泛型主场是容器与算法，不是微优化。〔TBX05 p15-19〕
 - 约束即 type set：`~int | ~int32` 近似元素加方法集合，具化两阶段，自动推导。〔TBX05 p8-14〕
-- 三大局限（方法不能带类型参数、约束不能当类型、约束只能是接口）1.26 未放开，报错原文背下来省调试时间。〔TBX04 p2-9〕
+- 三大限制：方法不能声明额外类型参数，非基本接口不能作为普通值类型，以及不能凭结构体嵌入关系约束并访问共享字段。〔TBX04 p2-9〕
 - 适用判断一条主线：容器抽象与算法收敛用泛型，单方法调用维持 interface。〔TBX05 p16-17〕
 
 ## 在 dnsproxi 里看这一章
@@ -125,7 +125,7 @@ dnsproxi 是"该用与不该用"的正反样本（工作副本实读）：
 
 - 语法速查：`[T constraints.Integer]`（现行写法多用 `cmp.Ordered`）、`type Set[T comparable] map[T]struct{}`、`any` 是 `interface{}` 的别名（1.18 起）。
 - 编译错速查（1.26 实拍）：`interface method must have no type parameters`；`method must have no type parameters`；`cannot use type T outside a type constraint: interface contains type constraints`；`does not satisfy BaseEntity`。
-- 延伸：type parameters 提案 43651；Go FAQ generics；golang.org/x/exp/constraints 已转正为 cmp（1.21+）。
+- 延伸：type parameters 提案 43651；Go FAQ generics；Go 1.21 的 `cmp.Ordered` 可用于有序类型，`golang.org/x/exp/constraints` 另有整数等约束，二者并非完整替代关系。
 - 旧章交叉：方法表达式（`T.Get` 把方法当函数用）在 p30 §receiver 是第一个参数 有实义（p28 未写出，旧章无泛型收敛内容）；b.Loop 与 -benchmem 属 p8 §benchmark 与 pprof（p21 旧章无 bench 内容）。
 - 原材料单元：TBX05（泛型总览）、TBX04（三大局限与绕开）、C:go_basic/v24（Set 与 b.Loop）。
 - C:go_frame/data_structure 泛型容器合集：二分 K1/堆 K4/链表 K6/ring K8/快排 K9/Jaccard K10，索引 K2/K3/K7/K11；C:dachang/algorithm：AbstractHeap K1、优先队列 Item[T] K14。

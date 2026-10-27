@@ -299,7 +299,7 @@ $ go run .
 {"level":"INFO","msg":"没有显式值","req_id":"req-7"}
 ```
 
-朴素注入产生了重复 key。查重版本做到了"显式说了算，没写才注入"，这就是 `recordHas` 的用途。
+朴素注入产生了重复 key。查重版本对本次 `Record` 的顶层字段做到“显式说了算，没写才注入”，这就是 `recordHas` 的用途。它看不到先前通过 `logger.With` 预置给内层 handler 的字段；而 `WithGroup` 后新增字段会落在该组中。若要求全局唯一或固定根字段，还需设计并跟踪这些预置属性和组的语义。
 
 练习 `TestExplicitBeatsInjected` 断言的就是这个。这个行为是实测出来的：P15 阶段假设"注入先加也没事"，冒烟发现输出里 `req_id` 重复、读侧取值不可控，当场被打脸。
 
@@ -429,7 +429,7 @@ level=INFO msg="直接 Handle"
 Handle 返回: disk full
 ```
 
-文本 sink 照常输出，错误被收集后一次返回。一个目的地故障不拦其他。练习 `TestMultiHandler` 验证扇出，`TestMultiHandlerLevel` 验证两个 sink 各自过滤。
+文本 sink 照常输出，直接调用 `Handle` 时错误被收集后一次返回。注意普通 `slog.Logger` 的日志方法会丢弃 handler 返回的错误；生产系统若需要感知写入失败，还要在 handler 或 writer 层另行处理。练习 `TestMultiHandler` 验证扇出，`TestMultiHandlerLevel` 验证两个 sink 各自过滤。
 
 Kotlin 和 Java 读者会觉得眼熟：这相当于给 Logback 配了多个 appender。JS 里 pino 的 transport 做的是同一件事。
 

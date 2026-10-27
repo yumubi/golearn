@@ -3,7 +3,7 @@
 > 这章学完你能干什么：把 dnsproxi 的 `[hit]/[miss]` 自由文本全部换成 JSON 结构化输出，每条带 `req_id`（每查询生成，ctx 自动注入），并回答"离开 httpkv 的 HTTP 中间件，同一套纪律怎么在 UDP 上落地"。
 > 前置：P15（slog 模型）、P16（自定义 handler 两坑）、P17（dnsproxi 指标）。
 >
-> 动手方式：在仓库里操作，不改 `dnsproxi-go/` 的任何文件。本章端口避开 P17：代理监听 25353，上游 25300，指标口 9253。输出里的时间戳和 `req_id` 每次不同，`req_id` 本身就是纳秒时间戳。
+> 动手方式：在仓库里操作，不改 `dnsproxi-go/` 的任何文件。本章端口避开 P17：代理监听 25353，上游 25300，指标口 9253。输出里的时间戳和 `req_id` 每次可能不同；基于纳秒时间戳的 ID 只是示例，不能保证并发或多实例下唯一。
 
 ## 体系背景：日志是写给谁的字节流
 
@@ -117,9 +117,9 @@ logger.InfoContext(ctx, "cache miss, forwarding", "qname", q.Name, "qtype", qtyp
 
 | | httpkv（P15/P16） | dnsproxi（P18） |
 |---|---|---|
-| req_id 生成 | reqID 中间件（HTTP 层） | 读循环里 `newQueryID()`，`withRequestID` 塞 ctx |
-| ctx 传播 | `r.WithContext` 随请求走 | `context.Background()` 派生，传给 handleQuery |
-| 回显 | `X-Request-ID` 响应头 | 无，UDP 应答没有头可放，日志靠时间戳对 |
+| req_id 生成 | reqID 中间件（HTTP 层） | `handleQuery` 入口调用 `newQueryID()` 并放入 ctx |
+| ctx 传播 | `r.WithContext` 随请求走 | 从 `context.Background()` 派生，供本次查询内部使用 |
+| 回显 | `X-Request-ID` 响应头 | 本实现不回显；可结合时间和查询字段查日志 |
 | 级别配置 | 代码写死 | `DNS_LOG_LEVEL` env |
 
 UDP 上的对应物是"每查询一个 ctx"。Java 读者会想到 SLF4J 的 `MDC.put("req_id", ...)`，区别是 MDC 绑在线程上，Go 的 ctx 是显式传的参数。
@@ -317,7 +317,7 @@ FAIL
 
 ### ctxHandler 现行实现
 
-`Handle` 里做查重注入：`requestID(ctx)` 非空，且 record 里没有 `req_id` 才 `AddAttrs`。`WithAttrs` 和 `WithGroup` 转发并重新包装成 `&ctxHandler{...}`。`recordHas` 遍历 `r.Attrs` 查重。P16 讲过的两个坑的完整形态，看 `dnsproxi-go/logger.go` 这份 97 行的自包含文件。
+`Handle` 里做查重注入：`requestID(ctx)` 非空，且 record 里没有 `req_id` 才 `AddAttrs`。`WithAttrs` 和 `WithGroup` 转发并重新包装成 `&ctxHandler{...}`。`recordHas` 只遍历当前 `r.Attrs`，看不到通过 `With` 预置给内层的字段；分组后注入字段也会进入当前组。需要更强的去重或根字段保证时，须另行设计。P16 讲过这两个包装问题，完整实现见 `dnsproxi-go/logger.go`。
 
 ### 级别开关与收集开关
 
