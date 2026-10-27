@@ -239,7 +239,7 @@ func merge(ctx context.Context, cs ...<-chan int) <-chan int {
 
 ## 三、worker pool：把规模钉死
 
-每请求一个 goroutine 在中小规模完全合适；规模上去、或下游资源有限（数据库连接、文件句柄）时，就要限制同时在跑的数量。〔TB35 p2〕最小的 pool 只需要一个任务 channel 和 N 个 worker：
+每请求一个 goroutine 在中小规模完全合适；规模上去、或下游资源有限（数据库连接、文件句柄）时，就要限制同时在跑的数量。〔TB35 p2〕为什么"规模上去"要管住数量？goroutine 相对操作系统线程开销十分小：起始栈只有 2KB，创建、切换与销毁的代价都很低，可以创建成千上万甚至更多，所以 Go 应用惯例是为每个新建立的连接、甚至每个传入请求配一个 goroutine，好处是实现十分简单、写代码心智负担低。〔TB35 p2〕但"廉价"不是免费，最明显的就是规模化后非零成本成为瓶颈：按一个 goroutine 分配 2KB 执行栈计，100 万个 goroutine 就是 2GB 的内存消耗；其次，goroutine 越多，Go 运行时调度它们的处理器消耗越大，成为阻碍应用性能提升的重要因素。〔TB35 p2〕2KB 这个数至今成立：go1.26.4 运行时里 `stackMin = 2048` 字节，新建 goroutine 就按它分配初始栈。〔go1.26.4 src/runtime/stack.go:77-78〕〔go1.26.4 src/runtime/proc.go:5319-5322〕最小的 pool 只需要一个任务 channel 和 N 个 worker：
 
 ```go
 package main
@@ -290,15 +290,270 @@ func main() {
 
 `jobs` 是无缓冲的，所以 worker 全忙时，提交任务的 `jobs <- i` 会阻塞。这正是背压的最朴素形态：任务太多就把生产方按在原地，而不是无限攒起来。
 
-生产级的 pool 要再补三块：〔TB35 p5-9〕
+### 计数信号量：先限并发，还不急着建池
 
-1. **容量校验**：`New` 里对 `capacity <= 0` 回退默认值、超上限截断。
-2. **worker 里的 `recover`**：一个任务 panic 不能带走整个进程，`recover` 后要释放 worker 计数再退出。
-3. **`Free` 时通知退出**：通过一个 `quit` channel 广播，所有 worker 的 `select` 同时监听 `quit` 和任务 channel，收到 `quit` 就退出。
+如果只想限住"同时在跑"的数量，连池都可以不建。Go 并发设计的一个惯用法，是把带缓冲 channel 用作计数信号量：channel 中当前元素个数代表当前同时处于活动状态（正在处理业务）的 goroutine 数量，channel 容量代表允许同时活动的 goroutine 最大数量；发送操作表示获取一个信号量，接收操作表示释放一个信号量。〔TB33 p16〕原文的例子：`active` 容量 3、`jobs` 容量 10，一个 goroutine 向 `jobs` 投递 8 个 job 后 `close(jobs)`；main 用 `for range jobs` 为每个 job 起 goroutine 并 `wg.Add(1)`，goroutine 内先 `active <- struct{}{}` 获取、`log` 并 sleep 2s 模拟处理、再 `<-active` 释放，最后 `wg.Wait()`：〔TB33 p16-17〕
 
-可选行为（预创建 worker、池满时阻塞还是返回错误）用 functional options 配置，和 05 讲的 Option 模式一致。〔TB35 p12-15〕"池满返回错误"正是第五节说的第三种背压策略。
+```go
+var active = make(chan struct{}, 3)
+var jobs = make(chan int, 10)
 
-另一种更轻的"池"：用容量为 N 的 channel 当计数信号量，每个任务自己起 goroutine，但先拿令牌。06 讲过，适合任务数不大、不想维护 worker 的场景。
+func main() {
+	go func() {
+		for i := 0; i < 8; i++ {
+			jobs <- (i + 1)
+		}
+		close(jobs)
+	}()
+
+	var wg sync.WaitGroup
+
+	for j := range jobs {
+		wg.Add(1)
+		go func(j int) {
+			active <- struct{}{}          // 获取信号量
+			log.Printf("handle job: %d\n", j)
+			time.Sleep(2 * time.Second)
+			<-active                      // 释放信号量
+			wg.Done()
+		}(j)
+	}
+	wg.Wait()
+}
+```
+
+原文给出的运行输出如下：〔TB33 p17〕
+
+```text
+2022/01/02 10:08:55 handle job: 1
+2022/01/02 10:08:55 handle job: 4
+2022/01/02 10:08:55 handle job: 8
+2022/01/02 10:08:57 handle job: 5
+2022/01/02 10:08:57 handle job: 7
+2022/01/02 10:08:57 handle job: 6
+2022/01/02 10:08:59 handle job: 3
+2022/01/02 10:08:59 handle job: 2
+```
+
+每个 job 约处理 2 秒、信号量容量 3：10:08:55 三个、10:08:57 三个、10:08:59 两个，8 个 job 按 3+3+2 三批完成。虽然创建了很多 goroutine，同一时刻处于活动状态处理 job 的最多 3 个。〔TB33 p17〕同批内先处理哪个 job 由调度决定，三批的节奏才是信号量决定的。〔自〕goroutine 一个都没少起（8 个 job 照样起了 8 个 goroutine）：信号量限制的是"进入业务处理段"的并发数，已有 3 个 goroutine 持有信号量时，第 4 个执行 `active <- struct{}{}` 会阻塞，直到某个活动 goroutine 处理完执行 `<-active` 腾出空位。〔TB33 p4-5,16-17〕它和 worker pool 怎么选：信号量版每个任务仍独享一个 goroutine，代码最少，适合任务数不大、不想维护 worker 的场景；要把 goroutine 本身的数量也钉死、让 N 个 goroutine 反复重用时，才需要下面的池。〔自〕
+
+### workerpool：把 M 个任务调度到 N 个 goroutine 上
+
+Goroutine 池的核心思想是对 goroutine 的重用：把 M 个计算任务调度到 N 个 goroutine 上，而不是为每个计算任务分配一个独享的 goroutine，从而提高计算资源利用率。〔TB35 p3〕workerpool 的工作逻辑通常很简单，即便是用于生产环境的实现，代码规模也都在千行左右。实现方式有很多种，原文为了更好地演示 Go 并发模型的应用模式以及并发原语间的协作，采用完全基于 channel+select 的实现方案：不使用其他数据结构，也不使用 sync 包提供的 Mutex、RWMutex、Cond 等同步结构：这是教学取向的取舍，生产实现不受此限；原文小结也再次申明这个实现只是演示项目，不能直接用于生产。〔TB35 p3,16-17〕
+
+workerpool 的实现主要分三部分：pool 的创建与销毁；pool 中 worker（goroutine）的管理；task 的提交与调度，其中后两部分是"精髓"所在，原文用一张原理图表示这两部分。〔TB35 p3-4〕原理两句话：〔TB35 p4〕
+
+- **worker 管理**：capacity 是 pool 的属性，代表整个池中 worker 的最大容量；用一个带缓冲 channel `active` 作 worker 的"计数器"，这正是 33 讲的计数信号量模式。运行规则按顺序三步：active 可写时，就创建一个新 worker，处理用户通过 Schedule 提交的请求；active 满了就停止创建 worker；直到某个 worker 因故退出、active 又空出一个位置，pool 才创建新 worker 填补那个空位。
+- **task 提交与调度**：用户要提交的请求抽象为 Task（本质是 `type Task func()` 函数类型），通过 Schedule 提交到一个 task channel，已创建的 worker 从这个 task channel 中读取 task 并执行。〔TB35 p4,8〕
+
+骨架如下（节选自原文 workerpool1，略去编号与日志，不能独立编译）：〔TB35 p5-8〕
+
+```go
+type Pool struct {
+	capacity int           // workerpool 大小
+	active   chan struct{} // 对应 active channel：计数信号量
+	tasks    chan Task     // 对应 task channel
+	wg       sync.WaitGroup // 用于在 pool 销毁时等待所有 worker 退出
+	quit     chan struct{}  // 用于通知各个 worker 退出的信号 channel
+}
+
+func New(capacity int) *Pool {
+	if capacity <= 0 {
+		capacity = defaultCapacity // 防御性校验：回退默认值（具体数值原课未给出，在配套源码里）
+	}
+	if capacity > maxCapacity {
+		capacity = maxCapacity // 超上限截断
+	}
+	p := &Pool{
+		capacity: capacity,
+		active:   make(chan struct{}, capacity), // 容量 = 池容量
+		tasks:    make(chan Task),               // 无缓冲
+		quit:     make(chan struct{}),
+	}
+	go p.run() // 管理机制随池一起运行
+	return p
+}
+
+func (p *Pool) run() {
+	for {
+		select { // for+select 监视多个 channel 是 Go 惯用法
+		case <-p.quit:
+			return
+		case p.active <- struct{}{}: // active 可写：腾出一个名额外
+			p.newWorker()
+		}
+	}
+}
+
+func (p *Pool) newWorker() {
+	p.wg.Add(1)
+	go func() {
+		defer func() {
+			if err := recover(); err != nil { // 任务 panic：捕获后 worker 退出
+				<-p.active // 归还计数
+			}
+			p.wg.Done()
+		}()
+		for {
+			select {
+			case <-p.quit: // 收到退出信号：归还计数后退出
+				<-p.active
+				return
+			case t := <-p.tasks: // 领任务、执行
+				t()
+			}
+		}
+	}()
+}
+
+var ErrWorkerPoolFreed = errors.New("workerpool freed")
+
+func (p *Pool) Schedule(t Task) error {
+	select {
+	case <-p.quit:
+		return ErrWorkerPoolFreed // 池已销毁：哨兵错误而不是 panic
+	case p.tasks <- t:
+		return nil
+	}
+}
+```
+
+把骨架读成一条完整的流转线：〔TB35 p4-8〕
+
+1. `New` 做防御性校验后 `go p.run()`，管理 goroutine 进入 for+select 循环，同时监视 quit 与 active；
+2. 用户调 `Schedule(t)`，select 尝试把 t 发进无缓冲的 tasks，可写即提交成功；
+3. `run` 发现 active 可写，创建一个新 worker；
+4. worker 的 for-select 从 tasks 领到任务并执行 `t()`；
+5. active 写满后 `run` 阻塞在 `p.active <- struct{}{}` 上，停止创建 worker；直到某个 worker 因 quit 或 panic 退出、`<-p.active` 归还计数腾出空位，才补建新 worker；
+6. worker 全忙时，无缓冲的 tasks 让 `Schedule` 阻塞到有 worker 空闲，背压直接反馈给提交方。〔TB35 p8-9〕
+
+两个容易忽略的细节，都有原文背书。其一，active 额度的归还有两处，且 worker 没有"正常退出"路径：收到 quit 退出时 `<-p.active` 归还一次，panic 被 defer+recover 捕获后同样归还再退出；作者在留言区明确，worker 一旦创建，除了 panic 和 quit 通知退出，不会退出，所以 defer 里不做无条件归还。〔TB35 p7-8〕〔TB35 p19〕其二，销毁后再提交不会 panic：Schedule 的 select 先检视 quit，有信号就返回哨兵错误 ErrWorkerPoolFreed，调用方拿到的是错误而不是崩掉。〔TB35 p8-9〕原文 demo1 验证：capacity 为 5 的池连投 10 个睡 3s 的任务再 Free，5 个 worker 各领 2 个任务，Free 后等所有 worker 执行完退出，最后输出 workerpool freed，与原理图一致。〔TB35 p9-11〕
+
+这个最小实现"铁板一块"，原文接着用功能选项（functional option）补齐可定制行为：`WithPreAllocWorkers` 控制创建池时是否预建满 worker（默认 false；不预建时 run 先阻塞在 tasks 读取上，由首个提交的 task 触发按需创建，active 写满后回到第一版的调度逻辑），`WithBlock` 控制池满时 Schedule 是阻塞等待（默认 true）还是走 select 的 default 立即返回 ErrNoIdleWorkerInPool。〔TB35 p11-15〕选项机制即 05 讲的 Option 模式；"池满返回错误"正是第五节说的第三种背压策略。demo2 用 `WithBlock(false)` 提交 10 个任务：worker 尚未创建完毕，大量 task 立刻拿到 no idle worker in pool 错误而不是阻塞，具体哪些失败因调度不确定性每次都可能不同。〔TB35 p15-16〕
+
+回看这不到 200 行，池里到处是 select 的固定搭配。33 讲总结的三种惯用法和 nil channel 的一招，值得在这里一次摆齐，以后读别人的并发代码，认的就是这些形状。
+
+### select 工具箱：三式加一招
+
+**case 的形态与阻塞规则。**select 的每个 case 是一次 channel 通信，支持三种形态加一个 default：
+
+```go
+select {
+case x := <-ch1:     // 从channel ch1接收数据
+	... ...
+case y, ok := <-ch2: // 从channel ch2接收数据，并根据ok值判断ch2是否已经关闭
+	... ...
+case ch3 <- z:       // 将z值发送到channel ch3中:
+	... ...
+default:             // 当上面case中的channel通信均无法实施时，执行该默认分支
+}
+```
+
+不写 default、且某一刻所有 case 上的 channel 通信都无法实施时，整个 select 阻塞，直到某个 case 的 channel 变为可发送或可接收才能继续；加上 default，同一时刻就执行 default。〔TB33 p7-8〕select 与 channel 两种原语操作都十分简单，共同遵循 Go"追求简单"的设计哲学，却为并发程序带来强大的表达能力。〔TB33 p8〕
+
+**一式：default 防阻塞。**default 的语义是在其余非 default 分支因通信未就绪而无法被选择时执行，由此获得"避免阻塞"特性。〔TB33 p26〕最典型的是一对"事务式"函数，把"判定与收发"合并成一个不阻塞的整体：
+
+```go
+func tryRecv(c <-chan int) (int, bool) {
+	select {
+	case i := <-c:
+		return i, true
+
+	default: // channel为空
+		return 0, false
+	}
+}
+
+func trySend(c chan<- int, i int) bool {
+	select {
+	case c <- i:
+		return true
+	default: // channel满了
+		return false
+	}
+}
+```
+
+无缓冲、带缓冲通吃：无缓冲 channel 没有接收方时发送无法实施，带缓冲 channel 空时接收、满时发送无法实施，统统走 default，两个函数都不会阻塞在空 channel 或元素个数已达容量的 channel 上。〔TB33 p26〕原文的 producer/consumer 演示里双方都不阻塞：channel 空时 consumer 打印 `[consumer]: try to recv from channel, but the channel is empty` 再试，channel 满时 producer 打印 `[producer]: try send [7], but channel is full` 再试。〔TB33 p20-21,26〕
+
+代价要看清：这种侦测会改变 channel 的状态：tryRecv 成功就真收走了一个元素，trySend 成功就真写入了一个元素。想不改变 channel 状态、单纯侦测且不阻塞，目前没有适用于所有场合的方法；"多发送单接收""多接收单发送"两个特定场景可以退而用 len 判断（06 讲与 33 讲的 len 小节有展开）。〔TB33 p21-22〕
+
+标准库同款：$GOROOT/src/time/sleep.go 的 sendTime 用 select+default 无阻塞地向 c 发送当前时间，定时器到期要通知使用者的 channel，但不保证有人在收，这次发送必须非阻塞：〔TB33 p26〕
+
+```go
+// $GOROOT/src/time/sleep.go（原文摘录，Go 1.17 时代签名）
+func sendTime(c interface{}, seq uintptr) {
+	// 无阻塞的向c发送当前时间
+	select {
+	case c.(chan Time) <- Now():
+	default:
+	}
+}
+```
+
+Go 1.26.4 源码里 sendTime 仍是同样的非阻塞 select 发送，但签名已演化为 `func sendTime(c any, seq uintptr, delta int64)`，发送的是 `Now().Add(-delta)`，delta 补偿运行时延迟发送的偏差。〔go1.26.4 src/time/sleep.go:179-190〕
+
+**二式：超时。**带超时机制的 select 是 Go 中常见组合：通过超时事件既可避免长期陷入某种操作的等待，也可做异常处理：〔TB33 p27〕
+
+```go
+func worker() {
+	select {
+	case <-c:
+		// ... do some stuff
+	case <-time.After(30 *time.Second):
+		return
+	}
+}
+```
+
+原文写作时的告诫：使用带超时的 select 要特别注意 timer 使用后的释放，尤其大量创建 timer 时；标准库 timer 由 Go 运行时自行维护、不是 OS 级定时器资源，使用代价比 OS 级低许多，但仍应尽量减少给运行时和 GC 的压力，及时调用 timer 的 Stop 方法回收资源。〔TB33 p27〕这条告诫有一个版本边界，按 go1.26.4 标准库修订：time.After 等价于 `NewTimer(d).C`；Go 1.23 之前，GC 不会回收尚未到期且未 Stop 的 timer，所以惯用法是 NewTimer 后紧跟 `defer t.Stop()`；从 Go 1.23 起，GC 能回收未被引用的 timer，即使它未到期、未 Stop，Stop 不再是为帮助 GC 所必需（仍可因"让计时提前停下来"等功能性原因调用），After 的文档也改写为"没有理由在 After 能胜任时偏好 NewTimer"。〔1.26 修正〕〔go1.26.4 src/time/sleep.go:120-141〕〔go1.26.4 src/time/sleep.go:192-204〕这条边界与 §一比较超时方案时给过的是同一条；Stop 的去留判断到这里就完整了：为了 GC 不必调，为了提前停表仍要调。兼容开关：GODEBUG=asynctimerchan=1 可恢复 Go 1.23 前的旧行为（未到期 timer 不被 GC 回收），该设置可能在 Go 1.27 或以后移除。〔go1.26.4 src/time/sleep.go:137-141〕timer 确由运行时维护也有旁证：Timer 的 stopTimer/resetTimer 通过 `//go:linkname` 直连 runtime 实现。〔go1.26.4 src/time/sleep.go:74-78〕
+
+**三式：心跳。**结合 time 包的 Ticker，可以在监听 channel 的同时执行周期性任务：〔TB33 p27-28〕
+
+```go
+func worker() {
+	heartbeat := time.NewTicker(30 * time.Second)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-c:
+			// ... do some stuff
+		case <- heartbeat.C:
+			//... do heartbeat stuff
+		}
+	}
+}
+```
+
+NewTicker 创建的 Ticker 实例包含一个 channel 类型的字段 C，它按时间间隔持续产生事件，就像"心跳"一样：c 无数据可收时，for 循环每隔特定时间完成一次迭代再回到下一次 select。和 timer 一样，用完要调用 Stop，避免心跳事件在 ticker 的 channel（示例中的 heartbeat.C）中持续产生。〔TB33 p27-28〕两个补充边界：Stop 只停表、不关闭 .C，现行文档明写 Stop does not close the channel，防止并发读取方看到错误的 tick；〔go1.26.4 src/time/tick.go:49-52〕GC 边界与 timer 同款，Go 1.23 起未被引用的 Ticker 也能被 GC 回收，Stop 不再是为帮助 GC 所必需。〔go1.26.4 src/time/tick.go:28-35〕
+
+**nil channel：把枯竭的分支从 select 里摘掉。**channel 类型变量的值为 nil 时，对它的接收和发送都会阻塞：`var c chan int` 之后 `<-c` 或 `c <- 1` 都会让 main goroutine 永久阻塞。〔TB33 p22-23〕这个特性用来收拾一类 select 事故。原文的例子：ch1 在 5s 后发 5 并 close，ch2 在 7s 后发 7 并 close，主循环 for+select 监听两个 case，用 ok1/ok2 标志两者都收到后才 break，预期输出 5、7 后退出。实际时间线是：〔TB33 p23-24〕
+
+1. 前 5s 两个 channel 都无数据，select 阻塞；
+2. 第 5s ch1 发来 5 后被 close，select 选中 `case x := <-ch1` 输出 5，回到 for 重新 select；
+3. 从已关闭的 channel 接收永远不会阻塞，新一轮 select 又选中这个分支，拿到元素类型的零值 0，循环输出 0（0 值风暴）；
+4. 第 7s ch2 发来 7，某轮 select 选中该分支输出 7，退出条件满足，程序终止。
+
+改进：case 改为 comma-ok 形式，当 ok=false（channel 已关闭）时显式将该 channel 置为 nil，对一个 nil channel 的获取操作会阻塞、永远不会就绪，于是这个 case 从此再也不会被 select 选中；退出条件相应改写为 `ch1 == nil && ch2 == nil`：〔TB33 p24-25〕
+
+```go
+// 翻车版：ch1 关闭后，这个分支永远就绪，反复读出零值
+case x := <-ch1:
+	ok1 = true
+	fmt.Println(x)
+
+// 改进版：comma-ok 判定关闭后置 nil
+case x, ok := <-ch1:
+	if !ok {
+		ch1 = nil // 已关闭：置 nil，让这个分支从此不再被选中
+	} else {
+		fmt.Println(x)
+	}
+```
+
+注意置 nil 不是关闭 channel：close 的语义、"谁发送谁关闭"的惯例都不变，这里只是利用"nil channel 收发皆阻塞"把 select 中已枯竭的分支永久摘除，避免已关闭 channel"永不阻塞接收零值"的特性劫持 select。〔TB33 p24-25〕改进后输出 5、7、program end，与预期相符。
+
+至此本节的并发工具箱闭环：active 是计数信号量，run 的 for+select 是管理循环的惯用法，Schedule 的 select+quit 是非阻塞检视加哨兵错误，nil channel 一招在"多路汇聚、逐路枯竭"的场景里止住 0 值风暴。剩下两块工程化拼图在后面两节：errgroup 给 WaitGroup 补上错误传递、失败取消与并发上限（§四）；优雅关停的信号处理与超时兜底（§六）。
 
 ## 四、errgroup：带错误、带取消、带上限的 WaitGroup
 
