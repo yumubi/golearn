@@ -1,6 +1,6 @@
 # 09 泛型：该用的地方，和绕不过的限制
 
-> 详细程度：标准 · 约 60 分钟
+> 详细程度：标准 · 约 80 分钟
 > 材料：TBX04、TBX05、TBX01 · 旧长版：`notes/p33-generics-boundary.md`、`notes/p8-fast-track.md`
 > 前置：你写过 Java/Rust/TS 中任意一门的泛型或模板代码
 

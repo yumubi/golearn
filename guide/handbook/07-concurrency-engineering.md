@@ -1,6 +1,6 @@
 # 07 并发二：context、pipeline、worker pool、errgroup 与优雅关停
 
-> 详细程度：深入 · 约 60 分钟
+> 详细程度：深入 · 约 90 分钟
 > 材料：TB09、TB33、TB35、`C:dachang/concurrence`、`C:go_basic/concurrence` · 旧长版：`notes/p14-pipelines.md`、`notes/p3-concurrency.md`
 > 前置：06 并发一（channel 四态、select、sync 选型、泄漏）
 

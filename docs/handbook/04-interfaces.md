@@ -1,11 +1,6 @@
----
-title: 04 接口与组合：Go 用来代替继承的全套工具
----
-
 # 04 接口与组合：Go 用来代替继承的全套工具
 
-
-> 详细程度：深入 · 约 70 分钟
+> 详细程度：深入 · 约 95 分钟
 > 材料：TB24 到 TB30 · 旧长版：`notes/p2-lang-core.md`、`notes/p30-methods-interfaces.md`
 > 前置：你写过 Java/Kotlin/Rust/TS 中任意一门的面向对象或 trait 代码
 

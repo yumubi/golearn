@@ -1,6 +1,6 @@
 # 03 类型与数据：值语义、切片、map、字符串与结构体
 
-> 详细程度：标准 · 约 45 分钟
+> 详细程度：标准 · 约 70 分钟
 > 材料：TB10 到 TB17、TB11、TB14 · 旧长版：`notes/p1_5-basics.md`
 > 前置：01 Go 的世界观
 
@@ -188,12 +188,86 @@ func main() {
 
 ## 三、map
 
-map 是无序的键值对，用 key 唯一关联到一个 value。四条规则直接记住：
+map 是 Go 提供的抽象数据类型，表示一组无序的键值对，集合中每个 key 唯一，用途是把一个 value 唯一关联到特定的 key，实现按键的快速查找与更新。〔TB16 p1-2〕很多中文书把它译作映射、哈希表或字典，本手册保留英文名 map。它是继切片之后，第二个由 Go 编译器与运行时联合实现的复合数据类型：内部实现复杂，给开发者的接口却简单友好。〔TB16 p2〕类型写作 `map[key_type]value_type`，key 与 value 的类型可以相同（`map[string]string`），也可以不同（`map[int]string`）。两个 map 类型只有 key 元素类型相同、value 元素类型也相同，才算同一个 map 类型，否则就是不同的 map 类型。〔TB16 p3〕照这条规则检查 `map[string]string`、`map[int]string`、`map[string]int`：前两个 key 类型不同（string 与 int），后两个 key、value 类型都不同，三个互不相同。四条规则直接记住：
 
 - key 必须支持 `==` 比较，切片、map、函数不能当 key。〔TB16 p3〕
 - `v := m[k]` 查不到返回零值；要区分"不存在"和"值恰为零"，用 `v, ok := m[k]`。〔TB16 p8-9〕
 - 遍历顺序不保证，而且运行时故意让每次遍历的起点随机，逻辑绝不能依赖遍历顺序；要稳定顺序，先把 key 取出来排序。〔TB16 p9-12〕
 - map 变量本身只是一个指向运行时结构的描述符（材料称它是引用类型），传参只拷贝描述符，函数内的修改调用方可见。〔TB16 p12〕
+
+**键的约束**。map 对 value 的类型没有任何限制，但对 key 的类型却有严格要求：map 要保证 key 的唯一性，要保证唯一，就得能比较任意两个 key 是否相同，所以 key 的类型必须支持 `==` 和 `!=` 两种比较操作符。〔TB16 p3〕但 Go 里函数类型、map 类型自身，以及切片类型只支持与 nil 比较，不支持同类型两个变量之间的比较：
+
+```go fail
+s1 := make([]int, 1)
+s2 := make([]int, 2)
+f1 := func() {}
+f2 := func() {}
+m1 := make(map[int]string)
+m2 := make(map[int]string)
+println(s1 == s2) // 错误：invalid operation: s1 == s2 (slice can only be compared to nil)
+println(f1 == f2) // 错误：invalid operation: f1 == f2 (func can only be compared to nil)
+println(m1 == m2) // 错误：invalid operation: m1 == m2 (map can only be compared to nil)
+```
+
+带 `fail` 标记的代码块是特意不让它通过编译的示例，三行 println 各自触发一条错误。这三种类型连"两个值是否相同"都答不了，map 也就无法用它们判重，所以函数类型、map 类型自身，以及切片类型不能作 map 的 key 类型。〔TB16 p3〕字段全部可比较的结构体也行，项目里的 DNS 缓存就是这么做的：`dnsproxi-go/cache/cache.go` 第 40-43 行定义了 `type Key struct{Name string; Type uint16}`，三张 map 都拿它当 key。
+
+**nil 零值与两种初始化**。只声明、不赋初值的 map 变量，默认值是 nil。nil 切片可以借助 append 从零值直接生长，这种类型称为"零值可用"；map 因为内部实现的复杂性，做不到零值可用：对处于零值状态的 map 变量直接进行操作，会导致运行时异常（panic），进程异常退出：
+
+```go
+var m map[string]int
+m["key"] = 1 // panic: assignment to entry in nil map
+```
+
+为什么读没事、写就 panic，第一节已经从哈希表的角度解释过：写要往哈希表里插槽，nil map 连表都没有。显式初始化有两种方式。方式一，复合字面值：`m := map[int]string{}`。此时变量 m 虽然没有任何键值对，但不等同于初值为 nil 的 map 变量，往里插入键值对不会引发运行时异常。方式二，make：可以指定键值对的初始容量提示，如 `make(map[int]string, 8)`，但 make 没法同时进行具体键值对的赋值。容量提示不是上限：键值对数量超过初始容量后，Go 运行时会自动增加 map 的容量，保证后续键值对的正常插入。〔TB16 p4-6〕
+
+**comma ok 惯用法**。map 更多用在查找和读取场合。直接 `v := m[key]` 查询，若键不存在（哪怕 map 是空的），这行代码不报错，v 会被赋予 value 元素类型的零值（这里 int 是 0），拿到 0 之后，你无法区分它究竟是"键不存在返回的零值"，还是"键存在、它对应的 value 本来就是 0"。正确姿势是 comma ok 惯用法 `v, ok := m[key]`：ok 为 true 时键存在，v 被正确赋为该键对应的 value；ok 为 false 时键不存在，v 只是一个无意义的零值。只关心键是否存在、不关心 value，用空标识符忽略第一个返回值：
+
+```go
+m := map[string]int{"b": 1}
+
+v, ok := m["b"] // ok 为 true：键存在，v 被正确赋为 1
+fmt.Println(v, ok)
+
+v, ok = m["c"] // ok 为 false：键不存在，v 只是无意义的零值
+fmt.Println(v, ok)
+
+_, ok = m["b"] // 只关心键是否存在，用空标识符忽略 value
+fmt.Println(ok)
+```
+
+```text
+1 true
+0 false
+true
+```
+
+原课的叮嘱值得原样记住：在 Go 语言中，请使用"comma ok"惯用法对 map 进行键查找和键值读取操作。〔TB16 p8-9〕项目里 `Cache.Get` 就是这么写的：`dnsproxi-go/cache/cache.go` 第 112-115 行先 `e, ok := c.m[k]`，再 `if !ok || e.Expired() { return nil, false }`，ok 为 false 直接当未命中处理。
+
+**传参只拷贝描述符**。map 和切片一样是引用类型。map 变量作为参数传给函数或方法时，实质传递的只是一个"描述符"，而不是整个 map 的数据拷贝，所以传递的开销是固定的，而且也很小：不管 map 里有一对还是一百万对键值，传的都是同一个描述符。〔TB16 p12〕描述符指向的数据没有拷贝，所以函数内部对 map 参数的修改在函数外部可见：
+
+```go
+package main
+
+import "fmt"
+
+func foo(m map[string]int) {
+	m["key1"] = 11
+	m["key2"] = 12
+}
+
+func main() {
+	m := map[string]int{
+		"key1": 1,
+		"key2": 2,
+	}
+
+	fmt.Println(m) // map[key1:1 key2:2]
+	foo(m)
+	fmt.Println(m) // map[key1:11 key2:12]
+}
+```
+
+这个描述符有名字：语法层的 map 变量一一对应一个 `runtime.hmap` 实例，hmap 是 map 的头部结构，存储后续 map 操作所需的全部信息。〔TB16 p14〕foo 拿到的副本描述符和调用方指向同一个运行时实例，改动自然穿透函数边界。
 
 map 不支持在缺少同步时并发读写或并发写。运行时有时会检测到并以 `fatal error` 终止进程，但检测并不保证覆盖所有竞争；即使没有报错，代码仍不安全。要加锁或使用适合场景的 `sync.Map`（并发章详述）。
 
@@ -232,9 +306,59 @@ func main() {
 
 ## 五、结构体、定义类型与别名
 
-结构体把多个字段聚合成一个实体。在定义结构体之前，先分清自定义类型的两种写法：`type T S` 定义一个新类型，与 `S` 是两个类型，只有底层类型相同才能显式转换；`type T = S` 是别名，完全等价，多用在大规模渐进式重构时给类型改名。〔TB17 p2-5〕比如 `type MyInt int` 和 `int` 底层类型相同，能 `int(x)` 互转，但 `type MyInt string` 和 `int` 底层类型不同，`int(x)` 直接编译不过。
+结构体把多个字段聚合成一个实体。在定义结构体之前，先分清 Go 自定义新类型的两种写法。
 
-初始化结构体推荐带字段名 `T{Field: v}`：顺序无关，以后新增字段不会破坏旧代码；常写 `T{}` 而少用 `new(T)`。〔TB17 p13-14〕空结构体 `struct{}` 占 0 字节，常拿来做 channel 里的"事件"信号，只传信号不传数据。〔TB17 p6-7〕结构体不能递归包含自身，除非通过指针、切片、map 间接包含。〔TB17 p8-9〕
+第一种是类型定义（Type Definition），也是最常用的：用关键字 `type` 定义一个新类型 T，形式 `type T S`。S 可以是任何一个已定义的类型，既包括 Go 原生类型，也包括其他已定义的自定义类型：先 `type T1 int`，再 `type T2 T1`，T2 就是基于 T1 再定义的新类型。类型定义得到的是与 S 不同的新类型。〔TB17 p2〕判断"不同类型能否互转"要看**底层类型**，而不是类型名：新类型基于某个 Go 原生类型定义时，该原生类型就是它的底层类型（T1 的底层类型是 int）；基于自定义类型定义时，就沿用其定义基础的底层类型：T2 基于 T1，所以 T2 的底层类型也是 int。〔TB17 p2-3〕底层类型被用来判断两个类型本质上是否相同（Identical）：T1 与 T2 是不同类型，但底层类型同为 int，本质相同；本质相同的两个类型，变量可以通过显式转型相互赋值；本质不同的两个类型，变量间连显式转型都不可能，更不要说相互赋值了：
+
+```go
+type T1 int
+type T2 T1
+type T3 string
+
+func main() {
+	var n1 T1
+	var n2 T2 = 5
+	n1 = T1(n2) // ok
+
+	var s T3 = "hello"
+	n1 = T1(s) // 错误：cannot convert s (type T3) to type T1
+}
+```
+
+类型定义还可以基于类型字面值，多用于自定义新的复合类型，比如 `type M map[int]string`、`type S []string`；多条类型定义也可以像 var 块那样放进一个 type 块聚合书写。〔TB17 p3-4〕
+
+第二种是类型别名（Type Alias）：`type T = S`，只比类型定义多一个等号。正是这个等号让 T 与 S 完全等价：别名没有定义出新类型，T 与 S 实际上就是同一种类型的两个名字，互相赋值不需要转型：
+
+```go
+type T = string
+
+var s string = "hello"
+var t T = s // ok：同一种类型的两个名字，直接赋值
+fmt.Printf("%T\n", t) // string
+```
+
+别名的典型使用场景是项目的渐进式重构和对已有包的二次封装；两种写法差一个等号，差别就在是否产生新类型上。〔TB17 p4〕
+
+初始化结构体推荐带字段名 `T{Field: v}`：顺序无关，以后新增字段不会破坏旧代码；常写 `T{}` 而少用 `new(T)`。〔TB17 p13-14〕
+
+空结构体是不包含任何字段的结构体类型：`type Empty struct{}`。`unsafe.Sizeof` 对空结构体变量输出 0，即空结构体类型变量的内存占用为 0：
+
+```go
+type Empty struct{} // Empty 是一个不包含任何字段的空结构体类型
+var s Empty
+println(unsafe.Sizeof(s)) // 0
+```
+
+基于零内存开销的特性，日常开发常用空结构体类型元素作为一种"事件"信息在 Goroutine 之间通信，要传的只是"某件事发生了"这个信号，不携带数据：
+
+```go
+var c = make(chan Empty) // 声明一个元素类型为 Empty 的 channel
+c <- Empty{}             // 向 channel 写入一个"事件"
+```
+
+以空结构体为元素类型的 channel，是目前能实现的、内存占用最小的 Goroutine 间通信方式：事件本身零字节，不必为"信号值"分配任何内存。〔TB17 p6-7〕项目里有两处现成的例子：`dnsproxi-go/tcp/server_test.go` 第 48-51 行 `done := make(chan struct{})`，`Serve` 返回后 `close(done)`；`dnsproxi-go/main.go` 第 255 行用同一个模式通知后台过期回收器退出。
+
+结构体不能递归包含自身，除非通过指针、切片、map 间接包含。〔TB17 p8-9〕
 
 最后是字段顺序影响大小这件事，很多人第一次听说时会愣一下：
 
