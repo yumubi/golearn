@@ -97,6 +97,45 @@ func main() {
 
 类型实参大多能由编译器从实参推断出来，所以通常不用写 `Sum[int](...)`，写 `Sum(1, 2, 3)` 就行。`MyInt` 能传进去，靠的是约束里的 `~`：`MyInt` 底层类型是 `int`，`~int` 把它框了进来；去掉波浪线，`MyInt` 就进不去。〔TBX05 p11-12〕下一节细看这一点。
 
+### 具化与调用：一台"排序机器"的生产过程
+
+带类型参数的函数怎么从声明变成一次真正的调用？原课用 `Sort` 函数走了一遍完整流程：〔TBX05 p12-13〕
+
+```go
+func Sort[Elem interface{ Less(y Elem) bool }](list []Elem) {
+}
+
+type book struct{}
+
+func (x book) Less(y book) bool {
+	return true
+}
+
+func main() {
+	var bookshelf []book
+	Sort[book](bookshelf) // 泛型函数调用
+}
+```
+
+原课的结论：`Sort[book](bookshelf)` 这样的泛型函数调用分两个阶段，先具化（instantiation），后调用（invocation）。〔TBX05 p12-13〕具化好比一家生产"排序机器"的工厂，按要排序对象的类型把机器生产出来，分三步：〔TBX05 p13〕
+
+1. **工厂接单**：`Sort[book]`，发现要排序的对象类型是 `book`。
+2. **模具检查与匹配**：检查 `book` 是否满足模具的约束要求，也就是有没有实现约束定义中的 `Less` 方法。满足，就把它作为类型实参替换 `Sort` 函数中的类型形参；不满足，编译器就会报错。
+3. **生产机器**：把泛型函数 `Sort` 具化为一个新函数，起名 `booksort`，函数原型是 `func([]book)`。本质上就是 `booksort := Sort[book]`。
+
+注意失败发生的时机：`book` 没实现 `Less` 的话，卡在第二步"模具检查与匹配"，编译器直接报错，可执行程序根本不会产生。机器生产出来后进入第二阶段调用，这和普通函数调用没有区别：只需检查传入的实参 `bookshelf` 的类型，与 `booksort` 函数原型中的形参类型 `[]book` 是否匹配。〔TBX05 p13〕用伪代码概括两个阶段：〔TBX05 p13〕
+
+```text
+Sort[book](bookshelf)
+
+<=>
+
+具化：booksort := Sort[book]
+调用：booksort(bookshelf)
+```
+
+如果每次调用都要显式写 `Sort[book](bookshelf)`，和普通函数相比就繁琐了不少。好在 Go 编译器会根据传入的实参变量自动推导类型实参（Argument type inference），所以上面这个例子直接写 `Sort(bookshelf)` 就可以；有了自动推导，大多数泛型函数的调用方式与常规函数调用一致，不给 Gopher 带去额外的代码编写负担。〔TBX05 p13-14〕
+
 类型本身也能带参数，叫泛型类型。`type Set[T comparable] map[T]struct{}` 就是一个用 map 实现的集合，`comparable` 是 Go 内置的约束，表示"可以做 map 键、能比较相等的类型"。方法里能直接引用 `T`，但方法自己不能再加类型参数，这是第三节的限制一。〔TBX05 p14-15〕
 
 ```go
@@ -123,13 +162,45 @@ main.Vector[int]{1, 2, 3, 4}
 main.Vector[string]{"a", "b", "c", "d"}
 ```
 
-`Vector[int]` 和 `Vector[string]` 是两个不同的实例化类型，底层分别是 `[]int` 和 `[]string`，都可以调用 `Dump`。编译器如何共享或生成机器码属于实现细节，不应作为语言保证。
+`Vector[int]` 和 `Vector[string]` 是两个不同的实例化类型，底层分别是 `[]int` 和 `[]string`，都可以调用 `Dump`。使用泛型类型同样遵循先具化、再使用的顺序：先显式用类型实参对泛型类型具化，得到 `Vector[int]` 和 `Vector[string]`，再对具化后的类型进行操作。〔TBX05 p14-15〕编译器如何共享或生成机器码属于实现细节，不应作为语言保证。原课排序示例使用的 `golang.org/x/exp/slices` 已在 1.21 转正为标准库 `slices`，现行 `Sort[S ~[]E, E cmp.Ordered]` 就是泛型函数，具化与类型推导机制本身没有变化。〔实测：/Users/akka/Toolchain/go/current/src/slices/sort.go:15-19〕
 
 ## 二、`~` 和类型集合：约束能框住谁
 
 上一节那句"底层类型是它"值得展开，它是 Go 约束里最容易踩空的点。一个约束的本质是它定义了一个**类型集合**，只有落在这个集合里的类型才算满足约束。〔TBX05 p11-12〕
 
 `int` 在约束里写的是"类型恰好是 `int`"；`~int` 写的是"底层类型是 `int` 的一切类型"，包括 `int` 自己，也包括 `type MyInt int` 这类自定义类型。所以同一个 `Sum`，约束里写 `int` 只收 `int` 本身，写 `~int` 才连 `MyInt` 这类自定义类型一起收。想传 `MyInt` 就必须写 `~int`。
+
+### 一个约束可以同时要类型和方法：满足性要过两关
+
+约束接口不只装类型列表。原课给了一个同时声明两者的约束，正好用来把"满足"说精确：〔TBX05 p11-12〕
+
+```go
+type C1 interface {
+	~int | ~int32
+	M1()
+}
+
+type T struct{}
+
+func (T) M1() {}
+
+type T1 int
+
+func (T1) M1() {}
+
+func foo[P C1](t P) {}
+
+func main() {
+	var t1 T1
+	foo(t1) // 通过
+	var t T
+	foo(t) // 编译报错：T does not satisfy C1
+}
+```
+
+`C1` 声明了一个方法 `M1`，以及两个可用作类型实参的类型（`~int | ~int32`），类型列表中的多个类型用 `|` 分隔。`T` 和 `T1` 都实现了 `M1`，但 `T` 的底层类型是 `struct{}`，`T1` 的底层类型是 `int`。判定要过两关：`T` 过了方法集合这一关，却因底层类型不是 `int` 或 `int32` 而不满足类型列表这一关，`foo(t)` 在编译阶段报错；`T1` 两关都过，是合法的类型实参。〔TBX05 p11-12〕
+
+这背后是一条统一规则：类型实参 `T` 满足约束 `C`，当且仅当 `T` 是 `C` 定义的类型集合中的一个元素。〔实测：/Users/akka/Toolchain/go/current/doc/go_spec.html:2753-2762〕约束必须是接口这一点也是规范条款：类型约束是一个定义了"哪些类型实参可用"的接口。〔实测：/Users/akka/Toolchain/go/current/doc/go_spec.html:2693-2699〕原课写作年代更早，记录的报错是 `T does not implement C1`；现行 go1.26.4 在约束语境里把措辞从 implement 换成了 satisfy，拒绝的时机和原因没有变。〔实测：/Users/akka/Toolchain/go/current/src/go/types/instantiate.go:240-257〕
 
 反过来，一个类型不满足约束时，报错会把"缺谁"点出来：
 
@@ -159,13 +230,41 @@ string does not satisfy Number (string missing in ~int | ~float64)
 
 `string` 既不是 `~int` 也不是 `~float64`，编译器直接拒绝。这就是泛型相比老办法（`interface{}` 参数加运行时类型断言）的核心收益：错误从运行期提前到了编译期，还不用写一堆 `switch v.(type)`。
 
+组织上有一条原课建议：做约束的接口类型与做传统接口的接口类型最好分开定义，除非约束真的既需要方法集合，也需要类型列表。〔TBX05 p11-12〕原因在下一节就能看到：混用之后，这个接口拿去当普通类型用会直接编译报错。
+
 ## 三、三个绕不过的限制和绕法
 
-下面三条来自对泛型中间件一年多的实践，是判断"这里能不能用泛型"的关键。〔TBX04 p2-5〕其中限制一和限制三的报错，本机 go1.26.4 上复现过，信息如下。
+下面三条来自对泛型中间件一年多的实践，是判断"这里能不能用泛型"的关键：〔TBX04 p2〕接口和结构体不支持泛型方法；泛型约束不能作为类型声明；泛型约束只能是接口，而不能是结构体。〔TBX04 p2〕先补一句容易误解的区分：接口或结构体本身可以是泛型（类型级参数允许），被禁的只是它们的方法再携带类型参数。〔TBX04 p2〕
 
 ### 限制一：方法不能有类型参数
 
-想给 ORM、HTTP、Redis 这类客户端写一个 `Get[T any]` 方法，让调用方写 `client.Get[User](url)`，直接编译不过：〔TBX04 p2-5〕
+原课从 ORM 一步步推出这条限制。没有泛型时，操作任意类型的接口只能用 `interface{}`：
+
+```go
+type Orm interface {
+	Insert(data ...interface{}) (sql.Result, error)
+}
+```
+
+问题出在混用：用户可以写 `Insert(&User{}, &Order{})`，插入失败而编译器无法检测。〔TBX04 p2-3〕ORM 真正想要的是把 `data` 限制为单一类型的多个实例，于是有了第一条改造路线，把类型参数声明在接口上：
+
+```go
+type Orm[T any] interface {
+	Insert(data ...T) (sql.Result, error)
+}
+```
+
+这样 `T` 确实保证了传入的都是同一个类型的不同实例，但每种模型都要一个实例：插 `User` 声明 `var userOrm Orm[User]`，插 `Order` 声明 `var orderOrm Orm[Order]`。应用有多少个模型，就要声明多少个 `Orm` 实例，这显然不可接受：`Orm` 应该是一个可以操作任意模型的接口，一个实例既能操作 `User` 也能操作 `Order`。所以类型参数不能声明在接口上。〔TBX04 p3〕
+
+第二条路线是声明在方法上：
+
+```go
+type Orm interface {
+	Insert[T any](data ...T) (sql.Result, error)
+}
+```
+
+乍看完全达标，用户只需 `orm.Insert[*User](&User{}, &User{})`。但一编译就被拦下，原文记录的报错是 `interface method cannot have type parameters`。〔TBX04 p3-4〕结构体方法同样被禁，原文记录的报错是 `invalid AST: method must have no type parameters`：〔TBX04 p4〕
 
 ```go fail
 package main
@@ -184,9 +283,11 @@ func main() {}
 method must have no type parameters
 ```
 
-接口和结构体本身可以是泛型（`Orm[User]`、`Orm[Order]`），但类型参数放在类型上，应用里有多少模型就要声明多少个实例；放在方法上，直接编译不过。客户端类库最想要的 `client.Get[User](url)` 写不出来。〔TBX04 p2-5〕
+现行 go1.26.4 的两条报错略有变化：接口方法报 `interface method must have no type parameters`；结构体方法去掉了 `invalid AST` 前缀，只剩 `method must have no type parameters`。〔实测：/Users/akka/Toolchain/go/current/src/cmd/compile/internal/syntax/parser.go:1814-1816〕〔实测：/Users/akka/Toolchain/go/current/src/cmd/compile/internal/syntax/parser.go:1465-1467〕这不是编译器实现偷懒，规范里方法声明的文法本来就没有类型参数列表的位置，receiver 上的类型参数只是泛型基类型对应参数的占位。〔实测：/Users/akka/Toolchain/go/current/doc/go_spec.html:2980-2991〕〔实测：/Users/akka/Toolchain/go/current/doc/go_spec.html:3033-3039〕
 
-**绕法：把类型参数挪到一个辅助类型上**。类型参数不能挂在方法上，但能挂在结构体上，于是把"请求"做成一个泛型 builder，类型参数落在 builder 上：〔TBX04 p9-10〕
+被禁的 API 形态恰恰是客户端类中间件最想要的。原课举的是 HTTP 客户端 `type HttpClient interface { Get[T any](url string) (T, error) }`，期望 `client.Get[User]("/user/123")` 直接得到 `User` 实例；缓存客户端同样想要 `type CacheClient interface { Get[T any](key string) (T, error) }`，它们都无法通过编译。〔TBX04 p4-5〕原文的定性是：这个限制对所有的客户端类应用都很不友好，这些客户端包括 Redis、Kafka 等各种中间件，也包括 HTTP、ORM 等框架。〔TBX04 p5〕逻辑也好理解：被禁的正是"调用方指定返回类型"的 API（`Get[T]` 返回 `T`），客户端类中间件正是这类 API 的主要需求方，所以杀伤最大。〔TBX04 p4-5〕
+
+**绕法：Builder 模式，把类型参数挪到一个辅助类型上**。类型参数不能挂在方法上，但能挂在结构体上，于是把"请求"做成一个泛型 builder，类型参数落在 builder 上：〔TBX04 p9-10〕
 
 ```go
 package main
@@ -225,9 +326,66 @@ http://api/user/1
 
 API 从想象中的 `client.Get[User](url)` 变成 `NewGet[User](client, path, decoder).Do()`；类型参数落在 `GetReq` 和 `NewGet` 上，绕开了方法不能声明额外类型参数的限制。这里的 `Do` 只是拼接字符串并调用回调，**没有发起 HTTP 请求**；真实客户端还需要处理网络、解码和错误。
 
+原课的 Builder 版本结构相同，值得照着看一遍调用流程和角色分工：〔TBX04 p9〕
+
+```go
+type HttpClient struct {
+	endpoint string
+}
+
+type GetBuilder[T any] struct {
+	client *HttpClient
+	path   string
+}
+
+func (g *GetBuilder[T]) Path(path string) *GetBuilder[T] {
+	g.path = path
+	return g
+}
+
+func (g *GetBuilder[T]) Do() T {
+	// 真实发出 HTTP 请求
+	url := g.client.endpoint + g.path
+}
+```
+
+原课示例的边界要如实交代：第一版 `Do()` 的正文只有 `url := g.client.endpoint + g.path` 一行，注释虽写着"真实发出 HTTP 请求"，代码里既没有请求逻辑也没有返回值，这个版本不能编译运行。真正发请求的版本在下一页的变体里：〔TBX04 p10〕
+
+```go
+func (g *GetBuilder[T]) Do() T {
+	var t T
+	g.client.get(g.path, &t)
+	return t
+}
+```
+
+完整调用流程是 `NewGetRequest[User](client).Path("/user/123").Do()`：构造函数返回初始 Builder，`Path` 链式设置路径并返回自身，`Do` 执行动作拿到 `T`。原课指出两者最大的不同在于 `NewGetRequest` 是一种过程式的设计：Builder 之下，`HttpClient` 被视作各种配置的载体，而不是一个真实发出请求的客户端；也可以反过来，把 `HttpClient` 做成真的客户端，而把 `GetBuilder` 看成一层泛型的皮。〔TBX04 p10〕有 Java 之类面向对象背景会不习惯这种写法，但无论哪一种，本质上都是过程式写法，核心都是 Client + Builder，将来设计客户端中间件时可以尝试这个思路。〔TBX04 p9-10〕
+
 ### 限制二：含类型项的接口不能当普通值类型
 
 想限制一个接口只接受几种特定类型（比如 SQL Builder 的 `Select` 只收 `string` 和 `Aggregate` 两种列），有人会想用约束当参数类型：〔TBX04 p7-8〕
+
+先把问题摆出来。`Select` 最基本的设计是直接收 `string` 列名，但这样用户想用聚合函数就得自己拼接 `Select("AVG(age)")`；于是中间件会提供 `Avg(col string)` 加 `As(alias)` 帮用户把聚合函数变成方法调用，期望的用法是 `Select(Avg("age").As("avg_age"), "name")`。这时 `Select` 必须同时接收 `string` 和 `Aggregate` 两种输入，而它们没有共同接口。〔TBX04 p5-6〕没有泛型时大多数时候用 `interface{}` 参数加 switch-case 判断：
+
+```go
+func (s *Selector) Select(cols ...interface{}) *Selector {
+	for _, col := range cols {
+		switch c := col.(type) {
+		case string:
+			s.columns = append(s.columns, Aggregate{col: c})
+		case Aggregate:
+			s.columns = append(s.columns, c)
+		default:
+			panic("invalid type")
+		}
+	}
+	return s
+}
+```
+
+这个旧方案有两个只能到运行期才暴露的错误：类型对不对，要到运行期 default 分支 panic 时才知道；漏写展开也一样，本意是传一个 `var cols []string`，结果写成 `Select(cols)` 而不是 `Select(cols...)`，同样运行期 panic，编译器丝毫帮不上忙。〔TBX04 p7〕
+
+自然的泛型设想是把联合约束同时用作参数类型和字段类型，既拿到编译期检查又消灭 panic：
 
 ```go fail
 package main
@@ -249,7 +407,7 @@ func main() {}
 cannot use type Selectable outside a type constraint: interface contains type constraints
 ```
 
-含类型项的非基本接口只能作为约束，不能作为普通参数类型；只包含方法的基本接口则既可作值类型也可作约束。泛型函数可以限制同一个类型参数的输入，但不能用这个约束直接创建同时容纳 `string` 和 `Aggregate` 的异构参数列表。〔TBX04 p7-8〕
+含类型项的非基本接口只能作为约束，不能作为普通参数类型；只包含方法的基本接口则既可作值类型也可作约束。〔实测：/Users/akka/Toolchain/go/current/doc/go_spec.html:1556-1558〕原文由此得出的结论是：泛型约束不能被用于做参数，它只能和泛型结合在一起使用，这就导致我们并不能用泛型的约束来解决某个接口可以处理有限多种类型输入的问题。所以长期来看，`interface{}` 这种参数类型还会广泛存在于所有中间件的设计中。〔TBX04 p8〕泛型函数可以限制同一个类型参数的输入，但不能用这个约束直接创建同时容纳 `string` 和 `Aggregate` 的异构参数列表。〔TBX04 p7-8〕
 
 **绕法：标记接口**。用一个带私有方法的接口当"准入标记"：〔TBX04 p10-11〕
 
@@ -265,17 +423,28 @@ func (Aggregate) aggr() {}
 func (s *Selector) Select(cols ...Selectable) *Selector
 ```
 
-空接口允许任何类型，不能限制输入。未导出方法让其他包无法自行声明同一个包私有方法，但其他包仍可能通过嵌入该接口或已有实现来满足接口，所以这不是严格封闭的类型枚举。代价是普通列要写成 `Select(Column("name"))`。
+空接口允许任何类型，不能限制输入，所以标记接口必须至少声明一个私有方法。〔TBX04 p10-11〕未导出方法让其他包无法自行声明同一个包私有方法，但其他包仍可能通过嵌入该接口或已有实现来满足接口，所以这不是严格封闭的类型枚举。代价是普通列要写成 `Select(Column("name"))`，不过相比接收 `interface{}` 的旧方案，至少拿到了编译器对类型的检查。〔TBX04 p11〕
 
 ### 限制三：嵌入结构体不形成子类型约束
 
-业务里常见需求：ORM 的 `Insert` 只接受嵌入了 `BaseEntity`（共享字段和公共方法）的实体。自然会想写 `func Insert[E BaseEntity](e *E)`，让所有嵌入 `BaseEntity` 的实体通过，行不通：〔TBX04 p8-9〕
+业务里常见需求：ORM 的 `Insert` 只接受嵌入了 `BaseEntity`（共享字段和公共方法）的实体。原课的设想是利用 Go 的组合特性，用泛型约束限制实体必须组合了承载公共字段 `Id int64` 与公共方法的 `BaseEntity`：〔TBX04 p8〕
 
-```text
-in call to Insert, E (type User) does not satisfy BaseEntity
+```go
+type BaseEntity struct {
+	Id int64
+}
+
+func Insert[Entity BaseEntity](e *Entity) {}
+
+type myEntity struct {
+	BaseEntity
+	Name string
+}
 ```
 
-约束可写具体类型，`[E BaseEntity]` 相当于只接受 `BaseEntity` 本身，并非接受所有嵌入它的结构体。嵌入不会建立子类型关系；Go 也没有直接表达“包含某个字段”的通用约束。〔TBX04 p8-9〕
+行不通。Go 泛型约束必须是一个接口，而不能是结构体，原文记录的报错是 `myEntity does not implement BaseEntity`。〔TBX04 p8〕作者自己指出这个报错并不准确，更准确的信息应该指出 `BaseEntity` 只能为接口。现行 go1.26.4 的报错已经改准确了：约束的底层类型不是接口时，报 `does not satisfy` 加括号说明 `is not an interface`，不再出现误导性的 implement 措辞。〔实测：/Users/akka/Toolchain/go/current/src/go/types/instantiate.go:240-257〕规范条款本身未变：类型约束是接口。〔实测：/Users/akka/Toolchain/go/current/doc/go_spec.html:2693-2699〕
+
+从机制上看，`[E BaseEntity]` 相当于只接受 `BaseEntity` 本身，并非接受所有嵌入它的结构体；嵌入不会建立子类型关系，Go 也没有直接表达"包含某个字段"的通用约束。〔TBX04 p8-9〕这个限制直接堵死了设计共享字段的泛型方法的道路，因为约束拿不到字段。〔TBX04 p8〕影响面也不对称：对业务开发的影响大于对中间件开发，因为业务开发会经常遇到必须共享某些数据的场景，例如这里的 ORM 实体，还有前端接收参数的场景等。〔TBX04 p8-9〕
 
 **绕法：Getter/Setter 接口**。把共享字段提取成方法，约束写成接口，再配合嵌入一个 `BaseEntity` 让每个实体不用重复实现：〔TBX04 p11-12〕
 
@@ -298,7 +467,15 @@ type User struct {
 func Insert[E Entity](e E) {}
 ```
 
-约束写成 `Entity` 接口，`User` 通过嵌入 `BaseEntity` 拿到 `Id`/`SetId`，就能作为 `Insert[*User](u)` 的实参。代价是 Go 习惯直接访问字段，这里被迫给每个共享字段加一对方法，不优雅但管用。〔TBX04 p11-12〕
+约束写成 `Entity` 接口，`User` 通过嵌入 `BaseEntity` 拿到 `Id`/`SetId`，就能作为 `Insert[*User](u)` 的实参；通过组合 `BaseEntity`，解决了所有结构体都要实现一遍 `Entity` 接口的问题。〔TBX04 p11-12〕代价是 Go 习惯直接访问字段，这里被迫给每个共享字段加一对方法，不优雅但管用。〔TBX04 p11-12〕
+
+### 收束：三条限制对应三条绕法，以及今天的核对
+
+原课的总结把两组东西对齐：三个限制（接口和结构体不支持泛型方法、泛型约束不能作为类型声明、泛型约束只能是接口）对应三个解决思路（Builder 模式、标记接口、Getter/Setter 接口）。〔TBX04 p12〕作者的自评是：这些解决思路只能算是效果不错，但是不够优雅，所以还是很期盼 Go 将来能够放开这种限制；在这三个约束之下，Go 泛型使用场景过于受限。〔TBX04 p12〕
+
+对中间件作者的建议分两层：对大多数中间件来说，可以使用泛型来提供对用户友好的 API，但是对于内部实现来说，使用泛型的收益非常有限；如果现在已有的代码风格就是过程式的，那么可以尝试用泛型将它完全重构。〔TBX04 p13〕对泛型的普及，作者的预判比较悲观：预计泛型从发布到大规模应用还有一段非常遥远的距离，甚至有些公司可能长时间为了保持代码风格统一而禁用泛型特性。〔TBX04 p13〕
+
+这个预判以 2026 年视角核对，标准库层面已经落空：go1.26.4 的标准库自带泛型的 `slices` 与 `maps` 包，`Sort[S ~[]E, E cmp.Ordered]` 就是标准库里的泛型函数。〔实测：/Users/akka/Toolchain/go/current/src/slices/sort.go:15-19〕〔实测：/Users/akka/Toolchain/go/current/src/maps〕但三大限制本身并没有放开：方法仍不能自带类型参数，约束仍必须是接口，含类型项的非 basic 接口仍只能作约束。〔实测：/Users/akka/Toolchain/go/current/src/cmd/compile/internal/syntax/parser.go:1814-1816〕〔实测：/Users/akka/Toolchain/go/current/src/cmd/compile/internal/syntax/parser.go:1465-1467〕〔实测：/Users/akka/Toolchain/go/current/doc/go_spec.html:2693-2699〕〔实测：/Users/akka/Toolchain/go/current/doc/go_spec.html:1556-1558〕"公司是否仍为风格统一而禁用泛型"没有可核对的运行数据，原课的悲观态度保留为作者当时的判断。
 
 ## 三点五、泛型落进真实数据结构：二分、堆、container/heap、Set
 
