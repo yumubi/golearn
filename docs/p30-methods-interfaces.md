@@ -45,7 +45,7 @@ $ go run .
 
 这种 `T.Get` 写法叫方法表达式。C++ 的 `this` 是编译器藏起来的，你写不出"把方法当函数用"的形态；Rust 的 `Type::method` 路径语法和 Go 几乎一致。
 
-看穿本质还能解一个旧坑。〔TB24 p9-11〕 的原题：`[]field` 里迭代调 `go v.print()`（指针 receiver），课程年代（Go 1.21 前）输出三个 "six"。等价变换是 `go (*field).print(&v)`：传的是循环变量 `v` 的地址，goroutine 延迟执行时读到循环末尾的值。Go 1.22 起 range 变量每轮新建，这个坑已经不存在。〔实测〕 用三元素 `field` 切片验证：go1.21.5 下跑三次都是 `three three three`，go1.26.4 下是 `one three two` 乱序（每次跑都可能不同）：
+看穿本质还能解一个旧坑。〔TB24 p9-11〕 的原题：`[]field` 里迭代调 `go v.print()`（指针 receiver），旧循环语义下多个 goroutine 可能读到最后一轮的值。等价变换是 `go (*field).print(&v)`：传的是循环变量 `v` 的地址。对声明于循环中的变量，Go 1.22 语言版本起每轮新建变量；若用 `=` 复用外部变量，仍须注意共享。〔实测〕 三元素切片在 go1.21.5 下三次都是 `three three three`，go1.26.4 下是 `one three two`（顺序不保证）：
 
 ```sh
 $ GOTOOLCHAIN=go1.21.5 go run .   # go.mod 写 go 1.21
@@ -152,7 +152,7 @@ vet: ./main.go:15:4: ambiguous selector s.M
 
 同签名交集（`A interface{ M() }`、`B interface{ M() }`）也一样报 ambiguous，1.14 放宽只作用于接口嵌接口的类型定义，选择子规则没变。
 
-- 一个测试妙用：`struct{ sql.Stmt }` 嵌入接口，伪对象只覆写要测的那一个方法就能通过编译，database/sql 的测试同款技巧。
+- 一个测试技巧：`struct{ *sql.Stmt }` 嵌入具体类型，伪对象可覆写要测的方法并提升其他方法；未初始化的嵌入指针若被调用会出错，应只在受控测试中使用。
 
 Rust 对照一句：Rust newtype `struct S(T)` 同样不带 T 的方法，需要手动 impl 或 Deref；Go 的 defined 新类型行为一致，别名才同型。Kotlin 的 `by` 委托在"代理"这层像，但它有接口约束，Go 的嵌入连接口都可以不用。
 
@@ -164,7 +164,7 @@ Rust 对照一句：Rust newtype `struct S(T)` 同样不带 T 的方法，需要
 
 小接口为什么好，给一个可数的理由：单方法接口的"可满足类型空间"大。一个 `interface{ Fly() }` 能被 7 种动物实现；加一个 `Swim()` 变成 FlySwimable 就只剩 4 种；极限是空接口，万物皆可装但信息量为零 〔TB28 p10-13〕。
 
-先补一个空接口的定性：方法集合为空的接口就是空接口，任何类型都实现它 〔TB28 p5-6〕“这个方法集合为空的接口类型就被称为空接口类型”。
+普通空接口 `interface{}` 的类型集包含所有类型，任何类型都实现它；泛型约束中的类型项还可能限制类型集，不能仅凭没有方法就判定为空接口。〔TB28 p5-6〕
 
 1. 先有接口，别管大小：先针对问题域抽象，io.Reader 也是标准库演进后期才抽出来的。
 2. 按使用场合拆：大接口按"哪些方法总被一起用"自然分组，一组一个小接口。
@@ -207,12 +207,9 @@ itab 是"接口 x 动态类型"的绑定表：`itab{inter *interfacetype, _type 
 
 先把 P2 的 nil 陷阱升级成可解释的形式。原稿 TB29 p4-5 的 returnsError：`*MyError` 初值 nil，bad() 为 false 时把 p 原样返回，调用者拿到的 error 不等于 nil。`*MyErr` 类型的 nil 指针装进 error 接口后，`iface.tab` 非空、只有 `data` 为 nil，与 `(nil, nil)` 的真 nil 不相等。P2 §接口里的 nil 给过 maybeFail 案例，这里换 returnsError 变体（接口字段版）做预测题，答案在练习 TestNilErrorTrap。
 
-相等判定规则也顺理成章：两个接口值相等 = 类型信息（`_type` 或 `tab._type`）相同 且 data 所指数据相同。所以 `int(17)` 和 `int64(17)` 装箱后互不相等，类型信息那半就不同了。
+两个接口值比较时，动态类型不同则不相等；动态类型相同且可比较时，比较其动态值。如果相同动态类型不可比较（例如 slice），比较会 panic。`int(17)` 和 `int64(17)` 因动态类型不同而不相等。
 
-装箱是性能账的源头。任何类型赋给接口变量都是装箱：按动态类型分配一块新内存、把值拷进去、填 `_type`/`tab` 与 `data`。汇编层面是 `CALL runtime.convT2E`（空接口）或 `convT2I`（非空接口）〔TB29 p19-21〕。两个直接后果：
-
-- 箱内数据与原变量无关，装箱后再改原变量，箱里还是旧值。
-- 每次装箱可能一次堆分配。常用类型有快速路径（convT16/32/64、convTstring、convTslice），255 以内的小整数走 staticuint64s 免分配。
+赋给接口时会保存动态类型和值的副本；对于指针、slice 等，复制的是指针或描述符，不会深拷贝其指向的数据。运行时如何表示副本、是否需要堆分配取决于类型、逃逸分析和编译器优化，并非每次转换都分配。〔TB29 p19-21〕 旧版 `convT2E`/`convT2I` 路径名称不应当作当前版本通用 ABI；可用基准和编译器输出来观察具体程序。
 
 bench 一下装箱的真实开销（本章实验之一）：
 
@@ -222,7 +219,7 @@ BenchmarkBoxing/iface-10     221689994    5.446 ns/op    5 B/op    0 allocs/op
 BenchmarkBoxing/direct-10    1000000000   0.3759 ns/op   0 B/op    0 allocs/op
 ```
 
-〔实测〕 本机 Apple M4、go1.26.4，每次跑数字都浮动，量级才是结论：iface 个位数 ns 对 direct 亚 ns。0 allocs 不是"没分配"：`i % 1000` 有 744/1000 的值超出 staticuint64s（0..255 的小整数静态表），那部分每轮真分配 8 字节箱。allocs/op 按平均次数取整，0.744 舍成 0。想看到 1 allocs/op，把装箱值全部抬到 256 以上即可：
+〔实测〕 本机 Apple M4、go1.26.4，每次跑数字都浮动。结果中的 5 B/op 与 0 allocs/op 是按每操作平均后展示的整数，不能据此断言每次操作都没有分配；应结合基准代码和实现分析。
 
 ```sh
 $ go test ./exercises/p30/ -run NoSuchTest -bench BenchmarkBoxAll -benchmem -count=1 -benchtime=2s
@@ -336,13 +333,13 @@ Type 管"类型信息"：
 
 ```go
 t := reflect.TypeOf(&User{})  // *User
-t.Elem()                      // User：指针 Type 必须 Elem() 才有字段和方法名
-t.NumField(), t.Field(i).Tag  // 结构体字段与 tag
+t = t.Elem()                  // User：解引用指针类型
+t.NumField(), t.Field(i).Tag  // 结构体字段与 tag（i 需有效）
 ```
 
 〔实测〕 `go test ./exercises/p30/ -run TestReflectAPI -count=1`：Elem 前后 Name/Kind 断言、CanAddr 五连测。摘自〔C:dachang/reflection/reflection.go:14-45〕。
 
-Value 管"取值改值"，写入只有一个前提：
+Value 管“取值改值”：Set 要求值可设置（`CanSet`），可寻址只是必要条件之一，未导出字段等还受额外限制：
 
 ```go
 var i int = 10
@@ -395,8 +392,8 @@ Rust 对照一句：Rust 没有字段级运行时反射，serde 靠编译期过�
 - 方法集合：T = T-receiver；*T = 全部。接口实现 = 方法集合覆盖。
 - 编译期断言：`var _ Iface = (*T)(nil)`。
 - 别名 `type A = B` 同方法集合；defined `type A B` 空。
-- 装箱路径：convT2E/convT2I，小整数免分配（staticuint64s）。
-- 写值前提：CanAddr + CanSet；map 只能 SetMapIndex。
+- 接口转换是否分配依赖具体类型与编译器；基准需结合代码解释。
+- 写值前检查 CanSet；map 元素用 SetMapIndex。
 
 ### 深读
 
@@ -422,7 +419,7 @@ ok  	golearn/exercises/p30	0.4s
 **观察**：
 
 4. TestBoxingCost：跑 `-bench BenchmarkBoxing -benchmem`，对比 iface 与 direct 两组的 ns/op 与 allocs/op。
-5. TestEmbedNotInherit：把 S 里 `*T2` 改成 `T2`，`*S` 的方法集合少哪个方法？
+5. TestEmbedNotInherit：把 S 里 `*T2` 改成 `T2`，比较 S 与 `*S` 各自的方法集合；哪一侧失去 M4？
 
 **改造**：
 

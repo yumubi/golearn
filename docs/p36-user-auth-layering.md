@@ -17,7 +17,7 @@ GORM 的 CRUD 基线（Open → AutoMigrate → Create/First/Update/Delete）是
 
 minifeed 的分层落点：user/store.go 定义 User 领域模型（CreatedAt time.Time）、Store 接口（Create/GetByEmail/GetByID 三方法）、MemoryStore 与 SQLiteStore 双实现。SQLiteStore 的 scanUser 收敛列映射，created_at 存 UnixMilli 读时转 time.Time，就是 K10 的 dao/domain 边界在单文件里的形状。〔W02-2 p20〕
 
-面向接口的定义（组件间通信必须通过接口，A 调 B 时 B 是接口）加上依赖注入，效果是编译时依赖接口、初始化时注入实现。〔W04-3 p24〕webook 用 UserHandler.RegisterRoutes 把用户路由收在 handler 上（/users/signup、/users/login、/users/profile）。〔W02-1 p22〕minifeed 的 newMux 是集中注册形态，server struct 持 user.Store 接口字段：换实现只动 openStore 一行。
+面向接口加依赖注入的效果是：调用方依赖所需行为，初始化时传入实现，并不要求所有组件间调用都经过接口。〔W04-3 p24〕webook 用 UserHandler.RegisterRoutes 把用户路由收在 handler 上（/users/signup、/users/login、/users/profile）。〔W02-1 p22〕minifeed 的 newMux 是集中注册形态，server struct 持 user.Store 接口字段：换实现只动 openStore 一行。
 
 〔实测〕双实现同套测试：`cd minifeed && go test -race -count=1 ./user/`，user_test.go 的 exercise(t, Store) 被 Memory 和 SQLite 两个子测试各跑一遍，全部 ok。这是 K7/K8 分层的直接收益：测试不关心底下是 map 还是 sqlite 文件。
 
@@ -38,7 +38,7 @@ Bind 的语义是关键教学点：gin 按 Content-Type 决定反序列化方式
 
 ## 3. 密码与 token：auth 包的两个职责
 
-加密算法三级：md5 哈希 → 加盐/多次哈希 → PBKDF2/BCrypt 随机盐。标准就一个：难破解，防彩虹表/碰撞，且相同密码密文不同。〔W02-2 p31〕webook 生产版用 BCrypt（四优点：自带盐、慢函数抗暴力、碰撞低、实现成熟）。minifeed 教学版取第二级：sha256(salt || password)，盐每用户 16 字节随机，存 hex。教学版差距章内明说：sha256 快正是它的缺点（GPU 每秒几十亿次），生产换 bcrypt/argon2。为什么教学不直接上 bcrypt：手写一遍盐的生成、拼接、恒时比较，才能看懂 bcrypt 在替你做什么。
+密码存储需要的是密码哈希而不是可逆加密。盐使相同密码通常产生不同的存储值，也让预计算彩虹表更难复用；抵抗暴力猜测则需要可调成本的慢密码哈希，而不仅仅是加盐。〔W02-2 p31〕webook 使用 bcrypt；minifeed 教学版用 `sha256(salt || password)`，每用户生成 16 字节随机盐并存 hex。单次 SHA-256 计算太快，不适合生产密码存储；生产应使用 Argon2id、bcrypt 或 PBKDF2 等专用方案并配置适当成本。教学版仅用于观察盐的生成、拼接和比较，不应原样部署。
 
 token 侧：登录签发用 jwt.NewWithClaims(jwt.SigningMethodHS256, claims) + token.SignedString(key)，token 放响应头返回，前端在 Authorization 带 Bearer。〔W03-1 p25〕JWT 与 Session 的取舍：JWT 免第三方存储、适合分布式、性能高（无 Redis 访问）；缺点是 payload 只是 base64 不是加密，不能放敏感信息，且签出后无法单方面作废。〔W03-1 p30〕
 
@@ -62,11 +62,11 @@ minifeed 骨架没有这三块，素材把它们补齐到生产形态。章内�
 
 验证码与登录是弱耦合：危险操作二次验证、改密码都用验证码，所以它是独立模块；短信还可能换供应商。〔W04-2 p10-11〕两安全线：控制频率（同号一分钟一次、有效期十分钟、系统限流兜底）+ 防暴力破解（验证通过即作废；三次失败作废；失败只说"不对"不提示次数）。〔W04-2 p26〕
 
-"检查-做某事"必有并发问题：两个线程同时查 Redis 都看到"没发过"，短信双发。这是分布式业务并发，channel/sync.Lock 无效，要用 Redis 单线程 + lua 把检查与写入封装成原子操作。〔W04-2 p30-31〕
+“检查后执行”若没有原子性就有竞态：两个实例都看到“没发过”并各自发短信。进程内 mutex 不能协调不同进程；可以用 Redis Lua 将检查与状态更新作为原子操作，或者采用支持所需原子条件更新的其他共享存储。注意短信发送本身在 Redis 之外，还需设计发送失败与重试的处理。〔W04-2 p30-31〕
 
 发码 lua 三分支。ttl==-1（key 无过期时间，疑似误操作）拒绝。ttl==-2 或 ttl<540（不存在或已过一分钟）时 set code、expire 600、cntKey=3。否则一分钟内已发，拒绝。〔W04-2 p32〕
 
-minifeed 单进程无此竞态（MemoryStore 锁内查重即原子），多副本才需要 lua。P35 §5 已讲集群化边界的同一逻辑。
+minifeed 的 MemoryStore 把查重放在同一进程的锁内，因此该操作在这份实现中原子；它没有实现验证码。多副本需要共享协调机制，不能依赖各进程自己的锁。P35 §5 讨论了相同的作用域边界。
 
 用户表的并发创建走 FindOrCreate 三步：先查（大多数人命中直接返回）→ 查不到 Create → Create 报唯一索引冲突说明并发，再查一次返回。〔W04-2 p45-46〕minifeed 的 MemoryStore.Create 线扫查重 + 锁内自增 ID 是第一步的进程内版；SQLiteStore 靠 email UNIQUE 约束，冲突即 ErrEmailTaken（409），就是第三步的兜底。
 
@@ -136,7 +136,7 @@ minifeed 的 400 行骨架回答了"用户系统的最小正确形状"：Store �
 
 双 token 与登出是延伸节的主角：access_token 短、高频访问资源易泄露。refresh_token 长且仅登录与刷新时使用，过期后换新 access。〔W05-2 p3-4〕
 
-JWT 登出的本质困难：JWT 不可变，"置为无效"只能靠外部记录。多实例部署下登出请求落实例 0、后续请求落实例 1，必须让所有实例感知，只能选 Redis 类共享缓存。〔W05-2 p13-14〕
+JWT 登出的困难在于已签发的 token 不会自行获知撤销。若需要在过期前立即撤销，多实例必须共享撤销状态，例如 Redis 黑名单或数据库；若允许等短期 token 过期，也可以不逐次查询黑名单，但撤销不是即时的。〔W05-2 p13-14〕
 
 ssid 方案：登录生成 UUID ssid 放进长短两个 token，校验与刷新都查 ssid 是否已进 Redis 黑名单，退出时标记不可用。〔W05-2 p16-17〕minifeed 不实装（无 Redis 依赖），延伸练习给出落点：auth 包加 ssid 字段 + 黑名单接口。
 
@@ -148,9 +148,9 @@ SSO 的三进程登录链（sso 中心发 sso_token，app 校验后种自己的 
 2. 面向接口 + 依赖注入 = 编译时依赖接口、初始化时注入实现；双 Store 同套测试是直接收益（W04-3#K10）。
 3. Bind 失败已写响应是 gin 语义；泛型 decode 把 ok 返还给 handler，测试能区分 400/500（W02-1#K12）。
 4. 401 不区分"没这人"与"密码错"：防用户枚举是登录接口的安全线。
-5. 密码三级：md5 → 加盐 → bcrypt 随机盐；sha256+salt 是教学第二级，快正是缺点（W02-2#K15）。
-6. JWT payload 是 base64 不是加密；签名比较要恒时（hmac.Equal）；过期与无效分开报（W03-1#K15）。
-7. "检查-做某事"在多副本下必须 lua 原子化；单进程锁内查重即等价物（W04-2#K16）。
+5. SHA-256 加盐仍太快，只作教学；生产密码存储使用专用密码哈希并设置成本（W02-2#K15）。
+6. JWT payload 是 base64url 编码不是加密；签名比较要恒时（hmac.Equal）；过期与无效分开报（W03-1#K15）。
+7. 多副本的“检查-做某事”需要共享原子机制；单进程可在同一把锁内完成查重（W04-2#K16）。
 8. 装配三路线按依赖图规模选：手动 → wire（代码生成）→ 容器（运行时单例）。
 9. TDD 分界：工具库单测为主，业务集成为主（W21-1#K45）。
 

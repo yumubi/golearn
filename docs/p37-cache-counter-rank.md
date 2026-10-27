@@ -35,7 +35,7 @@ UserCache 屏蔽三件事在 minifeed 的对应物是 Store 接口：换实现�
 
 这是可用性优先与隔离优先的取舍：课程推荐前者（缓存是优化不是数据源），D2 的补丁是生产要给回写失败打点监控，不能完全忽略。〔W04-1 p17-18〕
 
-一致性策略的核心一条：先更新 DB 再删缓存。它缓解非解决（极端交叠仍不一致：读旧值回写慢于删除后写），但极端少见（读 DB 回写缓存比写 DB 删 key 快），用户缓存用此策略。〔W21-1 p28〕W09-1 的可用性复盘补上另外两格：MySQL 崩=榜单不更新（定时任务失败）；Redis 崩+本地缓存失效=接口失败；对策=Redis 崩溃时回退本地缓存且不检查过期。〔W09-1 p36〕Redis 永不过期（只有定时任务更新缓存）规避 DB 故障传导。〔W09-1 p38〕
+一种常用策略是先更新 DB 再删缓存：读未命中时回填缓存。它缓解但不能消除不一致：读者先读到旧值，写者更新 DB 并删缓存，读者随后仍可能把旧值写回。〔W21-1 p28〕不能仅凭通常的读写耗时断言此窗口一定罕见；需要结合业务容忍度，考虑版本控制、失效重试或过期时间等措施。W09-1 的可用性复盘补上另外两格：MySQL 崩=榜单不更新；Redis 崩且本地缓存失效=接口可能失败；可选择回退旧的本地缓存，但要明确允许多旧。〔W09-1 p36〕Redis 永不过期依赖定时更新，能保留旧榜，也可能无限陈旧。〔W09-1 p38〕
 
 minifeed 单进程内没有 Redis 可崩，一致性竞态留给 §3 的计数与 §4 的榜单；这节的教学物是"降级语义写进代码"的形状。rank 包把 K19/K21 两条直接固化：Refresh 刷新失败保留旧榜继续服务（课程"刷新失败继续用过期数据"的亮点方案）（rank/rank.go L43-L54）；读侧 Top 是 atomic.Value.Load，零锁。（rank/rank.go L56）
 
@@ -55,9 +55,7 @@ lua 脚本防并发：EXISTS 检查+HINCRBY 是"检查-做某事"场景，lua �
 
 软删除 vs 硬删除：点赞-取消-再点赞场景，硬删除=反复插删；软删除加 status 字段=只更新一列（性能更好）+保留数据（公司偏好）。〔W07-1 p15-16〕软删除下的 Upsert：OnConflict DoUpdates status=1+utime（点赞）与 LikeCnt=gorm.Expr("like_cnt+1")+utime（计数）两个 Upsert，放同一事务。〔W07-1 p17〕
 
-〔实测〕降级语义的可验证形状：`cd minifeed && go test -race -count=1 -run TestRefreshTTL ./rank/`，TTL 内二次 Refresh 幂等跳过（calls==1）。
-
-〔实测〕原子自增的并发验证：`cd minifeed && go test -race -count=1 -run TestConcurrentLike ./counter/`，50 goroutine 并发 Like 同一帖，计数恰 50。-race 下丢更新会直接翻车，这是 P21 §-race：动态分析武器 的方法论在这章的复用。
+〔实测〕原子自增的并发验证：`cd minifeed && go test -race -count=1 -run TestConcurrentLike ./counter/`，50 goroutine 并发 Like 同一帖，计数恰 50。结果断言检查丢更新；`-race` 检查运行过程中观察到的数据竞争，两者互补，逻辑竞态不一定被 race detector 发现。
 
 ## 4. 榜单：TopN 计算与缓存装填
 
@@ -87,15 +85,15 @@ channel 语法（谁创建谁关、close 后读恒零值）P3 §close 与 range 
 
 ## 6. 分布式锁与抢占调度
 
-榜单定时计算在多副本下会重复算：解法是节点先抢锁，抢到才执行，保证分布式环境只有一个 goroutine 拿到锁。〔W09-2 p6〕
+榜单定时计算在多副本下可能重复：节点可先抢分布式锁再执行。〔W09-2 p6〕但锁有租期，持有者暂停或执行超时后可能在租约过期时继续运行；此时新持有者也可能开始执行，不能仅凭加锁保证任务永不重叠。需要续约、停止过期持有者的工作，并在要求严格一致时让存储端检查 fencing token。
 
 锁放在 Job 还是 Service？Service 是业务逻辑要求全局唯一，Job 是调度本身唯一，课程选 Job 层让 Service 保持纯净。〔W09-2 p8〕
 
-计算期间持锁版的三个约定：锁过期时间=r.timeout（任务必然在 timeout 内完成）；解锁失败不重试，最多 timeout 自动释放；抢锁失败不 return error，相信别的节点会拿锁。〔W09-2 p9〕升级路径：Preempt 接口抢到任务时启动 ticker（refreshInterval 10s）goroutine 持续 refresh，CancelFunc=close(ch) 停止续约并 Release。〔W09-2 p19〕抢占 SQL=乐观锁：UPDATE ... SET utime=now,version=version+1,status=running WHERE id=? AND version=?（CAS），RowsAffected==1 才算抢占成功。〔W09-2 p20〕
+计算期间持锁版的约定：锁过期时间设为 r.timeout，假设任务能在租期内完成；解锁失败不重试，等待租期释放；抢锁失败不返回 error，假设别的节点会处理。〔W09-2 p9〕这些都是需要验证的运行条件，不是锁本身的保证。升级路径：Preempt 抢到任务后用 ticker 持续续约，停止时释放；续约失败也要停止或隔离旧任务。〔W09-2 p19〕抢占 SQL 用乐观锁：`UPDATE ... SET utime=now,version=version+1,status=running WHERE id=? AND version=?`，RowsAffected==1 才算抢占成功。〔W09-2 p20〕
 
 Redis 侧的教学实现：SetNX（key 不存在才写并带过期）实现 TryLock；过期时间兜底崩溃不悬挂；Del 释放；教学版无 owner 校验（可能误删他人锁，生产应 Lua 原子比对）。〔C:go_frame/database/redis/lock.go:10-23〕
 
-minifeed 的单机等价物：rank.Refresh 用 sync.Mutex 单飞。并发触发 Refresh 只有 1 个 goroutine 真算，其余等锁后直接命中"未过期跳过"。（rank/rank.go L43-L47）注意语义差：SetNX 抢不到就放弃（TryLock 语义），sync.Mutex.Lock 会排队等。minifeed 里等到的结果也是跳过，所以行为等价；要"抢不到立刻返回"得换 TryLock 方法，练习位。多副本下这份代码的失效模式（每节点各持一把内存锁，榜单各算各的）就是 K3 要解决的问题本身。
+minifeed 的单机实现：rank.Refresh 用 sync.Mutex 串行化刷新。成功刷新得到非空榜单后，等待者通常会命中 TTL 而跳过；若刷新失败或结果为空，后续等待者仍可能重新计算。它不同于 SetNX 抢不到立即放弃，也不保证所有并发调用只算一次。多副本下每个节点各持一把内存锁，榜单仍会分别计算。
 
 〔实测〕单飞验证：`cd minifeed && go test -race -count=1 -run TestConcurrentRefresh ./rank/`，10 goroutine 并发 Refresh 不 panic、结果一致；TestRefreshTTL 断言真算次数为 1。
 
@@ -129,7 +127,7 @@ minifeed 的取舍：列表不缓存（参数四元组任一变化即失效，�
 
 三级读写序复盘：读=本地→Redis→DB；写=DB→本地→Redis。〔W21-1 p32〕本地缓存作备份是轻易不用的策略（命中率低+占内存）：正常走 Redis→DB，Redis 崩溃后走本地→DB，恢复切回。〔W21-1 p33〕面试亮点两条：本地缓存预加载（启动时/快过期提前）+容错（刷新失败继续用"过期"数据，或永不过期+异步刷新）。〔W09-1 p40〕
 
-这章的模式与 minifeed 落点对照：对象缓存（UserCache 屏蔽三件事）对应 Store 接口；原子自增（HIncrBy/lua）对应锁内自增；批量消费（Kafka BatchHandler）对应 ticker 刷库；分布式锁（SetNX）对应 TryLock 单飞；分页缓存（只缓存第一页）对应"不缓存列表"。Redis/Kafka 接入都是练习位（counter 加 RedisCounter、MemoryCounter 的 flushFn 换事务落库），不引依赖是 P36 定下的教学边界。
+这章的模式与 minifeed 落点对照：Store 接口提供存储抽象，但本身不是对象缓存；锁内自增对应单进程内的原子计数；ticker 刷库展示批量触发而不等同于 Kafka 的持久投递；榜单用 mutex 串行刷新，不是分布式锁；列表未做分页缓存。Redis/Kafka 接入都是练习位，生产环境还要考虑进程故障与消息丢失。
 
 与素材的差距清单：榜单没有 cron 定时器（robfig/cron/v3）与"刷新失败重试"；计数没有 UserLikeBiz 明细表与软删除 Upsert；锁没有续约（Preempt 的 ticker goroutine）与 owner token。这些是生产替换位，模式在，接入点是练习。
 
@@ -139,8 +137,8 @@ minifeed 的取舍：列表不缓存（参数四元组任一变化即失效，�
 2. 缓存层屏蔽三件事：TTL、key 结构、序列化协议，收在一个类型里（W04-1#K6/K7）。
 3. 先更新 DB 再删缓存是缓解非解决；刷新失败降级旧榜、永不过期+异步刷新是容错亮点（W21-1#K22、W09-1#K21/K22）。
 4. 计数必须原子自增：read_cnt=read_cnt+1，不能读出加一写回；单机锁内自增即 HIncrBy 等价物（W07-1#K6）。
-5. "检查-做某事"多副本下必须 lua；单进程锁内查重即等价物（W07-1#K10）。
-6. 榜单读侧零锁：atomic.Value 装载快照，刷新单飞由锁保证（W09-1#K17）。
+5. 多副本的“检查-做某事”需要共享原子机制，Redis Lua 是一种方案；单进程可在锁内完成（W07-1#K10）。
+6. 榜单读侧通过 atomic.Value 读取快照，刷新由锁串行化；失败或空榜时后续调用仍可能重试。
 7. 写放大解法是异步化+消费端凑批：事件只发不改单条为批量，凑批在消费侧（W07-2#K22/K25）。
 8. 分页缓存只缓存第一页，参数任一变化即失效；预加载不要偷偷异步（W06-3#K5/K11）。
 9. 空榜不算有效缓存：启动空数据被 TTL 锁住是预加载语义写错的信号。

@@ -12,7 +12,7 @@ title: 23 部署与 Kubernetes：你描述要的状态，控制器负责逼近
 
 ## 先看一个让人愣住的现象
 
-删掉一个正在运行的 Pod，过几秒去看，又出现了一个新的。没人手动重启它。下面这个纯 Go 的模型不带任何 K8s 组件，只留这套行为的骨架。先读代码猜输出，再往下看。
+删除由 Deployment 管理的 Pod，控制器发现副本不足后通常会补出一个新的；独立创建的 Pod 则不一定会被补建。下面这个纯 Go 模型不带任何 K8s 组件，只留这套行为的骨架。先读代码猜输出，再往下看。
 
 ```go
 package main
@@ -77,13 +77,13 @@ func main() {
 | 问题 | compose | K8s |
 |---|---|---|
 | 部署单位 | service，单机 | Pod（跑在哪个节点由调度器定） |
-| 谁保证数量 | 没人，崩了就没了 | Deployment 控制循环补齐 |
+| 谁保证数量 | Compose 启动时按配置创建容器；退出后的处理取决于重启策略 | Deployment 及其 ReplicaSet 控制循环补齐 |
 | 服务发现 | 同网络里的服务名 | 同理：Service 名当主机名（材料的连接串就这么写） |
-| 依赖顺序 | `depends_on` 加 `healthcheck` | readinessProbe，或 InitContainer（材料没讲，未在本机验证） |
+| 依赖顺序 | `depends_on` 加 `healthcheck` | InitContainer 可承担初始化顺序；readiness 决定是否接收 Service 流量，不保证启动顺序 |
 | 资源限额 | `cpus`、`mem_limit` | `resources.limits`（底层同样是 cgroup，见 22 节） |
 | 配置 | `environment` 写死在文件里 | ConfigMap 与 Secret（材料没细讲）；配置和镜像分离是共同目标 |
 
-第二行是本质差异。compose 把你的声明翻译成一次性命令，执行完就退场；K8s 的控制器常驻，每轮循环都在对账。第四五行是同一概念的换皮（compose 的细节见旧章 `notes/p26-deploy.md`，22 节没有展开）。
+第二行是重要差异：Compose 可以按重启策略重启退出的容器，但不是 Deployment/ReplicaSet 那样持续对账副本的控制器。探针与初始化容器也不是 `depends_on` 的直接等价物（compose 细节见旧章 `notes/p26-deploy.md`）。
 
 ## 一、三个最小概念：Pod、Deployment、Service
 
@@ -119,21 +119,21 @@ spec:
 2. **`selector`**：我怎么在一大堆 Pod 里认出哪些是我的。按标签筛，这里认 `app=webook`。
 3. **`template`**：每个 Pod 长什么样。Pod 里面跑的就是容器，可以跑多个。
 
-注意 selector 和 template 的 labels 写了同一个键值。这不是巧合：Deployment 靠标签认领自己创建的 Pod，两边不一致，它创建出来的 Pod 自己都找不到，也就谈不上收敛。另外 `apiVersion` 决定 K8s 怎么解读这份配置，写错了 K8s 就不知道你是谁。〔W03-2 p18〕
+注意 selector 必须匹配 template 的 labels：这里使用相同键值。若不匹配，Deployment 的配置会被 API 校验拒绝，而不是先创建 Pod 再找不到。`apiVersion` 决定 API 使用的版本。〔W03-2 p18〕
 
 对比 compose：它把 YAML 翻译成一次启动动作，起好之后没有常驻的控制器按副本数对账；K8s 里 `replicas` 是控制器每一轮都在比较的期望值。
 
 ## 二、Service：稳定的门牌，和三个端口
 
-Pod 会死会重生，重生出来的是新实例（上面模型里 `pod-2` 没了，补的是 `pod-4`），直接连某个 Pod 是不可维护的。材料的解法是把 Pod 封装成逻辑上的服务，即 Service，只有 Deployment 的话从外面访问不了。〔W03-2 p23〕Service 在逻辑上对应业务里的一个服务，背后可以是多个 Pod。〔W03-2 p6〕
+Pod 会死会重生，重生出来的是新实例（上面模型里 `pod-2` 没了，补的是 `pod-4`），直接连某个 Pod 的地址不稳定。Service 提供稳定的访问入口并选择后端 Pod；Pod 也可在网络和权限允许时直接访问，Service 并非访问 Pod 的唯一方式。〔W03-2 p23〕
 
 材料里部署 Redis 时用到了 Service 的三种端口，这是新手最容易混的地方：〔W03-2 p41〕
 
 - **`port`**：Service 自己的端口。集群内其他 Pod 连 `demo-redis-service:6379`，用的是它。
 - **`targetPort`**：转发目的地，Pod 容器上监听的端口。
-- **`nodePort`**：从集群**外**访问的端口，必须在 30000 到 32767 之间，比如 `redis-cli -p 31379`。〔W03-2 p40-42〕
+- **`nodePort`**：NodePort 类型在节点上暴露的端口；默认可分配范围是 30000 到 32767，集群管理员可以修改范围。〔W03-2 p40-42〕
 
-流量路径：外部请求先进 nodePort，转给 Service 的 port，再落到某个 Pod 的 targetPort。材料用 `type: NodePort` 把 Redis 暴露到集群外。〔W03-2 p39〕如果只给集群内部用，不需要 nodePort，通过 Service 的名字和 port 访问即可（K8s 默认的 Service 类型 `ClusterIP` 就是干这个的，这一点材料没讲，未在本机验证）。
+外部客户端可通过节点 IP 和 nodePort 访问，集群网络组件将流量转发到 Service 选中的后端及其 targetPort；数据包不一定依次经过三个独立监听端口。〔W03-2 p39〕如果只给集群内部用，通常用默认的 `ClusterIP` 类型，通过 Service 名称和 port 访问。
 
 顺带回答一个老问题：K8s 说不再内置 Docker 了，那我 Docker 构建的镜像还能用吗？能。Docker 实现的是 OCI 标准，镜像归标准管，不归 Docker 管。〔W03-2 p22〕
 
@@ -143,7 +143,7 @@ Pod 会死会重生，重生出来的是新实例（上面模型里 `pod-2` 没�
 
 C 项目的实际清单就是这个形状：`/blog` 转给 `svc-blog`，`/lottery` 转给 `svc-lottery`，一个入口后面挂多个服务。〔C:go_frame/k8s/deploy/ingress-nginx.yaml:8-24〕
 
-**PV 与 PVC** 是同一思想的存储版。MySQL 要落盘，存储空间被抽象为 PersistentVolume。为什么拆成两个对象？因为作为 K8s 设计者，你既不知道容器里跑的是什么、需要怎么存，也管不了现实中有多少种硬盘和文件协议，只能提供一个抽象让具体实现去管。〔W03-2 p28〕于是：PersistentVolume 是**存储侧**声明我有什么特性，PersistentVolumeClaim 是**使用侧**声明我需要什么特性，K8s 负责撮合两者。〔W03-2 p31-32〕材料里叫 `mysql-pv-claim` 的对象声明了 `storage: 1Gi` 和 `accessModes: ReadWriteOnce`，一个声明方管理挂载点，另一个声明究竟挂的是什么。〔W03-2 p29-31〕这就是第 04 节"接口与实现分离"在基础设施层的翻版。`accessModes` 有三个取值：`ReadWriteOnce` 只能被单个 Pod 读写，`ReadOnlyMany` 多 Pod 只读，`ReadWriteMany` 多 Pod 读写。〔W03-2 p35〕
+**PV 与 PVC** 是同一思想的存储版。PersistentVolume 是存储资源，PersistentVolumeClaim 是使用方对容量和访问模式的请求，K8s 负责绑定已有卷，也可通过 StorageClass 动态供给。〔W03-2 p28〕〔W03-2 p31-32〕材料里的 `mysql-pv-claim` 请求 `1Gi` 和 `ReadWriteOnce`。〔W03-2 p29-31〕`ReadWriteOnce` 是卷可由**单个节点**读写挂载，同节点多个 Pod 可以使用；`ReadOnlyMany` 和 `ReadWriteMany` 分别表示多节点只读和读写。需要单 Pod 读写约束时另有 `ReadWriteOncePod`，并受存储驱动支持情况限制。〔W03-2 p35〕
 
 **HPA**（自动伸缩）同样是规则与数据分离：材料里的规则是 `targetCPUUtilizationPercentage: 50`，副本数在 2 到 5 之间，目标是 `dep-blog`。〔C:go_frame/k8s/deploy/hpa-blog.yaml:1-14〕利用率是相对"分配给它的 CPU"算的百分比，所以被伸缩的 Deployment 要设 `resources.requests.cpu`（材料的 `dep-blog.yaml` 设了 `10m`）；不设的话百分比没有分母，HPA 无法工作，这是 K8s 通用行为，材料只演示了设置的写法，未在本机验证。数据由 metrics-server 提供，材料的操作手册里是单独安装它的。
 
@@ -160,7 +160,7 @@ C 项目的实际清单就是这个形状：`/blog` 转给 `svc-blog`，`/lotter
 编排器再聪明，代码不配合也白搭。三件事：
 
 1. **配置按环境切换**。材料用的手法是 Go 编译标签：`dev.go` 和 `k8s.go` 两个文件初始化同一个配置结构体，k8s.go 上写 `//go:build k8s`，`go build -tags=k8s` 选择；连接串里的主机名直接写 Service 名（`webook-mysql:3308`），不是 IP。〔W03-2 p51-52〕更常见的做法是环境变量加配置文件，思路相同：配置与镜像分离，镜像一次构建，处处运行。
-2. **服务名当主机名**。compose 里的服务名和 K8s 的 Service 名都是集群内 DNS 名。容器里的 `127.0.0.1` 是容器自己，把依赖写成宿主机地址，是第一次上容器最常见的失败现场（旧章 `notes/p26-deploy.md`）。
+2. **服务名当主机名**。compose 的同网络服务名和 K8s 的 Service 名都可供服务发现。K8s 同一 Pod 内的容器共享网络命名空间，`127.0.0.1` 指向该 Pod；不同 Pod 的依赖通常使用 Service 名（旧章 `notes/p26-deploy.md`）。
 3. **探针与限额**。22 节讲过探针（docker 的健康检查）和 cgroup 限额：K8s 里探针由 `readinessProbe` 之类的字段承担（具体语义材料没讲，未在本机验证），`resources.limits` 底下同样是 cgroup，HPA 又依赖 `requests.cpu`。三处是同一份约束在不同层的回声。
 
 ## 五、client-go 多集群后端：krm 项目
@@ -188,12 +188,12 @@ K8s 自身的 API 是 HTTP，client-go 是它的 Go SDK。资料里的 krm 是�
 
 ## 常见坑
 
-1. `selector` 与 Pod 模板标签写得不一致，Deployment 找不到自己的 Pod，收敛无从谈起。
+1. `selector` 与 Pod 模板标签不匹配，Deployment 会被 API 校验拒绝。
 2. 把 `port`、`targetPort`、`nodePort` 混为一谈；外部连不上先问自己走的是哪条路径。
 3. 镜像依赖本地构建，节点上没有，`imagePullPolicy` 又拉不下来；kind 场景要 `kind load` 先灌镜像。
-4. HPA 没设 `resources.requests.cpu`，永远不会伸缩。
-5. 容器里把依赖写成 `127.0.0.1`，连的是容器自己。
-6. 前端拿到 kubeconfig；等价于交出集群管理权。
+4. CPU 利用率型 HPA 所需的 `resources.requests.cpu` 缺失，导致利用率无法计算；其他指标类型的 HPA 不一定依赖它。
+5. 跨 Pod 的依赖写成 `127.0.0.1`，实际连的是当前 Pod 自己。
+6. 把 kubeconfig 交给前端；其中凭据的权限取决于集群授权，可能包含管理权。
 
 ## 判断题与答案
 
@@ -227,7 +227,7 @@ K8s 自身的 API 是 HTTP，client-go 是它的 Go SDK。资料里的 krm 是�
 - PVC 用 `storageClassName: manual` 和 PV 配对，两边都写 manual 才绑得上；漏写或写错，PVC 会一直 Pending。〔W03-2 p31-33〕
 - Ingress 清单的字段：apiVersion 是 networking.k8s.io/v1，spec.ingressClassName 写 nginx（换别的 controller 就写对应名字），rules 的写法和 nginx 配置差不多，pathType 用 Prefix 做前缀匹配。〔W03-2 p48〕
 - ingress-nginx 本体用 helm 装，一条 `helm upgrade --install` 带上仓库地址和命名空间；之后装别的 K8s 软件也用它。〔W03-2 p47〕
-- nodePort 是硬约束：必须落在 30000 到 32767，写个小于 30000 的值 apply 直接报错，不是"能跑但不规范"。〔W03-2 p40-41〕
+- nodePort 默认范围是 30000 到 32767；集群可配置其他范围，指定端口须落在该集群实际范围内。〔W03-2 p40-41〕
 - 前端这一版没进集群：改 webook-fe 的 axios baseURL 指向 localhost 就能连上 K8s 里的后端；启动成功的判据是 kubectl logs 里看到 GIN 路由注册和 Listening on :8080。〔W03-2 p53-54〕
 
 ### W03-1 多实例部署引发的代码问题
@@ -244,7 +244,7 @@ K8s 自身的 API 是 HTTP，client-go 是它的 Go SDK。资料里的 krm 是�
 - Service 的 ClusterIP 是个固定的虚拟 IP：不管 Pod 所在节点怎么变，集群内都用这个 IP 访问；port 和 targetPort 可以不同。〔C:go_frame/k8s/deploy/svc-blog.yaml:1-15〕
 - Ingress 的两条 Prefix 把 /blog、/lottery 分别转给 svc-blog、svc-lottery，另带 rewrite-target 注解；ingress controller 所在节点要先打 `ingress-ready=true` 标签，否则规则存在但流量不进。〔C:go_frame/k8s/deploy/ingress-nginx.yaml:1-25〕〔C:go_frame/k8s/deploy/操作手册.md:113-125〕
 - HPA 清单用的是 autoscaling/v1（现行已过渡到 autoscaling/v2，教学清单仍是 v1）：副本 2 到 5，目标 CPU 利用率 50%。验证闭环是 kubectl get hpa 先看到 TARGETS unknown，过一会儿变 0%，压测脚本死循环打 /blog 后 Pod 扩到 5 个，停了再缩回。〔C:go_frame/k8s/deploy/hpa-blog.yaml:1-14〕〔C:go_frame/k8s/deploy/操作手册.md:151-169〕
-- metrics-server 在自签证书的集群要加 `--kubelet-insecure-tls`，不然 HPA 拿不到指标，TARGETS 一直是 unknown。〔C:go_frame/k8s/deploy/操作手册.md:155-159〕
+- 材料中的自签证书集群使用 `--kubelet-insecure-tls` 排查 metrics-server 取数失败；该选项会跳过 kubelet 证书验证，不适合作为生产环境的安全配置，应优先配置可验证的证书与信任链。〔C:go_frame/k8s/deploy/操作手册.md:155-159〕
 - 节点标签决定调度：先 `kubectl label nodes dqq-worker hp=true` 给节点打标签，清单里 nodeSelector 写上这个键值，Pod 就只落在这个节点上。〔C:go_frame/k8s/deploy/dep-nginx.yaml:24-26〕
 - 服务代码两处配合：配置全走环境变量（os.Getenv 读 port，清单的 env 字段可以覆盖），GetLocalIP 遍历网卡取第一个私有 IPv4，容器里拿到的就是 Pod IP，页面直接把它显示出来，副本扩到几个就出现几个不同 IP。〔C:go_frame/k8s/blog/main.go:11-51〕
 - 材料的 Dockerfile 从单阶段（容器内 go build）演进成双阶段（构建层编出二进制，运行层只 COPY 产物），和 22 节的多阶段构建是同一个形状。〔C:go_frame/k8s/blog/Dockerfile:1-27〕
@@ -269,8 +269,8 @@ K8s 自身的 API 是 HTTP，client-go 是它的 Go SDK。资料里的 krm 是�
 - 资源创建表单的状态放 Pinia 全局单例 store（useItem），持有一份 Deployment 骨架（selector、replicas、strategy 默认 RollingUpdate 25%/25%），子组件直接改引用，免层层传 props；代价是离开页面不 reset，上次输入会残留到下一次。〔K:krm-backend/src/store/index.js:42-102〕
 - 卷类型有 6 种（hostPath、secret、configMap、nfs、emptyDir、pvc），用 markRaw 把组件映射表包起来，防止组件对象被 Vue 当响应式代理；探针表单对应 K8s 的 handler 字段，四个选项 exec、httpGet、tcpSocket、close，默认给 startupProbe，initialDelay 30 秒、timeout 2 秒、period 30 秒。〔K:krm-backend/src/view/components/scheduling/Volume.vue:9-45〕〔K:krm-backend/src/view/components/scheduling/container/Probe.vue:8-60〕
 - 提交时把表单拼成 clusterId、namespace 加 item 三件套，预览用 js-yaml 把对象转 YAML，先深拷贝去掉响应式再 dump。〔K:krm-backend/src/view/deployment/CreateOrEdit.vue:15-60〕
-- 前端部署链：npm build 出 dist，nginx alpine 镜像只装静态文件，清单是 Deployment 加 NodePort，liveness 和 readiness 都是 tcpSocket 80，requests 100m/256Mi、limits 1 核/512Mi；切环境只改 VITE_BASE_URL，镜像不用重建。〔K:krm-backend/README.md:80-168〕
-- API 端点按资源分组各成一个文件，URL 集中在 config 里（auth、user、cluster、node、namespace 五组），后端地址同样来自 VITE_BASE_URL，改一处即切环境。〔K:krm-frontend/src/config/index.js:4-27〕
+- 前端部署链：npm build 出 dist，nginx alpine 镜像只装静态文件，清单是 Deployment 加 NodePort，liveness 和 readiness 都是 tcpSocket 80，requests 100m/256Mi、limits 1 核/512Mi。〔K:krm-backend/README.md:80-168〕
+- API 端点按资源分组，URL 集中在 config 里，后端地址来自 VITE_BASE_URL。〔K:krm-frontend/src/config/index.js:4-27〕Vite 的常规环境变量在构建时注入；若要同一静态镜像运行时切换地址，还需要额外的运行时配置机制。
 - 基础版有个现成的反面教材：集群选择器默认取 clusterList[0].id 没判空，集群列表为空直接 TypeError；InActive 禁选只在 UI 层，数据层没兜底。〔K:krm-frontend/src/view/components/ClusterNamespaceSelector.vue:63-71〕
 - 危险操作的确认强度不一：命名空间删除要输入名字确认，用户删除只弹确认框；同一产品里强度应当统一。〔K:krm-frontend/src/view/namespace/List.vue:60-90〕
 - labels 和 annotations 在表单里编辑成 key、value 数组，提交时 list2Object 合回对象；中间少同步一步就丢编辑，这是 reactive 对象与数组手动互转的代价。〔K:krm-frontend/src/utils/utils.js:1-32〕

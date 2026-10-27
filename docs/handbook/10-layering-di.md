@@ -60,7 +60,7 @@ mem: 0 login: memory repo: user 138 not found
 
 同一个 `Login` 方法，一行没改，注入 `MySQLRepo` 就返回 42，注入 `MemRepo` 就返回"查不到"。答案只有两个字：**注入**。`Login` 不关心 `repo` 到底是谁，它只声明"我需要一个能按手机号查用户的东西"；具体是谁，由调用方在构造 `UserService` 的时候决定。
 
-把"依赖"从"函数里自己 new"改成"从外面传进来"，就是 Go 社区做依赖注入的全部手法。没有运行期容器，没有注解扫描，依赖就是构造函数参数，装配就写在 `main` 里。这一节从这里往下讲五件事：分层、面向接口、依赖注入、装饰器、配置。合起来回答一个问题：一个后端服务怎么长成可替换的零件。
+把依赖从函数内部创建改成由外面传入，就是依赖注入。Go 中常用构造函数参数并在 `main` 显式装配，也可以使用代码生成工具或运行时容器。这一节从这里往下讲分层、面向接口、依赖注入、装饰器和配置。
 
 ## 和你已知语言的差异
 
@@ -86,7 +86,7 @@ mem: 0 login: memory repo: user 138 not found
 
 其中 repository 和 dao 最容易混。区分的关键在 repository 的定位：它是**整体存储抽象**，下面可以是 MySQL、ElasticSearch 或 MongoDB；dao 只代表"数据库"这一种实现。〔W02-2 p16〕所以一个 repository 可能组合一个 dao，也可能组合一个搜索引擎客户端，dao 只是其中一种可能的底座。
 
-调用链是固定的：web 调 service，service 调 repository，repository 调 dao。〔W02-2 p17〕课程没有明说禁止跨层，但分层的本意就是每一层只依赖紧挨着它的下一层：web 一旦直接碰 dao，换存储时 HTTP 代码又要跟着改，前面的分层就白做了。
+在这个课程示例中，调用链是 web → service → repository → dao。〔W02-2 p17〕并非所有 repository 都需要 dao；分层的重点是让调用关系体现职责边界，而不是把这条链当作所有项目的硬规则。
 
 下面是一个能跑的最小骨架。注意两个细节，一个在类型上，一个在缓存的位置上：
 
@@ -207,7 +207,7 @@ repository: cache hit
 login result: 7 <nil>
 ```
 
-〔实测〕`go run .` 跑出上面的输出：第一次 `cache miss` 走 dao，第二次 `cache hit` 不再碰 dao，而 `Login` 和 `HandleLogin` 两层的代码对此毫无感知。注意 `dao.UserRow` 里的 `PasswordHash` 在转换时被丢掉了，`domain.User` 根本不带这个字段，这就是"表结构不影响业务"的具体含义。
+〔实测〕`go run .` 跑出上面的输出：第一次读 dao，第二次命中缓存，上层无需知道这一变化。示例仅以 map 模拟存储与缓存，不支持并发，也没有实现密码验证；`Login` 只是展示依赖关系，不能作为真实登录实现。
 
 装配永远是**自底向上**：先 new 最底层（连接、缓存），再 new repository，再 service，最后 handler 和路由。这就是课程说的"初始化七步链"。〔W04-3 p4〕上面 `main` 里的五行就是它的迷你版。这个顺序是硬约束：上面的层需要下面的实例，所以下面必须先生成。
 
@@ -240,7 +240,7 @@ func main() {
 cannot use &buf (value of type *bytes.Buffer) as *os.File value in argument to Save
 ```
 
-`bytes.Buffer` 明明有 `Write` 方法，却传不进 `Save`，因为签名把参数锁死成 `*os.File`。这就是"依赖具体类型"的代价：只能写文件，不能写内存、不能写网络，测试也起不了真实文件。签名改成 `io.Writer`（04 节的写法）这些问题一次消失。
+`bytes.Buffer` 有 `Write` 方法，却传不进 `Save`，因为参数被限定为 `*os.File`。换成 `io.Writer` 后，文件、内存缓冲区和其他满足该接口的实现都能传入；具体类型也能用真实文件测试，只是替换存储方式不方便。
 
 但接口不是免费的。课程把收益和代价都讲透了：**面向接口不提高性能，也不提高可靠性，收益只有扩展性**。〔W04-3 p27〕也就是说，它纯粹是为了将来能换实现。既然如此，就不能处处抽接口，要看准了再抽。课程给了四条判断：
 
@@ -526,7 +526,7 @@ func main() {
 
 - wire 的完整两步操作：新建 `wire.go`，文件头写 `//go:build wireinject` 编译标签，里面 `wire.Build(...)` 注册全部构造函数、随便 `return` 一个值凑齐返回值；跑 `wire` 命令生成 `wire_gen.go`，真正的初始化方法在里面。前提是 `GOPATH/bin` 在 PATH 里，否则找不到 wire 命令。〔W04-3 p7-8〕
 - wire 改造一套 Web 服务还要四类新方法：把 Gin 中间件准备成 `[]gin.HandlerFunc` 的方法、初始化 sms.Service 这类组件的 ioc 方法、收口路由注册的 `InitWebServer(funcs []gin.HandlerFunc, userHdl *web.UserHandler)`、main 里直接启动。〔W04-3 p13-14〕
-- `wire.Bind(new(redis.Cmdable), new(*redis.Client))` 是接口注入的标准写法：构造函数返回接口时，wire 不会自己猜"谁实现了它"，要显式绑定。〔W04-3 p15〕
+- `wire.Bind(new(redis.Cmdable), new(*redis.Client))` 用于提供者返回具体的 `*redis.Client`、消费者需要 `redis.Cmdable` 时显式绑定；若提供者本身返回 `redis.Cmdable`，则可直接按该类型匹配。〔W04-3 p15〕
 - 反例与正例怎么认：struct 字段注入 `CodeRepository` 是非面向接口（拿不到替换点）；`CodeService` 依赖 `sms.Service` 接口才是，随时能加 aliyun 等实现。〔W04-3 p25-26〕
 - UserService 也可以抽接口，当下的动机是测试，将来可能按版本或 VIP 分实现；实现叫小写的 `userService`，接口不导出也能满足包内使用。〔W04-3 p31〕
 - "返回接口的构造函数"有代价：调用方拿不到具体类型的新增方法，字段可见性也受限，只在该类型确有多实现需求时用。〔W04-3 p33〕
@@ -556,7 +556,7 @@ func main() {
 - viper 没有内置多环境概念，多环境靠启动参数：`pflag.String("config", "config/config.yaml")` 定义，启动时 `--config=config/dev.yaml` 切文件，注意 working directory。〔W05-3 p16-17〕
 - etcd 作远程配置中心的完整链路：Docker Compose 起 etcd，`etcdctl put /webook "$(<dev.yaml)"` 写入，代码里 `AddRemoteProvider("etcd3", "http://127.0.0.1:12379", "/webook")` 加 `SetConfigType("yaml")` 加 `ReadRemoteConfig`。〔W05-3 p21-24〕
 - 公司级远程配置中心的功能清单：统一接口、Web 界面（路径权限、关键配置限人、版本回滚、环境同步、审批流、灰度发布），本质都是增删改查，不难。〔W05-3 p30〕
-- `--config` 指向不存在的文件时 `ReadInConfig` 在哪一行 panic、错误长什么样，值得自己跑一遍；viper 支持用 `ReadConfig` 在单测里构造配置替代真实文件。〔W05-3 p14,p17〕
+- `--config` 指向不存在的文件时 `ReadInConfig` 在哪一行 panic、错误长什么样，值得自己跑一遍；viper 支持用 `ReadConfig` 在单测里构造配置替代真实文件。〔W05-3 p14〕〔W05-3 p17〕
 
 ### W02-2 三层落地与缓存判据
 

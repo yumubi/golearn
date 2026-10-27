@@ -19,7 +19,7 @@ $ dig +tcp -p 15354 @127.0.0.1 example.com A | grep -E "flags:|MSG SIZE"
 
 ## 1. 问题：TCP 是字节流，查询从哪帧到哪帧
 
-DNS over UDP 是天然一问一答：一次 `ReadFromUDP` 恰好一条报文，有边界。换到 TCP，第一个问题就变了：TCP 是字节流，没有消息边界。发端两次 Write，收端可能一次 Read 全收到（粘包）、两次各收一半（半包）、或者 1 字节 1 字节地收。必须由应用层自己定界。〔TB36 p6-7〕
+DNS over UDP 以数据报为单位传输：一次 `ReadFromUDP` 读取一条数据报，但缓冲区太小时可能截断；UDP 本身也不保证请求一定有且只有一个应答。换到 TCP，第一个问题就变了：TCP 是字节流，没有消息边界。发端两次 Write，收端可能一次 Read 全收到（粘包）、分多次收到（半包），甚至逐字节收到。必须由应用层自己定界。〔TB36 p6-7〕
 
 定界有两种模式：二进制模式（长度字段，MQTT、SMPP、DNS over TCP）与文本模式（分隔符，HTTP 的空行）。〔TB36 p6-7〕
 
@@ -91,7 +91,7 @@ tcp/frame.go:41:6: moved to heap: prefix
 tcp/frame.go:51:13: make([]byte, n) escapes to heap
 ```
 
-其一，`var prefix [2]byte` 写的是栈数组，但 `io.ReadFull(r, prefix[:])` 把它交给 `io.Reader` 接口：逃逸分析看不见接口方法体内 `buf` 的去向，只能按泄漏处理，prefix 被 moved to heap（`-m -m` 可见链条：`prefix[:] → io.buf → io.ReadAtLeast 参数 → 接口方法`）。这不是"忘了写栈上"，是接口调用的固有代价。其二，正文 `make([]byte, n)` 要返回给调用方，必然上堆。其三，benchmark 里 `bytes.NewReader(frame)` 每次迭代新建一个 Reader（逃逸分析：`&bytes.Reader{...} escapes to heap`）：这是测量装置的成本，不是 DecodeFrame 本身的，真实服务器里 serveConn 直接把 `net.Conn` 传进来，没有这一次。
+其一，`var prefix [2]byte` 把数组切片交给 `io.Reader` 接口；在这次编译中，逃逸分析无法证明接口方法不会保留它，因此报告 prefix moved to heap（`-m -m` 可见调用链）。这不是所有接口调用都必然分配：编译器可能内联或利用更多上下文消除逃逸，应以具体版本与调用场景的报告为准。其二，这次编译报告正文 `make([]byte, n)` 逃逸；返回值的生命周期和编译优化会影响实际分配。其三，benchmark 里 `bytes.NewReader(frame)` 每次迭代新建 Reader 并逃逸：这是测量装置的成本，不是 DecodeFrame 自身的，真实服务器直接传入 `net.Conn`。
 
 ## 3. 连接形态：每连接一 goroutine 与两个上限
 
@@ -127,7 +127,7 @@ goroutine 便宜（p3 §goroutine 有多便宜 实测 2KB 栈）不等于免费�
 
 每次读帧前把 deadline 推到 now+30s；对端 30s 没发帧，Read 返回超时错误，连接关闭。〔C:go_basic/socket/server/tcp.go:44〕 的长连接同款（每轮 Read 前重设 2 分钟）。实验：连上不发数据，30.0s 后 recv 得 EOF（〔实测〕`python3 -c "import socket,time; s=socket.create_connection(('127.0.0.1',15353)); print(s.recv(1))"` 30.0s 后返回 b''）。
 
-**MaxConns** 是全局上限：conns map 记活连接，accept 后查 `len(conns) >= cfg.MaxConns`，满员直接 `conn.Close()` 接受下一个（server.go Serve 的 `if full` 分支）。防的是 SYN 洪水和"只建连不发查询"的占坑客户端。被拒的客户端读侧立刻 EOF，重试即可：不用排队，排队会把内存压力转移到服务端。
+**MaxConns** 是应用层活连接上限：conns map 记活连接，accept 后查 `len(conns) >= cfg.MaxConns`，满员直接 `conn.Close()` 接受下一个（server.go Serve 的 `if full` 分支）。它限制已接受连接占用资源，但不能单独防御发生在握手阶段的 SYN 洪水。客户端可能看到 EOF 或其他连接错误；重试还需退避，避免把过载放大。
 
 **MaxInFlight** 是单连接在飞上限：
 
@@ -149,7 +149,7 @@ goroutine 便宜（p3 §goroutine 有多便宜 实测 2KB 栈）不等于免费�
 
 为什么每查询 `append` 一个副本？DecodeFrame 已返回独立 buf，副本是防御性兜底：对齐 UDP 路径"查询不可变"契约，防上游某天复用 buf。每帧多一次 512 字节拷贝（54ns 量级），买语义安全。
 
-读写的坑教材列全了，这里只点与帧层直接相关的两条。其一，部分读：`conn.Read(buf)` 有多少读多少立即返回，n 可能是 2 而不是 10（buf 10 收 "hi" 得 n=2），必须循环读满：`io.ReadFull` 就是这个循环的封装。〔TB36 p16-18〕 其二，并发写：一次 Write 写完整业务包是安全的（fdMutex 串行化单次系统调用），拆多次不保证连续性。〔TB36 p22-26〕 streamConn 的 WriteTo 正是"一次 Write 整帧"（整帧单次 `s.conn.Write(frame)`），多 goroutine 并发回包安全。
+读写的坑与帧层直接相关。其一，`conn.Read(buf)` 可以只返回已到达的一部分，必须循环读满；`io.ReadFull` 封装了这个循环。〔TB36 p16-18〕其二，`net.Conn` 允许多个 goroutine 同时调用方法，但协议帧仍需防止写入交错，并处理短写或错误。〔TB36 p22-26〕本例将前缀和正文拼成一帧后单次调用 `Write`；若改为多次写同一帧，应在整帧范围内串行化。单次调用也不意味着一定成功写完，调用方仍需检查返回值和错误。
 
 ctx 取消怎么断开阻塞在 Read 的 goroutine？Serve 起一个只等 `<-ctx.Done()` 的 goroutine 关 listener（server.go Serve 开头的匿名 goroutine），accept 断。取消路径顺手关所有在飞连接，DecodeFrame 立刻返回 EOF，wg.Wait 才不会卡 30s 空闲超时（accept 错误分支里的 conns 遍历关停 + wg.Wait）。
 
@@ -260,7 +260,7 @@ $ dig -p 15353 @127.0.0.1 example.com A | head -1
 
 **取舍也要明说：这不是完备 DNS 解析**。为什么保留完整 question？客户端收到截断应答后重发 TCP 时，应答里的 question 帮它配对请求（也对齐 BIND 实践）。
 
-为什么按"第一个 0 字节"找 QNAME 末尾？QNAME 是标签序列，0 字节是终止符，扫到即得 question 边界。但 DNS 有压缩指针（0xc0 开头的 2 字节偏移）和 OPT 记录，完整解析要处理两者，这份实现不支持。遇压缩指针的应答，question 扫描可能偏长，退回复制到 limit 兜底（keep > limit 时），TC 位保证客户端仍然回退。29 字节实测 = 12 头 + question 17（`example.com` QNAME 13 + QTYPE/QCLASS 4），ANS 计数清零防客户端解析半条记录。
+为什么按“第一个 0 字节”找 QNAME 末尾？对普通、未压缩的合法标签，0 字节是终止符。但 DNS 还有压缩指针（0xc0 开头的 2 字节偏移）和 OPT 记录；这份实现不是完整解析器，遇到压缩或异常数据可能截错 question。即使置了 TC，格式错误的应答也可能被客户端丢弃，不能保证回退；生产实现应解析并验证问题区，再生成合法截断应答。
 
 为什么截断在 UDP 侧（TruncConn 包 WriteTo）而不是帧层？UDP 路径不换：收包原样，只在出站时包一层 `WrapTrunc`（main.go L148-150）。TCP 侧不需要截断：65535 前缀装得下一切合法 DNS 应答（frame.go 的 MaxMsgLen 就是同一条上限的两种表达）。
 
@@ -287,8 +287,8 @@ TB38 的方法论一句话：建立基准 → 性能剖析 → 代码优化 → 
 - 阻塞表象加 netpoller 本质：每连接一 goroutine 写法是顺序的，扩展性是多路复用的。〔TB36 p11-12〕
 - 空闲超时是绝对时间续租；MaxConns 满员拒连；MaxInFlight 超限丢帧不排队：压力决策还给客户端，代价是突发下重传率上升。
 - 适配器模式复用业务：streamConn 把连接假装成 PacketConn，handleQuery 零改动；TCP 启动块放在 cache 之后。〔TB37 p4-5〕
-- TC 截断保完整 question、按第一个 0 字节扫描，不是完备 DNS 解析（压缩指针不支持，退回复制兜底）；客户端见 TC 回退 TCP。
-- pprof 四步循环：基准 → 剖析 → 优化 → 对比；Syscall 瓶颈是 TCP 服务器第一瓶颈，bufio 是第一刀。〔TB38 p2-3〕〔TB38 p14-24〕
+- TC 截断的教学实现尝试保留 question，但按第一个 0 字节扫描不能完整处理 DNS 压缩或异常数据，不能保证客户端一定回退。
+- pprof 四步循环：基准 → 剖析 → 优化 → 对比；教材案例中 syscall 是瓶颈，bufio 带来收益，但其他服务应先测量再选优化。〔TB38 p2-3〕〔TB38 p14-24〕
 
 ## 在 dnsproxi 里看这一章
 

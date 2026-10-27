@@ -15,73 +15,61 @@ title: P1 · 工具链速通：cargo → go
 
 ## 体系背景：编译模型决定一切
 
-go 工具链的所有"怪"，都从一个事实推出来：**编译是按包 DAG 并行
-编的，产物是静态链接的原生二进制**。
+Go 按包编译，并利用依赖图和构建缓存并行处理可独立编译的包。
+通常 `go build` 产出原生可执行文件；是否依赖动态库取决于平台、
+CGO 和构建选项，不能把所有 Go 二进制都当成静态链接。
 
-没有宏、没有 build.rs、没有 trait solver，依赖解析就是一层 import
-扫描。所以 `go build` 快得像没在编译；产物扔到另一台机器直接跑，
-不需要装任何 runtime。部署 = `scp` 一个文件。deepsearch 的
-Dockerfile 就是 `CGO_ENABLED=0 go build` + `FROM alpine` 塞一个
-二进制（P5 精读会看到原文），scratch 镜像是这套打法的极简形态。
-
-这一条后面还会反复兑现：可见性模型粗（零配置）、没有 feature
-flags（要么编进去要么不编）、交叉编译零配置。
+例如 deepsearch 的 Dockerfile 使用 `CGO_ENABLED=0 go build`。纯 Go
+程序可以方便地交叉编译并部署，但目标平台、证书、时区数据和程序所需
+资源仍须核对；启用 CGO 时还需要目标平台的 C 工具链。
 
 ## 命令映射：你会的 cargo 对应什么
 
 | 你会的 | Go 对应 | 差异要点 |
 |---|---|---|
 | `cargo new` | `go mod init <module>` | go 不建目录，先 `mkdir` 再 init |
-| `Cargo.toml` | `go.mod` | 只有 module 名 + go 版本 + require 列表 |
-| `Cargo.lock` | `go.sum` | 存的是**内容哈希**，不是版本号；必须提交 |
+| `Cargo.toml` | `go.mod` | 声明模块、Go 版本、依赖及其他指令 |
+| `Cargo.lock` | `go.mod` + `go.sum` | 前者参与版本选择，后者记录内容哈希；通常都提交 |
 | `cargo add serde` | `go get github.com/...` | **先写 import 再 `go mod tidy`** 是更地道的流 |
 | `cargo build` | `go build ./...` | `./...` = 全部包，天天用 |
 | `cargo run` | `go run ./cmd/xxx` | go run 只能跑 main 包 |
-| `cargo test` | `go test ./...` | 测试文件 `_test.go`，和源码**同目录同包** |
+| `cargo test` | `go test ./...` | `_test.go` 可用同包白盒测试，也可用 `包名_test` 黑盒测试 |
 | `cargo test -- --nocapture` | `go test -v ./...` | `-v` 兼打印+进度 |
 | `cargo clippy` | `go vet ./...` | 更弱；生态靠 `golangci-lint` 补 |
 | `cargo fmt` | `gofmt -w .` | **没有配置项**，全社区一种格式 |
-| `cargo doc --open` | `go doc -http=:6060` | 或直接看 pkg.go.dev |
+| `cargo doc --open` | `go doc` / `pkg.go.dev` | 本地网页可另装 `golang.org/x/pkgsite/cmd/pkgsite` |
 | `[dev-dependencies]` | 无 | 测试和源码同包，依赖不分 dev/prod |
 | feature flags | 无 | 用 build tags 手动切 |
 | workspace（cargo） | go.work（多 module） | 单 module 多目录不需要 workspace |
 | crates.io | proxy.golang.org | 国内配 goproxy.cn |
 
-## go.mod 是"导入的投影"，不是清单
+## go.mod 和 go.sum 各管什么
 
-最大心智差异：cargo 按版本来 require，go 按**导入路径**来 require。
-`go.mod` 里没有的包，只要 `import` 了，`go mod tidy` 自动加；没被
-import 的依赖会被 tidy 删掉。
+源码的 import 指向包；`go.mod` 则记录提供这些包的模块及版本要求。
+写好 import 后运行 `go mod tidy`，工具会补齐缺少的模块并清理不再需要的
+要求，也会考虑测试和构建标签。版本选择不是由 `go.sum` 完成的。
 
-```sh
-$ go mod init demo && go mod tidy
-$ head go.mod
-module demo
-
-go 1.26
-
-require golang.org/x/sync v0.13.0   // ← import 了 errgroup 才出现的行
-```
-
-所以 go.mod 不用手维护，它是源码的投影。`go.sum` 才是锁文件，
-存每个模块的内容哈希，保证任何人拉到的字节都一样。
+例如先在 `main.go` 导入 `golang.org/x/sync/errgroup` 并实际使用，
+再运行 `go mod tidy`，`go.mod` 才会增加相应的 `require`。具体版本取决于
+工具链和解析结果；空目录里直接运行 tidy 不会凭空添加这个依赖。
+`go.sum` 记录下载内容的校验哈希，供模块校验使用，不是 Cargo.lock
+那样的完整版本锁文件；它可能包含不在当前构建列表中的历史条目。
 
 ## 可见性：一个目录一个包
 
-Rust 一个 crate 里随便 mod；Go **一个目录就是一个包**，包名 = 目录名。
+Rust 一个 crate 里有多个 mod；Go 通常一个目录对应一个包，包名由文件的 `package` 声明决定，惯例与目录名一致。
 
 ```
 deepsearch/               ← module root (go.mod)
 ├── main.go               ← package main
 ├── cmd/                  ← cobra 子命令
-├── internal/             ← 只许本 module 导入（编译器强制）
+├── internal/             ← 只允许其父目录树中的代码导入
 ├── pkg/                  ← 可以被外人导入
 └── go.mod
 ```
 
-`internal/` 是**编译器强制**的私有：别人 import 它直接编译错。
-Rust 的 `pub(crate)` 只是 lint，Go 的 internal 是硬约束。
-大写 = 导出（`func Open()` 是 pub），没有中间档，包级私有到底。
+`internal/` 的导入限制由 Go 工具链执行：导入方须位于该 `internal` 父目录的目录树内，范围不一定等于模块。Rust 的 `pub(crate)` 同样是编译器强制的可见性限制，只是边界不同。
+大写标识符可导出，小写仅在本包可见。
 
 这个规则粗，但换来零配置：看目录名就知道包边界，没有任何
 "mod.rs 放哪"的争论。
@@ -118,10 +106,9 @@ FAIL    build failed    # ← 测试根本没跑起来：可见性是编译器�
 
 ## 小结
 
-- `go mod tidy` 是依赖的唯一真相：import 驱动，不是清单驱动。
-- internal/ 硬私有、大写导出，可见性模型比 Rust 粗但零配置。
-- 静态链接单二进制是部署默认答案：编译模型没有宏和钩子，
-  `CGO_ENABLED=0` 产物直接扔 alpine/scratch。
+- `go mod tidy` 根据源码与测试整理模块要求；`go.mod` 参与版本选择，`go.sum` 校验内容。
+- internal/ 以父目录树限制导入，大写标识符导出。
+- 纯 Go 程序常适合单二进制部署；目标平台和外部资源仍需核对。
 
 ## 章末参考
 
@@ -157,9 +144,9 @@ pprof 完整取证、GODEBUG/GOEXPERIMENT 体系、go.work、文档工程，
 
 | 主题 | Go | Rust | 差异要点 |
 |---|---|---|---|
-| 清单 | go.mod（导入投影） | Cargo.toml（显式声明） | go 按 import 驱动 |
-| 锁 | go.sum（内容哈希） | Cargo.lock（版本号） | 字节级可复现 |
-| 私有 | internal/（编译器） | pub(crate)（lint） | Go 是硬约束 |
+| 清单 | go.mod（模块与依赖要求） | Cargo.toml（显式声明） | tidy 可根据 import 更新要求 |
+| 校验 | go.sum（内容哈希） | Cargo.lock（解析版本及校验信息） | go.sum 本身不锁定构建列表 |
+| 私有 | internal/（目录树限制） | pub(crate)（crate 限制） | 两者均由工具链强制 |
 | 格式 | gofmt（无配置） | rustfmt（可配置） | 全社区一种格式 |
 | 元编程 | 无宏，go:generate 产物进 git | 宏/derive 编译期展开 | Go 代码生成是显式步骤 |
-| 交叉编译 | GOOS/GOARCH 内置 | rustup target 逐个装 | Go 全平台开箱 |
+| 交叉编译 | GOOS/GOARCH 内置 | rustup target 逐个装 | CGO 还需目标平台 C 工具链 |

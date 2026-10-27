@@ -5,7 +5,7 @@ title: 06 并发一：goroutine、channel、select 与 sync
 # 06 并发一：goroutine、channel、select 与 sync
 
 
-> 详细程度：深入 · 约 55 分钟
+> 详细程度：深入 · 约 60 分钟
 > 材料：TB31 到 TB35、`C:go_basic/concurrence`、`C:dachang/concurrence` · 旧长版：`notes/p3-concurrency.md`、`notes/p31-concurrency-scheduler.md`
 > 前置：04 接口与组合、05 错误与资源
 
@@ -91,14 +91,13 @@ func main() {
 子 goroutine 结果: boom
 ```
 
-`spawn` 把"goroutine 的退出状态"通过一个 `chan error` 传回来，调用方 `<-c` 拿结果。这就是 CSP 的基本形态：channel 转移数据，同时转移了数据的所有权。Go 的并发有两层，要分清各自的位置：
+`spawn` 把结果通过 `chan error` 传回来，调用方 `<-c` 拿结果。channel 同时提供通信与同步，但发送指针、切片等值时仍可能共享底层数据；只有程序约定发送方不再访问，才能把它当作所有权转移。
 
-1. **默认用 CSP**：把程序拆成若干顺序执行的 goroutine，用 channel 把它们连接起来。channel 传递的是数据，同时转移了数据的所有权。"不要通过共享内存来通信，而要通过通信来共享内存。"〔TB31 p11〕〔TB34 p1〕
-2. **局部用低级同步**：不转移所有权、只是想保护一个结构体的内部状态，或者性能敏感的临界区，用 `sync` 和 `atomic`。〔TB31 p10〕〔TB34 p4〕
+使用 channel 组织消息传递，或使用 `sync`、`atomic` 保护共享状态，都应根据问题选择；两种方式可以组合使用。〔TB31 p11〕〔TB34 p1〕〔TB34 p4〕
 
 另一个要内化的区分：**并发是结构，并行是执行**。把程序设计成可以独立执行的几部分，叫并发；这几部分同一时刻真的在多个核上跑，叫并行。并发设计的程序在单核上也成立，上多核自然获得并行。〔TB31 p4-5〕
 
-Go 1.22 起，`for` 循环的变量是每轮独立的，`go func() { use(i) }()` 的老坑已不存在，这一点以本机 go1.26.4 的语言版本为准。
+Go 1.22 起，采用相应语言版本的代码里，由 `for` 使用 `:=` 声明的循环变量每轮独立；用 `=` 更新已有变量仍会共享该变量。
 
 ### 调度器：一张概念地图
 
@@ -150,7 +149,7 @@ func main() {
 fatal error: all goroutines are asleep - deadlock!
 ```
 
-第二个：向已关闭的 channel 发送。这解释了开头的现象为什么只限于"接收"：接收方从关闭的 channel 读是安全的，发送方往关闭的 channel 写必 panic：
+第二个：向已关闭的 channel 发送。开头那段代码里 `close(ch)` 之后 `<-ch` 还读出了缓冲里的 `1` 和零值 `0 false`，说明关闭只是封了发送端，接收一直是安全的；这一条反过来：往已关闭的 channel 发送必 panic：
 
 ```go fail
 package main
@@ -393,7 +392,7 @@ func main() {
 
 **Cond** 只用于"等待某个条件成立"，用法固定：加锁，`for !cond { c.Wait() }`，解锁。`Wait` 挂起前释放锁、返回前重新加锁。能用 channel 的 `close` 广播时不必用它。〔TB34 p10-14〕
 
-**atomic** 的本质是不可中断的单条指令级"事务"，只能同步单个整型或自定义类型变量。读写都很便宜，复杂临界区仍首选 `sync`。〔TB34 p14-18〕
+**atomic** 提供对单个值的原子操作及内存同步，而不是把多个操作自动合成事务。涉及多个字段或不变量时通常更适合用锁；性能也应按实际场景测量。〔TB34 p14-18〕
 
 **Mutex 不能复制**。复制后得到两把独立的锁，同步失效；`go vet` 会抓：〔TB34 p4-7〕
 
@@ -421,7 +420,7 @@ wg.Wait()
 fmt.Println(n) // 通常小于 1000，具体值每次都不一样
 ```
 
-要点是：竞争不一定崩溃，没有 `-race` 时只是悄悄丢数据。CI 里跑 `go test -race` 应当是默认动作。数组、slice、结构体并发改只是脏写，而 map 并发写会触发 `fatal error`，**不能 recover**。〔C:go_basic/concurrence/atomic.go:11-19〕
+竞争不一定表现为崩溃，`-race` 也只能发现运行时覆盖到的竞争。CI 里可运行 `go test -race`。数组、slice、结构体的竞争同样不安全；map 并发写有时会被运行时检测并以不可 recover 的 fatal error 终止，但不能依赖检测。〔C:go_basic/concurrence/atomic.go:11-19〕
 
 **goroutine 泄漏**。goroutine 停在一个永远不会就绪的收发上，既不退出也不被回收，内存和调度成本随时间累积。〔实测〕用 `runtime.NumGoroutine()` 前后相减：
 
@@ -453,8 +452,8 @@ func main() {
 
 ## 小结
 
-1. 并发是结构、并行是执行；默认用 CSP（goroutine 加 channel），局部才用 `sync` 和 `atomic`。
-2. goroutine 初始栈 2KB、用户态调度；返回值被丢弃，结果靠 channel 传回；`main` 退出进程就退出。
+1. 并发是结构、并行是执行；channel 与 `sync`、`atomic` 分别适合不同的通信和共享状态问题。
+2. goroutine 栈小且可增长、由运行时调度；返回值被丢弃，结果可通过 channel 等方式传回；`main` 退出进程就退出。
 3. 调度器记住 G/M/P 三个角色和 work stealing，P 的数量由 `GOMAXPROCS` 决定。
 4. channel 是状态机：对 nil 收发永久阻塞，对已关闭的接收返回零值、发送 panic；谁发送谁关闭。
 5. 四种惯用法：一对一信号、close 广播、替代锁、队列与计数信号量。
@@ -468,7 +467,7 @@ func main() {
 2. 在同一个 goroutine 里读写同一个无缓冲 channel，`fatal error: all goroutines are asleep`。
 3. `select` 里某一路关闭后没置 nil，被反复选中空转。
 4. `Mutex`、`WaitGroup` 按值传递或复制，`go vet` 能抓，别忽略告警。
-5. 子 goroutine 没有 `defer recover`，一个 panic 带走进程。
+5. 误以为主 goroutine 的 recover 能捕获子 goroutine 的 panic；恢复边界应按隔离需求设计。
 6. 靠 `len(ch)` 判断队列是否有数据。
 7. 周期性事件用 `Ticker` 并 `Stop`，不要在热循环里靠反复 `time.After` 模拟。
 
@@ -488,7 +487,7 @@ func main() {
 2. 建一个无缓冲 `chan struct{}`，10 个 goroutine 都 `<-start`，主线程 `close(start)`。`close` 是一次性事件，会唤醒所有阻塞在它上面的接收者，所以是广播而不是只放行一个。
 3. 数据对象要转移所有权时用 channel，逻辑上"把数据交给谁"说得清；只是保护一块共享内部状态、不转移所有权时用 `Mutex`，因为它建构在更低级的原语上、开销更小。
 4. nil channel 的收发永久阻塞，case 永远不会就绪，`select` 会跳过它；把读完的一路置 nil，就等于关掉这个分支，避免在已关闭的 channel 上空转。
-5. 挡不住。`recover` 只能在 panic 所在的那条 goroutine 的 defer 里生效，`main` 的 defer 管不到别的 goroutine；子 goroutine 必须自己 `defer recover()`。
+5. 挡不住。`recover` 只能在 panic 所在 goroutine 的 deferred 函数中直接调用；是否设置恢复边界取决于程序的隔离策略。
 
 练习包 `exercises/p31sched/`：`TestSignalOneToOne`、`TestBroadcastClose`、`TestCountingSemaphore`、`TestNilChannelSelect`、`TestRWMutexMatrix`、`TestLostUpdateDistribution`、`TestAtomicCounter`；`exercises/p3conc/`：`TestPanicKillsProcess`、`TestCounters`。
 
@@ -529,14 +528,14 @@ func main() {
 
 - Mutex 内部只有 state 和 sema 两个字段，零值就是未锁定状态，所以锁可以零值可用、无须初始化；复制一个 Mutex 就是复制这两个整型字段，原变量与副本从此各管各的，同步失效。锁处于锁定状态时复制副本再加锁，加锁的 goroutine 会永久阻塞。〔TB34 p5-6〕
 - Mutex 的两条使用原则：临界区尽量短，减少别人等待的时间；一定记得 Unlock，配合 defer 兜底，忘解锁会导致局部甚至整个程序死锁。〔TB34 p7〕
-- RWMutex 基准里的关键数字：读锁耗时恒定在 40ns 左右，写锁随并发数恶化（32 核时 86ns）；Mutex 在并发小时最快（16ns），并发大了竞争加剧。原子读 0.24 到 0.74ns，约为读锁的 200 倍，且并发增大还有提升空间。〔TB34 p8-10,16-18〕
+- RWMutex 基准里的关键数字：读锁耗时恒定在 40ns 左右，写锁随并发数恶化（32 核时 86ns）；Mutex 在并发小时最快（16ns），并发大了竞争加剧。原子读 0.24 到 0.74ns，约为读锁的 200 倍，且并发增大还有提升空间。〔TB34 p8-10〕〔TB34 p16-18〕
 - atomic 是 channel 与 sync 原语的实现基础，由硬件指令直接支持：`SwapInt64` 就是对 x86_64 `XCHGQ` 指令的汇编封装；普通 `a++` 是 LOAD/ADD/STORE 三条可中断指令，原子操作是不可中断的指令级"事务"。〔TB34 p14-15〕
 - Cond 的适用面比 Mutex/RWMutex 窄得多：没有 Cond 就得连续轮询条件，goroutine 活着但没进展，白耗资源；Broadcast 唤醒后条件可能已被别人改变，所以必须 `for !cond { Wait() }` 重新判定。channel 加 sync 原语已覆盖绝大多数同步需求。〔TB34 p10-14〕
 
 ### TB35 goroutine 池：成本账与最小实现的骨架
 
 - 池化的出发点是一笔内存账：2KB 栈乘一百万就是 2GB，加上调度消耗随 goroutine 数量增长；"每连接一个 goroutine"的惯例在规模化后撑不住，解法是把 M 个任务重用到 N 个 goroutine 上。〔TB35 p2〕
-- 连续栈（Go 1.4 起）把 Go 1.3 分段栈的 hot split 问题换成了另一个代价：栈增长靠分配更大块连续内存并整体拷贝，之后即便不再需要也不收缩，空间长期闲置到 goroutine 退出。〔TB35 p2〕
+- 连续栈（Go 1.4 起）通过分配更大连续内存并复制旧栈来增长，避免分段栈的 hot split；运行时也可在 GC 扫描时收缩使用不足的栈，具体策略属于实现细节。〔TB35 p2〕
 - 最小可行池完全用 channel 拼出来，三部分是精髓：`active` 带缓冲 channel 当 worker 计数器（就是 06 讲的计数信号量，可写则创建 worker，写满就停，worker 退出腾出空位再补）；`tasks` 无缓冲传任务，worker 全忙时 `Schedule` 阻塞，背压直接反馈给提交方；`quit` channel 广播退出。〔TB35 p3-4〕
 - worker 的 panic 防护是配套动作：`defer recover` 捕获任务 panic 后，要 `<-p.active` 释放计数、`wg.Done`，然后退出重建；只 recover 不放行，池会慢慢漏空。〔TB35 p7-8〕
 

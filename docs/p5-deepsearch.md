@@ -237,9 +237,9 @@ internal/transport/http_test.go
 internal/transport/http.go
 ```
 
-零命中，而 transport 依赖 service。transport 通过自己定义的接口拿 service，P2 讲过这个惯例。`internal/` 是编译器强制的包私有，仓库外的代码 import 不了它。
+零命中，而 transport 依赖 service。transport 通过自己定义的接口拿 service，P2 讲过这个惯例。`internal/` 限制导入方必须位于它的父目录树内；这份仓库里的外部项目通常不能导入它。
 
-Go 没有 `Cargo.toml` 那样的依赖清单，目录就是依赖图。这和 Java 的 Maven 多模块不同：Java 靠 `pom.xml` 声明模块依赖，Go 靠 `internal/` 加 import 路径约束。
+目录帮助定位代码，但真正的包依赖图由 import 决定；`go.mod` 则声明模块和依赖要求。目录本身不能代替依赖图。
 
 ## 依赖注入
 
@@ -282,7 +282,7 @@ service not found: string
 
 注册时只登记闭包，不执行。第一次 `Invoke[*DB]` 才构造，构造 `DB` 时又触发 `Config`。第二次拿到的是同一个实例，这是单例。没注册的类型直接报错。
 
-Spring 读者对照：`@Autowired Searcher` 约等于 `di.Invoke[Searcher]`。区别是 Go 版是显式调用，没有注解处理器，没有反射魔法，缺依赖在启动期就报错。TS 里的 NestJS 或 InversifyJS 容器也是类似的东西。
+Spring 读者对照：`@Autowired Searcher` 约等于 `di.Invoke[Searcher]`。这里是显式解析，未注册的依赖会在实际调用 `Invoke` 时暴露；若构造是惰性的，不一定在启动时就发现。
 
 ## 容器的实现
 
@@ -290,7 +290,7 @@ Spring 读者对照：`@Autowired Searcher` 约等于 `di.Invoke[Searcher]`。�
 
 **（1）容器挂在 ctx 上。** `di.go:62-63` 里 `context.WithValue(ctx, ctxKeyContainerKey, &containerImpl{})`。没有全局单例，容器沿 ctx 树传播。ctx 在这里充当"请求作用域变量"，Java 里的 `ThreadLocal`、Kotlin 的 `CoroutineContext`、Node 的 `AsyncLocalStorage` 做的是同类事情。
 
-**（2）类型当 key。** `di.go:123` 的 `reflect.TypeFor[T]()` 在编译期拿到类型，运行时当 map key，存进 `sync.Map`（`di.go:57`）。Rust 里是 `TypeId::of::<T>()` 加 `HashMap`，一模一样的套路。
+**（2）类型当 key。** `di.go:123` 用 `reflect.TypeFor[T]()` 取得类型信息，运行时将它当 map key，存进 `sync.Map`（`di.go:57`）。Rust 里可类比 `TypeId::of::<T>()` 加 `HashMap`。
 
 **（3）单例带锁构造。** `di.go:193-200` 每次 `Invoke` 都拿锁，再看 `built` 标志。这不是 double-checked locking，热路径有锁竞争。简单、对、慢一点，作者的选择是够用，这是我的推断，没有设计文档佐证。
 
@@ -464,7 +464,7 @@ CGO_ENABLED=0 go build -trimpath \
     -o /out/deepsearch .
 ```
 
-`CGO_ENABLED=0` 关掉 C 调用，Linux 上得到纯静态二进制，扔进空镜像也能跑。`-s -w` 去掉符号表和调试信息，`-trimpath` 去掉本机路径。本章不构建镜像，只在本机编译同样的参数。
+`CGO_ENABLED=0` 禁用 CGO；此处用于构建适合容器的纯 Go 二进制，但是否能在空镜像运行还要核对平台以及证书、时区等运行资源。`-s -w` 去掉符号表和调试信息，`-trimpath` 去掉本机路径。本章不构建镜像，只在本机编译同样的参数。
 
 改一处看变化：用同一份源码编两个版本，再调 MCP 的 `initialize`。
 
@@ -507,7 +507,7 @@ type Searcher interface {
 
 ## 小结
 
-1. Go 工程分层就是目录即依赖图，`internal/` 由编译器强制包私有。
+1. 目录帮助理解工程分层，import 决定包依赖；`internal/` 将导入方限制在其父目录树内。
 2. 自写 DI 的三件套：ctx 挂容器，`TypeFor` 当 key，反射边界内部用 `any`。注册项也要按类型隔离，否则撞 key 死锁。
 3. 单例用 `Once` 时，结果必须回读缓存，不能 return 闭包里的局部变量。
 4. 优雅关停的套路：signal、cancel、WaitGroup、errCh、WithoutCancel 清理。Canceled 不算错，第二次信号才强杀。
@@ -577,7 +577,7 @@ go test -race -run TestGracefulShutdown -v ./exercises/p5deep/
 | `try_join!` 加取消 | `errgroup.WithContext` | 首错取消兄弟 |
 | `tracing` 的 `?field` 与 span | `slog.String(...)`，无 span | span 要上 OpenTelemetry |
 | `env!()` 与 `build.rs` | `-ldflags -X` | 编译期给包级变量赋值 |
-| Cargo workspace 的 crate 拆分 | `internal/` 加目录 | 目录就是依赖图 |
+| Cargo workspace 的 crate 拆分 | `internal/` 加目录 | 目录组织包，import 构成依赖图 |
 
 ### Java/Kotlin 与 TS/JS 类比
 

@@ -15,15 +15,9 @@ title: P22 · 工具链深潜与文档工程：从"能编译"到"能交付"
 
 ## 体系背景：性能数据在运行时里，不在外部工具里
 
-Rust 采 CPU profile 要 perf（内核采样器）+ cargo flamegraph；查
-内存要 valgrind 或自定义 allocator。Go 把五种 profile 全塞进了
-**runtime 本身**：调度器记 CPU 时间片、分配器记分配栈、goroutine
-管理器记栈状态。`net/http/pprof` 一行 import，就是把这些内存里的
-计数暴露成 HTTP 端点。
+Go 的 runtime 和标准库提供 CPU、heap、goroutine 等 profile；`net/http/pprof` 可把这些数据暴露成 HTTP 端点，再用 `go tool pprof` 分析。CPU profile 是采样，不是逐个记录调度时间片；heap profile 也是采样数据，解读时要注意采样和 GC 带来的误差。
 
-这个差异的根源还是编译模型：Go runtime 掌控一切（栈、分配、
-调度），所以一切可测；Rust 的零成本抽象哲学把运行时降到最小，
-代价就是观测要靠 OS 级工具。
+这些端点可能暴露运行状态甚至敏感信息，应绑定本地地址或受保护的管理网络，不要直接向公网开放。Rust 也有多种性能分析工具；两种语言的采集入口不同，不能简单归结为一种能观测、另一种不能。
 
 ## pprof：完整取证流程
 
@@ -54,7 +48,7 @@ go tool pprof -base=before.pb.gz after.pb.gz
 | heap | 现在驻留内存谁占的 | 快照 | 2680.94kB 总驻留 |
 | allocs | 累计分配谁贡献的（GC 压力） | 快照（含已释放） | 5329.16kB 累计 |
 | goroutine | 多少 goroutine、卡在哪 | 快照 | 采到 |
-| block/mutex | 锁等待/阻塞时长 | 需 SetBlockProfileRate | 低频场景才开 |
+| block/mutex | 阻塞和锁竞争 | 分别通过 `runtime.SetBlockProfileRate`、`runtime.SetMutexProfileFraction` 开启采样 | 低频场景才开 |
 
 goroutine 快照实拍（idle 的 httpkv，7 个 goroutine 全是 runtime
 自留）：
@@ -191,21 +185,15 @@ schedticks=[…] 字段。）
 
 ## go.work：多模块工作区
 
-monorepo 里两个 module 互相引用，没工作区就得推 tag 才能
-`go get` 自己人的改动：
+monorepo 里两个 module 互相引用时，本地尚未发布的改动可以通过 `go.work` 指向本地模块，也可以使用 `replace`；不必为了测试每次改动先推 tag：
 
 ```sh
-go work init ./exercises ./dnsproxi-go   # 生成 go.work
-go work use ./labs                        # 增补（无 -add 这个 flag）
+go work init . ./dnsproxi-go   # 在仓库根目录生成 go.work
 ```
 
-go.work 是**本地开发文件，不提交**（CI 不认它，CI 靠 require/
-replace）。`replace` 也能解，但改的是 go.mod（污染其他人的构建），
-go.work 不碰 go.mod。cargo workspace 要求共享一个 Cargo.lock，
-go.work 各 module 独立 go.sum（更松，代价是重复下载）。
+之后需要增加其他已有的模块目录时，可用 `go work use <模块目录>`。工作区是否提交取决于团队是否希望共享固定的模块组合；CI 也可以使用工作区，但应明确配置和验证。`replace` 写在 go.mod 中，其作用范围和是否提交也应由项目决定。各 module 仍有自己的 go.mod 和 go.sum。
 
-本仓单 module 用不上；拆多 module 的时机是"子目录想有独立版本号"
-（dnsproxi-go 已是独立 module）。
+本仓库根目录和 `dnsproxi-go` 已是独立 module；工作区可在需要同时开发它们时使用。拆分模块还涉及版本、依赖和发布边界，不只是目录组织。
 
 ## 文档工程：注释即文档
 
@@ -240,8 +228,7 @@ func ExampleDir() {
 }
 ```
 
-`ExampleXxx` 放 `_test.go`，`go test` 执行并比对 `// Output:`：
-**文档代码从此不可能悄悄烂掉**。rustdoc 的 doctest 立场相同。
+带 `// Output:` 的 `ExampleXxx` 放在 `_test.go` 中，`go test` 会运行并比对输出；没有输出注释的示例不会作为测试执行。即便示例通过，也只覆盖它实际演示的行为。
 
 ### 可编程访问：文档也是数据
 
@@ -314,8 +301,7 @@ go build -ldflags "-X golearn/exercises/p22tool.Version=v0.1.0" \
   git，与 build.rs 立场相反。
 - GODEBUG 默认值跟 go.mod 版本走；GOEXPERIMENT 是未定型未来，
   生产别带非 baseline 实验。
-- go.work 本地不提交，replace 会污染 go.mod；拆 module 的时机是
-  "要独立版本号"。
+- go.work 可作为本地或团队共享工作区；是否提交及 CI 如何使用，应按项目约定决定。
 - 文档三层：doc comment 规范、Example 测试（文档代码是测试用例）、
   go/doc 可编程访问。发布三条：semver 强制、v2 进 path、tag 即
   发布。
@@ -330,7 +316,7 @@ go build -ldflags "-X golearn/exercises/p22tool.Version=v0.1.0" \
 | `go tool pprof -base=a.pb.gz b.pb.gz` | 差分 |
 | `go vet ./...` / `golangci-lint run` | 静态检查 |
 | `go generate ./...` | 跑 go:generate 指令 |
-| `go work init/use` | 多模块工作区（不提交） |
+| `go work init/use` | 创建或调整多模块工作区 |
 | `go get pkg@v2.0.0` / `@none` | 升级/移除 |
 | `gofmt -l .` | 格式漂移检查 |
 

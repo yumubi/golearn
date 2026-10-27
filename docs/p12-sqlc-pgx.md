@@ -40,7 +40,7 @@ $ docker exec p12pg psql -U postgres -c "show max_connections"
 (1 row)
 ```
 
-所以连接池在 PG 上是必需品，不是优化品。100 个连接就是 100 个进程，应用实例一多就撞墙。
+连接池通常是控制连接数和复用连接的重要手段。规划时还要给管理连接和其他应用留余量，否则应用实例一多就可能撞到服务端上限。
 
 这和 Java 的 HikariCP、Node 的 `pg.Pool` 是同一个理由。区别是 Go 里 goroutine 太便宜，一个请求一个 goroutine 很容易把连接用光，池的上限要自己想清楚。
 
@@ -66,9 +66,9 @@ stmtcache_f50f3a6a5b1611e8241bf46ca6e5ec7724a11d788d678d90 => select name, state
 stmtcache_9d95881a9af31aec478a7fc8614da285b1f0ae39340541a2 => select $1::int + 1
 ```
 
-这是 PG 的扩展查询协议：先 Parse 出一个命名的语句，再 Bind 参数并 Execute。同一条语句第二次起跳过解析。`$1` 占位符是服务端的参数，不是客户端拼字符串，所以也没有注入问题。
+这是 PG 的扩展查询协议：先 Parse 出一个命名的语句，再 Bind 参数并 Execute。同一连接上缓存命中时可以复用已解析语句。`$1` 将值作为参数传给服务端，避免把值拼进 SQL；但动态拼接表名、排序表达式等仍需单独校验，参数化不能保护这些部分。
 
-预备语句属于单个连接。如果你在连接前面放了 PgBouncer 的事务池模式，连接会被复用，这时要把 pgx 的查询模式改掉。部署到那一步再查文档，现在只要知道有这回事。
+预备语句属于单个连接。PgBouncer 事务池模式下，客户端事务可能使用不同的服务端连接；兼容性取决于 PgBouncer 版本和配置。部署时应核对其 prepared statement 支持及 pgx 查询模式，不要假定所有事务池都必须关闭预备语句。
 
 最后一个事实是 MVCC，也就是多版本并发控制。PG 的 `UPDATE` 不改原行，而是写一个新版本。在一张只有一行的表上试试：
 
@@ -283,7 +283,7 @@ func withTxPgx(ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx) error
 }
 ```
 
-`Commit` 之后再 `Rollback` 是幂等的，所以 `defer` 放心写。练习 `TestWithTxPgx` 先让 `fn` 返回错误，断言一行都没写进去，再让它成功，断言两行都在。
+`Commit` 之后再调用 `Rollback` 不会撤销已提交的事务；pgx 会返回事务已关闭的错误，这里的 defer 有意忽略它。练习 `TestWithTxPgx` 先让 `fn` 返回错误，断言一行都没写进去，再让它成功，断言两行都在。
 
 新坑来了：`Rollback(ctx)` 和 `Commit(ctx)` 都收 ctx。如果请求超时正好取消了 ctx，收尾本身会怎样？用两个事务对比：
 

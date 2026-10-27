@@ -70,7 +70,7 @@ worker 0
 
 对 Java 读者，`wg.Wait()` 像 `CountDownLatch`。对 Kotlin 读者，`go` 像 `launch`，但不需要 `CoroutineScope`，也没有结构化并发，goroutine 泄漏要自己防。对 JS 读者，`Promise.all` 是最接近的东西。
 
-和 tokio 比，`go` 同样是急切的：语句执行完 goroutine 就已经可以被调度了。区别是 Go 没有 `.await`，让出点由编译器和运行时在函数调用处插入，源码里看不到。
+和 tokio 比，`go` 同样是急切的：语句执行后 goroutine 就可以被调度。Go 没有显式 `.await`；阻塞操作和运行时抢占都可能导致调度，不能只把切换点理解为函数调用。
 
 ## goroutine 有多便宜
 
@@ -192,7 +192,7 @@ Kotlin 的 `select {}` 和 JS 的 `Promise.race` 做类似的事，Java 标准�
 
 `select` 有三个要记的规则：
 
-1. 多个分支同时就绪时，随机挑一个，防止某个分支饿死。
+1. 多个分支同时就绪时，以伪随机方式选一个；这不保证个别分支一定不会饿死。
 2. 分支只能是 channel 收发，没有模式匹配。
 3. nil channel 永远阻塞，所以把变量置 nil 就能禁用那个分支。
 
@@ -259,7 +259,7 @@ $ go run main.go
 c = 946
 ```
 
-结果不是 1000，每次跑还不一样。JS 单线程，没有这类问题。Java 和 Kotlin 读者对 `synchronized`、`volatile` 和 `AtomicLong` 很熟，Go 的 `Mutex` 和 `atomic` 一一对应。
+这次结果不是 1000，但有数据竞争的程序输出不可靠，也可能恰好打印 1000。Go 的 `Mutex` 和 `atomic` 分别用于保护临界区和支持原子操作。
 
 编译器一声不吭，因为 Go 没有 borrow checker，也没有 `Send`/`Sync`。
 
@@ -352,7 +352,7 @@ Java 的线程里抛出未捕获异常，只终止该线程。Node 里未处理�
 1. goroutine 便宜（约 2 KB 栈），运行时把它们复用到少量线程上。
 2. channel 内建，只有发送方 `close`，nil channel 永久阻塞，`select` 随机挑就绪分支。
 3. ctx 是取消的统一协议：第一参数、谁创建谁 cancel、只传信号。
-4. 没有编译期检查，`-race` 是唯一防线，CI 必开。
+4. `-race` 可发现实际执行路径上的竞争；还需同步设计、测试覆盖和代码审查。
 5. goroutine panic 杀全进程，入口处想清楚 recover。
 
 ## 练习：p3conc
@@ -407,7 +407,7 @@ go test -race -run TestCounters -v ./exercises/p3conc/    # race detector 绿灯
 | `tokio::spawn(async {...})` | `go func() {...}()` | 语法内建，没有 Future/async，函数本身可暂停 |
 | task（堆分配，无栈状态机） | goroutine（2 KB 起可增长栈） | 都不是 OS 线程。tokio task 是无栈，不是小栈 |
 | 多线程 work-stealing runtime | GMP 调度器 | 两边都有本地队列和偷任务，P 还管 mcache 和 netpoller |
-| `.await` 显式让出 | 调用点隐式让出 | 代价是源码里看不到切换点 |
+| `.await` 显式让出 | 阻塞和运行时抢占可触发调度 | 源码里没有完整的显式切换点 |
 | `tokio::select!` | `select` 关键字 | Go 随机选就绪分支，没有 `biased;` |
 | `mpsc` + `oneshot` + `broadcast` | `chan T` | 一个内建类型合体，可 close、可 range |
 | `CancellationToken` / drop future | `context.Context` | Go 靠显式参数传递取消 |
@@ -415,7 +415,7 @@ go test -race -run TestCounters -v ./exercises/p3conc/    # race detector 绿灯
 | `Mutex` / `RwLock` / `OnceLock` | `sync.Mutex` / `RWMutex` / `Once` | 零值可用，不用 new |
 | `AtomicU64` / `ArcSwap` | `atomic.Int64` / `atomic.Pointer[T]` | 1.19 起类型化封装 |
 | `JoinHandle` / `JoinSet` | `WaitGroup` / errgroup | 没有单个 goroutine 的 join 句柄 |
-| `tokio::spawn_blocking` | 不需要 | 阻塞调用不会饿死调度器 |
+| `tokio::spawn_blocking` | 视阻塞操作而定 | 运行时会处理多种阻塞，但线程和其他资源仍有限 |
 | task panic 只杀该 task | goroutine panic 杀全进程 | 每个入口自己 recover |
 
 时间相关的并发测试（Sleep 和计时器怎么测）见 P21，`testing/synctest` 提供假时钟。

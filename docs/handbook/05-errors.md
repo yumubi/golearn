@@ -5,7 +5,7 @@ title: 05 错误与资源：错误是值，清理靠 defer
 # 05 错误与资源：错误是值，清理靠 defer
 
 
-> 详细程度：深入 · 约 45 分钟
+> 详细程度：深入 · 约 50 分钟
 > 材料：TB18、TB22、TB23、TBX09 · 旧长版：`notes/p2_5-idiom.md`、`notes/p1_5-basics.md`、`notes/p19-ecosystem.md`
 > 前置：04 接口与组合（error 本身就是一个接口）
 
@@ -74,7 +74,7 @@ func handle(name string) error {
 }
 ```
 
-为什么这个形状好，数得出来的理由有三条：成功逻辑不缩进，读者从上到下一眼看到函数正常路径的全貌；每个错误分支自成一段、就近返回，不用在 `else` 里嵌套；最后一行 `return process(u)` 本身就宣告了"走到这里就是成功"。反过来，如果写成 `if 成功 { ... } else { ... }`，成功逻辑被埋进分支，缩进一层叠一层。
+这种形状让成功逻辑少一层缩进，错误分支也能就近返回。不过最后的 `process(u)` 本身仍可能返回错误；到达它只说明前面的检查通过，不代表处理一定成功。
 
 如果一段逻辑怎么都压不成快乐路径，通常说明函数在做太多事。办法是把缩进很深的 `else` 里的逻辑析出成独立函数，再对原函数套快乐路径。〔TB18 p10〕Rust 的 `?` 做的是同一件事：遇错提前返回。Go 没有这个语法，靠手写 `if err != nil`，代价是每层多两行，收益是错误路径就在眼前、不用猜 `?` 把控制流拐去了哪。
 
@@ -182,7 +182,7 @@ func Public(name string) error {
 
 健壮性的三条底线：不要相信外部输入（校验失败立即返回预设错误）；不要忽略任何一个错误；不要假定异常不会发生。〔TB23 p2〕前两条靠纪律，第三条靠 `panic`/`recover`，第六节讲。
 
-Go 不逼你处理，丢掉 `err` 是合法代码，所以漏检只能靠习惯和工具：`errcheck` 这类 linter（`go vet` 不负责查未检查的错误）。最常见的疏漏不是忘了写 `if err != nil`，而是写了但写错地方，比如 `defer f.Close()`：写文件时 `Close` 的错误才是真正的写入失败，直接吞掉会让"看起来成功了"的假象通过。下一节解决。
+Go 不逼你处理，丢掉 `err` 是合法代码，所以漏检只能靠习惯和工具：`errcheck` 这类 linter（`go vet` 不负责查未检查的错误）。例如 `defer f.Close()` 会丢弃关闭错误；写入时有些错误可能直到 `Close` 才出现，下一节演示如何保留它。成功关闭也不等于数据已持久落盘，需要持久性时还要按文件系统和应用要求处理 `Sync` 等步骤。
 
 ## 五、defer：清理的纪律
 
@@ -229,7 +229,7 @@ func write() (err error) {
 	defer os.Remove(f.Name())
 	defer func() {
 		if cerr := f.Close(); cerr != nil && err == nil {
-			err = cerr // 写入没错但落盘失败，别吞掉
+            err = cerr // 保留关闭错误，不覆盖已有写入错误
 		}
 	}()
 	_, err = f.WriteString("hi")
@@ -308,7 +308,7 @@ main recovered: boom
 
 `b()` 里 `recover` 直接写在 deferred 函数体里，返回 `"boom"`，正常收场。`a()` 里 `recover` 被包在 `helper` 里，已经不是 deferred 函数本身在调，于是返回 nil，panic 没被接住，继续穿透 `a` 冒到 `main`，才被 `main` 自己的 `defer recover` 接住。最后一个 "unreachable" 永远打不出来。这个差别决定了你在写 recover 时不能把它藏进一个被间接调用的函数里。
 
-另一个关键事实：**`recover` 只管当前 goroutine**。在 `main` 里 defer recover，挡不住子 goroutine 的 panic，整个进程以 exit status 2 退出。所以长期运行的服务里，每个自己启动的 goroutine 入口都要有 `defer recover`。`net/http` 为每个连接的 goroutine 做了这一层。〔TB23 p6-7〕
+另一个关键事实：**`recover` 只管当前 goroutine**。在 `main` 里 defer recover，挡不住子 goroutine 的 panic，未恢复的 panic 会终止进程。是否在 goroutine 入口恢复应由服务的隔离策略决定：恢复后要记录诊断信息并保证状态和资源仍安全；不应无差别吞掉程序缺陷。`net/http` 为连接处理设置了恢复边界。〔TB23 p6-7〕
 
 何时用 `panic`：
 
@@ -369,7 +369,7 @@ custom:  :80 1s 0
 3. `errors.Is` 沿 `%w` 链找值，`errors.As` 找类型；`==` 只看最外层。
 4. 包内用 `%w` 建链，对外 API 边界用 `%v` 切断，控制暴露面。
 5. 不信任输入、不忽略错误、不假定无异常；`defer` 的释放紧挨申请处成对出现。
-6. defer 参数注册时求值，作用域是函数，能改命名返回值；性能开销已可忽略。
+6. defer 参数注册时求值，作用域是函数，能改命名返回值；通常可用于清理，热点开销应实测。
 7. `panic` 是断言和安全网，不是错误返回；`recover` 只在 deferred 函数里、只救当前 goroutine。
 8. 参数一多，用 Option 模式加 `WithXxx`，构造签名不变。
 
@@ -424,7 +424,7 @@ custom:  :80 1s 0
 - C 的痛点是单返回值被迫"一值多用"：`fprintf` 的返回值既表字符数又表负数错误码，返回字符串时更难融合，只能靠输出参数或自定义结构体，做法不统一。Go 用多返回值把错误状态与返回信息拆开，惯例把 error 放在返回值列表末尾，`fmt.Fprintf` 的 `(n, err)` 就是 C `fprintf` 的解耦版。〔TB22 p2-3〕
 - error 接口带来三大好处：统一错误类型（跨包跨项目可读、策略统一）、错误是值（可比较可传递，检视体验与 C 一致）、易扩展（自定义类型携带上下文）。error 接口是错误值提供者与检视者之间的契约，具体上下文与接口解耦，体现"正交"理念。〔TB22 p6〕
 - 需要更多上下文时的范本是 `net.OpError`：携带 Op、Net、Source、Addr、Err 五个字段，标准库内部用类型断言检视 `oe.Op == "read"` 来分类网络读错误。正文策略 4 的 `errors.As` 取字段就是这条路的通用化。〔TB22 p5-6〕
-- `errors.As` 匹配成功后存进第二参数的是链中最深处的原始错误值，对取出值再与原始错误判 `==` 会得到 true；这正是"用 errors.As 替代类型断言"的原因：断言只看最外层动态类型。〔TB22 p12-13〕
+- `errors.As` 按错误树的遍历顺序返回第一个匹配项，并不保证是最深处的错误；普通类型断言只检查最外层动态类型。〔TB22 p12-13〕
 - 策略 2 在标准库的原始用例是 `http.Server.Serve` 对 Accept 错误做 `ne.Temporary()` 判断后 sleep 重试；如今 `Temporary()` 已标注 Deprecated，但"按行为特征分支"的思路由 `Timeout()` 延续。〔TB22 p14〕
 
 ### TB23 defer 与 panic 的补充细节

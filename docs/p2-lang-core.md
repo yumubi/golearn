@@ -27,11 +27,11 @@ int 的大小: 8
 接口值的大小: 16
 ```
 
-接口值是两个机器字，64 位机上共 16 字节。第一个字指向类型信息和方法表，叫 itab，第二个字指向实际数据。
+在本次 64 位实现中，接口值占两个机器字。可用（动态类型、动态值）理解它：非空接口的运行时表示通常借助 itab 查找方法；空接口表示有所不同，具体布局是实现细节，不是语言保证。
 
-通过接口调用方法，就是先查 itab 找到函数地址，再间接调用。这和 Rust 的 trait object（胖指针加 vtable）是同一个设计，也是 Java 接口调用在 JVM 里的 `invokeinterface` 要做的事。
+通过接口调用方法时，运行时依据动态类型选择实现；编译器也可能优化掉间接调用。Rust trait object 的 vtable 是有帮助的类比，但布局和优化并非语言契约。
 
-另一件事是零值。Go 分配内存时会清零，所以任何类型的"全 0 字节"状态都是合法的零值。后面"零值"一节会用到这个事实。
+Go 每种类型都有定义好的零值；不必假设其内存表示一定是全零字节。
 
 ## 接口
 
@@ -46,7 +46,11 @@ func (d Dog) Speak() string { return d.Name + ": woof" }
 type Robot struct{ ID int }
 func (r Robot) Speak() string { return fmt.Sprintf("robot-%d: beep", r.ID) }
 
-func speakAll(ss []Speaker) string { /* 逐个调 Speak，用换行拼接 */ }
+func speakAll(ss []Speaker) string {
+	var lines []string
+	for _, s := range ss { lines = append(lines, s.Speak()) }
+	return strings.Join(lines, "\n")
+}
 
 fmt.Println(speakAll([]Speaker{Dog{"rex"}, Robot{7}}))
 ```
@@ -299,7 +303,7 @@ main.main()
 exit status 2
 ```
 
-nil map 能读、不能写。写之前要 `make`。slice、map、channel 的零值都是"指向底层存储的指针还没分配"。
+nil map 能读、不能写，写之前要 `make`。nil slice 可直接 `append`；nil channel 的收发会阻塞。三者行为不同，不应仅凭内部表示推断用法。
 
 另外有些类型要求必须构造。`time.Timer` 的文档要求先用 `NewTimer` 或 `AfterFunc` 创建。判断口诀：文档写 "zero value ... ready to use" 就可以直接用，要求 New 或 initialize 的就别省。
 
@@ -333,8 +337,12 @@ unknown
 泛型函数把类型参数写在函数名后面，约束必须是接口：
 
 ```go
-func Max[T cmp.Ordered](a, b T) T { /* a > b 则返回 a */ }
-func MapAny[T, R any](xs []T, f func(T) R) []R { /* make 预分配，for 填充 */ }
+func Max[T cmp.Ordered](a, b T) T { if a > b { return a }; return b }
+func MapAny[T, R any](xs []T, f func(T) R) []R {
+	out := make([]R, len(xs))
+	for i, x := range xs { out[i] = f(x) }
+	return out
+}
 
 fmt.Println(Max(3, 8), Max("go", "rust"))
 fmt.Println(MapAny([]int{1, 2, 3}, strconv.Itoa))
@@ -355,7 +363,7 @@ Go 没有 `.map().filter()` 迭代器链，显式循环是主流。练习 `TestT
 3. 嵌入是编译期转发糖，不是继承。多态只有接口一条路。
 4. 上下文用 `%w` 包装，sentinel 用 `errors.Is`，类型用 `errors.As`。
 5. 接口是二元组，`return nil` 要显式。
-6. 零值可用是设计契约，slice 和 map 要 `make`，文档要求 New 的听文档。
+6. 零值是否可用取决于类型：nil slice 可 append，nil map 写入前要 make；文档要求构造的类型按文档使用。
 
 ## 练习：p2lang
 
@@ -419,7 +427,7 @@ FAIL
 
 - 字段也会提升：`g.Greeting` 合法。
 - 外层自己定义了同名成员就遮蔽内层。同深度两个嵌入有同名方法，选择子非法，编译报错。
-- 指针嵌入 `*Base` 也提升，为 nil 时调用会 panic。
+- 指针嵌入 `*Base` 也提升方法；nil 接收者是否 panic 取决于调用的方法及其对接收者的使用。
 - 接口可以嵌接口，`io.ReadWriter` 就是 `Reader` 加 `Writer`。Go 没有 default impl，靠接口组合拼装。
 
 ### 错误处理补充

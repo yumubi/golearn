@@ -86,7 +86,7 @@ CLI 的形态是 `goose DRIVER DBSTRING COMMAND`，驱动名和连接串必须�
 
 有三条纪律：
 
-1. **`Down` 必写。** 写不出回退方案的迁移，多半没想清楚。
+1. **为回退制定方案。** 本练习提供 `Down`；生产迁移可能不可逆或回退会丢数据，必须结合备份、前向修复与发布策略评估，不能只靠写一个 `Down`。
 2. **只加不改。** 要变表结构就新增 `0003_*.sql`。改已经跑过的 `0001`，别人本地的版本表就对不上了。
 3. **文件名就是版本。** goose 按序号排序，版本号记在 `goose_db_version` 里。
 
@@ -127,7 +127,7 @@ goose.Up(db, "migrations")      // 进程启动时自迁移
 
 这是 Go 服务单二进制部署的标准姿势。Flyway 默认从 classpath 读迁移，打进 jar 里，思路一致。
 
-启动自迁移在多副本部署时有并发问题，要用锁保证只有一个实例在迁移。goose 自带锁的能力（`go doc github.com/pressly/goose/v3` 可查）。
+多副本同时启动自迁移时，需要按数据库和所用 goose API 配置并验证锁或外部协调；不要假设示例中的 `goose.Up` 自动提供跨实例互斥。
 
 ## sqlc 生成
 
@@ -271,7 +271,7 @@ fmt.Println("事务内行数:", inTx, "回滚后行数:", after)
 
 练习的 `helpers.go` 里有 P9 同款的 `withTx` 助手：`defer tx.Rollback()` 保证任何出口都回滚，`Commit` 之后再回滚是无害的空操作。`TestWithTxGenerated` 验证回滚和提交两条路。
 
-## 两个翻车
+## 三个翻车
 
 这章踩了三个坑。其中一个在当前版本里复现不了，我照实记录。
 
@@ -306,7 +306,7 @@ goose run: ERROR 0002_age.sql: failed to parse SQL migration file: failed to par
 ## 小结
 
 1. SQL 先行：表在 migrations，查询在 queries，Go 代码全生成。校验靠 generate，不靠 `go build`。
-2. goose 三纪律：`Down` 必写、只加不改、文件名即版本。失败的迁移在 sqlite 和 PostgreSQL 里整体回滚。
+2. goose 迁移应有回退或前向修复方案，已发布迁移只加不改，文件名决定版本；事务性 DDL 的具体支持依赖数据库和迁移设置。
 3. 注解即签名：`:one`、`:many`、`:exec`、`:execrows` 决定方法形态，改注解会让调用方编译不过。
 4. sqlc 的校验不完备，聚合查询里的错列名它不一定拦，要配测试。
 5. 生成器的解析器不是编译器。报错不指向真凶时，二分排查是基本功。

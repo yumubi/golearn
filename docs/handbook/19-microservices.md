@@ -5,7 +5,7 @@ title: 19 微服务拆分与治理：怎么拆、怎么切流量、拆完多了�
 # 19 微服务拆分与治理：怎么拆、怎么切流量、拆完多了什么
 
 
-> 详细程度：深入 · 约 55 分钟
+> 详细程度：深入 · 约 65 分钟
 > 材料：W10-1、W10-2、W10-3、W14-1、W13-2、W14-2 · 旧长版：`notes/p10-grpc.md`（gRPC 基础与拦截器）
 > 前置：04 接口与组合、16 稳定性、17 迁移
 
@@ -168,13 +168,17 @@ func main() {
 
 - **生成的服务端接口强制组合一个空实现**（`mustEmbedUnimplemented...Server`）。目的同样是向后兼容：接口以后加方法时，老实现因为组合了空实现而仍然编译通过，不会让所有存量服务一夜之间编译失败。〔W10-1 p49〕
 
-API 定义放哪也是拆分期的决定，三种方案：公司级统一 API 仓库（团队 30 人以内推荐，课程采用）、各服务内部维护 API 目录、实现仓库与 API 仓库分离（巨型应用）。〔W10-3 p7〕`protoc` 插件难管理、命令行参数长，用 `buf` 配 `buf.gen.yaml` 统一生成，`go_package_prefix` 免去每个文件写长路径。〔W10-3 p10-11〕
+API 定义放哪也是拆分期的决定。gRPC 场景下就是 Protobuf 文件放哪里，主流有三种方案：方案一，同一个仓库，公司（或部门）只有一个统一的 API 仓库，所有微服务的 API 定义都放在这里；方案二，各微服务内部维护一个 API 目录，放各自的 Protobuf 定义；方案三，每个微服务有一个实现仓库加一个 API 仓库，Protobuf 文件放 API 仓库。〔W10-3 p7〕
+
+选型条件与团队规模和组织形态强相关：小规模应用（团队规模不超过 30 人）建议方案一；巨型应用且团队组织架构合理的建议方案三。课程落地用的就是方案一：在 webook 下面建一个 api 目录放 Protobuf 定义。api 下面理论上还能放别的定义，比如 Thrift、Swagger；proto 按服务拆分目录，旁边配一个 gen 目录放生成代码；具体服务再加上版本号目录（也可以省略）。〔W10-3 p7-8〕
+
+定义写好之后是生成代码。直接用 protoc 有三个痛点：插件难管理；protoc 命令本身不好记，每次使用都要输入一大堆参数；各种文件目录、package 定位简直要命（原课把改用 buf 这一步标注为可选）。所以引入 buf 来管理 protobuf，安装参考 buf.build/docs/installation，先试自己操作系统的安装方式，不行就用 npm。〔W10-3 p10〕在项目顶级目录放 buf.gen.yaml，定义 buf 怎么管理和编译 protobuf：`go_package_prefix` 解决每次都要写老长一段 go package 的问题；`plugins` 是关键配置，指定两个插件（Go 语言插件和 gRPC 插件），并在两个插件里分别指定 out（输出目录）和 opt（选项）。生成在顶级目录触发，两种等价方式：作者封装好的 `make grpc`，或者直接执行 `buf generate webook/api/proto`；buf 还有其他配置项，需要时再去看。〔W10-3 p11〕
 
 ### gRPC、HTTP、定时任务是同一层
 
-服务端实现里有一个值得记住的结构原则：**gRPC、定时任务（Job）、Web 是同一个级别的东西，都是"服务对外的表现形式"**：Job 以定时任务的形式暴露，Web 以 HTTP 接口的形式暴露，gRPC 以 RPC 接口的形式暴露。〔W10-3 p13〕
+API 定义出来之后就要实现这些 gRPC 接口。注意，这些实现都放到一个独立的 gRPC 包里。从地位上来说，**gRPC、定时任务（Job）、Web 是同一个级别的东西，都是"服务对外的表现形式"**：对 Job 来说，以定时任务的形式暴露出去；对 Web 来说，以 HTTP 接口的形式暴露出去；对 gRPC 来说，以 RPC 接口的形式暴露出去。〔W10-3 p13〕
 
-这个原则的价值要用代码看。只要本地的 Service 抽象得好，gRPC 服务端只是"组合 `Unimplemented...Server` 加持有原来的 Service"，翻译一下请求参数再调 Service，**Service 本身零修改**。〔W10-3 p12〕
+这个原则的价值要用代码看。只要本地的 Service 抽象得好，gRPC 服务端只是"组合 `Unimplemented...Server` 加持有原来的 Service"，翻译一下请求参数再调 Service，**Service 本身零修改**。落到 Interactive 上：gRPC 服务端结构体 `InteractiveServiceServer` 组合（嵌入）`intrv1.UnimplementedInteractiveServiceServer`（作者注明"正常我都会组合这个"），同时持有 `Svc service.InteractiveService` 字段；构造函数 `NewInteractiveServiceServer(svc service.InteractiveService)` 注入这个依赖，返回 `&InteractiveServiceServer{svc: svc}`。〔W10-3 p12〕
 
 ```go
 package main
@@ -224,7 +228,29 @@ service: article/8 +1
 
 如果你的抽象没做好，这一步就会要求修改 Service 的实现，那是危险信号：先回头把本地接口整理干净，再拆进程。〔W10-3 p12〕04 章的"接口写在使用方""包装器、适配器"在这一步全部派上用场。
 
-框架选型顺便带过：功能性上各框架差距不大，成熟度上 gRPC 最好（生态、搜索答案、招人），非功能性（性能）中小公司基本不用考虑；go-zero 集成 Web 加微服务（底层也是 gRPC），Dubbo-go 能和 Java 的 Dubbo 互通，go-micro 简单易用。遇事不决选 gRPC。〔W10-1 p26〕〔W10-3 p4-5〕
+框架选型在这门课里是顺便带过的一步，但选型逻辑值得记全。Go 下候选有四个：**gRPC** 专注于 RPC，但也提供了负载均衡之类的基本功能，生态最好、相关开源软件非常多；**go-zero** 是集成 Web 开发和微服务开发的框架，底层通信就是用 gRPC，插件丰富、由中国人维护、没有语言壁垒；**Dubbo-go** 实现了 Dubbo 协议，可以无缝和 Java 的 Dubbo 应用通信，功能强、社区活跃，同时也支持 gRPC 协议；**go-micro** 专注于微服务、简单易用，有自己的协议，也适配了 gRPC 协议。〔W10-3 p5〕作者按三个维度对比：功能性上，业务没有特别之处的话，主流框架基本都能满足实际需要，四者没有特别大差距；成熟度上（社区支持度、搜索引擎支持度、招聘人才难度），gRPC 最好；非功能性上（性能），中小公司基本不考虑，而 gRPC 性能毫无疑问最好。据此课程选定 gRPC。〔W10-3 p4-5〕所以作者的选型建议是：遇事不决选 gRPC，绝对不会出错。〔W10-1 p26〕
+
+### 启动 Interactive：独立微服务的启动件
+
+外壳写完，最后一步是把 Interactive 变成可独立启动的微服务。要补齐三个启动件：模块内的 wire 装配、main 函数、一份自己的配置文件。wire 部分不用从零写：第六节"集成测试跟着搬"已经为 Interactive 写过一套测试用的 IoC 加 wire（模块少，相比 webook 简单很多），把测试的 wire 相关代码抄一份即可，再按主应用形态改差集。Interactive 作为一个完全独立的模块，配置之类的模块它也有一份，可以认为 webook 中 main 函数的部分它差不多都会有一份。〔W10-3 p16〕
+
+wire 装配分两组〔W10-3 p17〕。`serviceProviderSet` 收 Interactive 全链路的 provider：`dao.NewGORMInteractiveDAO`、`cache.NewRedisInteractiveCache`、`repository.NewCachedInteractiveRepository`、`events.NewInteractiveReadEventConsumer`、`service.NewInteractiveService`、`grpc.NewInteractiveServiceServer`。`thirdProvider` 收 ioc 初始化：`ioc.InitRedis`、`ioc.InitDB`、`ioc.InitLogger`、`ioc.InitKafka`、`ioc.InitGRPCServer`、`ioc.NewConsumers`。`Init() *App` 通过 `wire.Build(thirdProvider, serviceProviderSet, wire.Struct(new(App), fieldNames...: "*"))` 返回 App。和测试版相比有两处差集：一是 `thirdProvider` 里 `InitTestDB`、`InitLog` 换成正式的 `InitDB`、`InitLogger`，再新增 `InitGRPCServer` 和 `NewConsumers`，四项变六项；二是测试版散装列在 `wire.Build` 的 server、dao、cache、repository、service，正式版收进 `serviceProviderSet`，并补上事件消费者（测试不装配消费者）。
+
+配置文件相比 webook 主应用只是多了一个 gRPC 启动端口，其余 db、redis、kafka 配置齐全〔W10-3 p17-18〕：
+
+```yaml
+db:
+  dsn: 'root:root@tcp(localhost:13316)/webook'
+redis:
+  addr: 'localhost:6379'
+kafka:
+  addrs:
+    - 'localhost:9094'
+grpc:
+  addr: ':8090' # 启动监听 8090 端口
+```
+
+启动时要注意设置正确的 working directory 和配置文件：IDE 运行配置指向 webook/interactive 模块目录，程序参数填 `--config=config/dev.yaml`。两样对不准就会读错配置，服务起不来或连错库。〔W10-3 p18〕
 
 ## 四、拆分的关键一步：灰度切流量
 

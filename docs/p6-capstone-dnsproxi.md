@@ -68,7 +68,7 @@ dig @127.0.0.1 -p 5353 example.com # 走通四跳
 | Go 代码 | Rust 对照 | 关注点 |
 |---|---|---|
 | `wire/wire.go`（Header/ParseName） | `main.rs` 头部解析 + `parse_qname` | `binary.BigEndian.Uint16` vs `u16::from_be_bytes`；压缩指针 `[]byte` 无借用检查：offset 越界=panic，要显式防御 |
-| `main.go`（Run/handleQuery） | `main.rs` 转发循环 | goroutine 泄漏检测（`-race` + 上游 deadline；go.leak 只在 go.sum 里，未 import） |
+| `main.go`（Run/handleQuery） | `main.rs` 转发循环 | 生命周期由等待和上游 deadline 控制；`-race` 检测竞争，不检测 goroutine 泄漏 |
 | `cache/cache.go` | `CacheStore` | `sync.RWMutex` vs `RwLock<HashMap>`，锁粒度选择 |
 | `cache/sketch.go` | `FreqSketch` | 位运算一样，但 Go 没有.checked_add，要手动防溢出 |
 
@@ -153,10 +153,7 @@ Admit 判决）+ PutFull 两值返回（Eviction/Rejected）+ main.go 接线
    对应物，别用 `[]uint64`+atomic.LoadPointer 自虐）。CAS 循环照抄：
    `CompareAndSwap(cur, cur+1<<shift)`，饱和判据 `(cur>>shift)&0xF == 0xF`。
    位运算部分两语言逐字同构，你 Rust 课文说"位运算一样"，实测如此。
-2. **fetch_update → Load+Swap**。Rust 减半用 `fetch_update`（CAS 到成功）；
-   Go 版我直接 `Swap((Load()>>1)&mask)`，这里没有 ABA 风险（减半是幂等
-   收敛的，swap 丢一次并发增量可接受），换来代码少一层闭包。**权衡有据
-   才能省**，不是偷懒。
+2. **fetch_update → Load+Swap**。Rust 减半用 `fetch_update`（CAS 到成功）；Go 版采用 `Swap((Load()>>1)&mask)`，可能覆盖并发增量，这是近似计数的一项取舍，不能推广成精确计数的安全替代。
 3. **pickVictim 的 expired 判据**。你 Rust 版是
    `DNS_CACHE_VICTIM_EXPIRED_FIRST` 旋钮 + 排序键字典序；Go 版简化成
    "始终检查挑中者死活"（排序仍纯 last_access）。少一个旋钮、语义同向：
@@ -204,9 +201,7 @@ run.sh expire 场景。
 1. **结构同构，goroutine 替代 tokio::spawn**。你 Rust 版 `tokio::spawn`
    + `interval(Duration::from_millis(1000/hz))`；Go 版 `time.NewTicker`
    + goroutine + `done` channel 关停。间隔算术两版同款 `1000/hz` 毫秒
-   ：你 Rust :846 注释"hz>1000 除零炸 ticker"的坑 Go 版一样有
-   （`time.Second / Duration(hz)`，hz=0 tick 间隔无穷大 = 永不醒），
-   所以 envIntClamp 1..500 的夹取不能省。
+   ：两版都要限制 hz；Go 的 `time.Second / time.Duration(hz)` 在 hz=0 时整数除零会 panic，hz 过大时计算出的间隔也可能为零，`NewTicker` 不接受非正间隔。因此 envIntClamp 的范围限制不能省。
 2. **锁边界翻译得更直白**。Rust 版 `let (checked, removed) = { let mut c = cache.write(); c.expire_round(...) };`：花括号就是锁的生死线。
    Go 版 ExpireRound 自带 `Lock/defer Unlock`，多轮之间锁天然释放，
    排队的查询能插进来。语言没有作用域锁的语法糖，反而逼你把边界
@@ -247,16 +242,7 @@ P50/P90/P99 分位、PCG 种子）+ 五档同机压测 + `dnsproxi-go/LESSON.md`
 | 准入 on ks=5000 | 10 288 / 6.9ms | 15 037 / 2.4ms |
 | +主动老化 | 10 381 / 6.1ms | 13 596 / 4.1ms |
 
-结论四条（细节在 LESSON.md）：
-1. 总量级同档（Go ~10k，Rust ~13-19k，1.3-1.9×），瓶颈都在 per-query
-   临时上游 socket，不在语言。
-2. **命中路径差距最大（2×）**：Go 版 handleQuery 多一次应答拷贝
-   （`append([]byte(nil),...)`），是现成的优化练习。
-3. 准入/老化的开销在噪声内：TinyLFU 4 hash + 4 Or、每秒 10 老化
-   周期，万级 qps 下都不是瓶颈（D5/D6 "预算内做正确性"的实测注脚）。
-4. P50 Rust 稳定快（表内五档差 0.14-0.63ms）；Go 偶发 GC 停顿进 max（30-170ms 离群）。
-   （GC 侧跟进：Go 1.26 起 Green Tea GC 默认开，alloc 微基准下与老 GC
-   区间交叠，见 `labs/experiments/results-gc-2026-10-12.md`。）
+这次数据表明几组负载下 Go 与 Rust 处于同一数量级，命中路径差距最大。以下原因只能作为后续 profiling 的假设，而不是由这组数据单独证明：临时上游 socket 可能限制吞吐；Go 的额外应答拷贝可能影响命中路径；GC 可能影响尾延迟。准入和老化几档的结果接近，但短时测试不能证明它们没有成本。具体实验条件与后续 GC 观察见 `dnsproxi-go/LESSON.md` 和 `labs/experiments/results-gc-2026-10-12.md`。
 
 **翻车×2（都在压测器，不在被测系统）**：① dnsq 的
 `SetReadDeadline` 只设一次，第 2 包起 deadline 已过期 → 96% 假丢包，
@@ -338,9 +324,7 @@ dig 冒烟（run.sh）。
 
 ### Go vs Rust 实感（对照你 Rust 版 dnsproxi 同功能）
 
-1. **报文解析没有 try_get 兜底**。Rust 版越界 = `Err`，Go 版越界 = panic。
-   ParseName 每个 `b[pos]` 前都要手写边界检查，"没有借用检查，防御
-   显式化"的落地样本（防御行数 ≈ 解析逻辑行数，Rust 版约 1:0.5）。
+1. **报文解析要显式检查边界**。Rust 版的 `try_get` 返回错误，Go 的切片索引越界会 panic；Rust 普通索引也可能 panic。这与借用检查是不同的问题，Go 版 ParseName 在访问前检查位置。
 2. **per-query 生命周期靠纪律**。`tokio::spawn` 有 JoinHandle 管；
    `go handleQuery()` 谁也不等：Run 里 WaitGroup + ctx-close-监听口
    + 入口 recover 三件套缺一不可。P3 问题 1 的实弹版（goroutine panic 防御）。

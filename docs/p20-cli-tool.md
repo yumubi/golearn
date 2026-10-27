@@ -25,8 +25,7 @@ CLI 工具的整个礼仪，来自 Unix 两条老规矩：
    它。0 表示成功，非 0 是错误分类。`&&`/`if` 都靠它决策。退出码
    是 CLI 的 API，比 flag 更早被调用方依赖。
 
-Go 的 CLI 工具能横行（kubectl、docker、hugo、gh），还有第三条：
-**静态链接单二进制 + 零配置交叉编译**（P1 编译模型的兑现）。
+Go 常用于构建单二进制 CLI（kubectl、docker、hugo、gh），并支持通过 `GOOS`、`GOARCH` 交叉编译。是否静态链接以及交叉编译是否需要额外工具，取决于 CGO、依赖和目标平台。
 
 ## stdout 神圣，stderr 才是日志
 
@@ -94,14 +93,13 @@ var rootCmd = &cobra.Command{
 var serveCmd = &cobra.Command{
     Use: "serve",
     RunE: func(cmd *cobra.Command, args []string) error {
-        return runServe()      // RunE 返回 error：cobra 负责打印 + 退出码 1
+        return runServe()      // 将错误交给 Execute 的调用方处理
     },
 }
 func init() { rootCmd.AddCommand(serveCmd) }
 ```
 
-口径：**≤2 个 flag 的单发工具用 flag；要长成服务/全家桶的直接
-cobra**（flag 写到一半迁移的代价高于起步）。
+简单单命令可先用 flag；子命令、共享 flag 或补全需求出现时，再评估 cobra。flag 数量不是硬门槛，迁移成本也应结合项目规模判断。调用 `rootCmd.Execute()` 的 main 仍须根据返回错误决定退出码。
 
 ## fs.WalkDir 遍历文件树
 
@@ -173,8 +171,7 @@ func run() error {   // 业务逻辑全在 run：main 只管退出码
 
 服务日志（P15/P16）和工具日志不是一个物种。四条：
 
-1. **默认安静**：成功时零输出（`ls` 成功时说什么了吗）；要报告用
-   `--verbose`/`-v` 放开，slog Level 用 flag 调。
+1. **区分结果与诊断**：查询工具成功时通常要在 stdout 输出结果；没有结果可报告的操作则可以默认安静。详细诊断可用 `--verbose`/`-v` 放开。
 2. **stderr 永远**：包括 `--verbose` 的调试输出。
 3. **进度要可管道**：长任务进度走 stderr + 检测 tty，非 tty 降级
    纯文本或不输出。
@@ -241,8 +238,7 @@ go build -o /tmp/wcgo ./exercises/p20cli/cmd/ && /tmp/wcgo --bogus; echo "exit=$
 1. stdout 是数据接口，stderr 是人机界面（fd 1/2 分工）；库代码
    收 `io.Writer`，不摸 os.Stdout。
 2. 单发工具 flag 起步；要子命令/completion 直接 cobra，别半路迁移。
-3. WalkDir 回调收集错误继续走，`fs.SkipDir` 剪枝；Scanner 必查
-   `Err()`，默认 64KB 行长上限会静默截断。
+3. WalkDir 回调可收集错误继续走，`fs.SkipDir` 剪枝；Scanner 必查 `Err()`，默认约 64KB 的 token 上限超出后会报错，忽略错误才会造成静默截断。
 4. 退出码是 shell 的 API：0/1/2；`run() error` + main 薄壳一处
    收口，库代码永远不 os.Exit。
 5. 工具日志默认安静走 stderr，`-q` 给脚本，`-v` 给人，tty 检测管
@@ -275,7 +271,7 @@ GitHub Release + 校验和 + Homebrew tap 更新。对照 Rust 的
 |---|---|
 | systemd | `Type=exec`；日志交 journald，工具侧 slog JSON 到 stdout |
 | launchd（macOS） | plist `RunAtLoad`；日志重定向文件 |
-| 容器 | `FROM scratch` + 二进制；PID 1 收信号要自己处理（SIGTERM 不处理，k8s 等 30s 后 SIGKILL） |
+| 容器 | `FROM scratch` 需要兼容的自包含二进制及必要运行资源；PID 1 应明确处理 SIGTERM 并执行清理，具体停止期限由运行环境配置 |
 
 常驻进程 = 本章全套 + signal.NotifyContext 优雅关停
 （P8 的 `Shutdown(ctx)` 链路）。

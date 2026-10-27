@@ -5,7 +5,7 @@ title: 20 注册发现与负载均衡
 # 20 注册发现与负载均衡
 
 
-> 详细程度:标准 · 约 45 分钟
+> 详细程度:标准 · 约 55 分钟
 > 材料:W12-1、W12-2、W13-1、W13-2、C:dachang/etcd · 旧长版:`notes/p10-grpc.md`(gRPC 基础)
 > 前置:16 稳定性、19 微服务拆分与治理
 
@@ -13,7 +13,7 @@ title: 20 注册发现与负载均衡
 
 把同一个服务部署了两个节点,分别监听 8090 和 8091,客户端连打 4 次 RPC,你预期流量怎么分?大多数人会猜"对半分"。但用 gRPC 默认配置跑出来的结果是:4 次全落在 8090,8091 一次都没被用到。〔W13-2 p4〕
 
-这不是 bug,是 gRPC 默认的负载均衡策略 `pick_first` 在忠实执行自己的语义:所有地址都试一遍,选第一个连得上的,然后**所有请求都固定发往这一个节点**。其余节点纯粹是"备胎",只在主节点连不上时才顶上。下面用最小的代码把这个行为演出来(`Picker` 和 `SubConn` 的名字都对应 gRPC 里同名概念):
+这不是 bug,是 gRPC 默认的负载均衡策略 `pick_first`:它尝试解析出的地址,选一个可用连接来承载请求,连接不可用时再尝试其他地址。它不负责把请求均匀分配到多个节点。下面的代码仅模拟“固定选一个”与轮询的区别,不模拟连接建立、故障切换或 gRPC 的内部实现:
 
 ```go
 package main
@@ -23,7 +23,7 @@ import (
 	"sync/atomic"
 )
 
-// SubConn 对应 gRPC 的 balancer.SubConn:名字里是 Conn,实际代表"连到某个节点的连接池"。
+// SubConn 只是地址的简化表示,不实现 gRPC 的 balancer.SubConn。
 type SubConn string
 
 // Picker 对应 balancer.Picker:每次 RPC 调用它挑一个连接。
@@ -31,7 +31,7 @@ type Picker interface {
 	Pick() SubConn
 }
 
-// pickFirst 是 gRPC 的默认策略:永远返回解析结果里的第一个。
+// pickFirst 在这个简化模型里固定选择第一个地址,假设列表非空且地址可用。
 type pickFirst struct{ subConns []SubConn }
 
 func (p *pickFirst) Pick() SubConn { return p.subConns[0] }
@@ -89,7 +89,7 @@ round_robin 连打 4 次: 127.0.0.1:8091 127.0.0.1:8090 127.0.0.1:8091 127.0.0.1
 
 **第二代:域名 + DNS。** 解析域名有开销,客户端一般会缓存解析结果,于是两难:不缓存,每次调用多一跳查询；缓存了,节点上下线无法及时反映到客户端列表里。〔W12-1 p6〕
 
-**第三代:注册中心。** 用"主动通知"替代"过期重拉":服务端启动时注册；客户端首次调用前查询并缓存；节点变动时注册中心主动推给客户端。没有明显短板,硬要说就是大规模集群下注册中心本身可能成为瓶颈。〔W12-1 p7〕
+**第三代:注册中心。** 服务端启动时注册；客户端查询并缓存实例列表,再通过监听变化更新缓存。它能缩短变更传播时间,但仍要处理断连、缓存过期和注册中心自身的可用性与扩容。〔W12-1 p7〕
 
 
 数据量大了还有一步优化:**服务自省**(Dubbo 提出)。注册中心只存最小的定位数据,其余元数据变化少,放到独立的元数据服务里查一次就够。〔W12-1 p8〕
@@ -102,21 +102,75 @@ round_robin 连打 4 次: 127.0.0.1:8091 127.0.0.1:8090 127.0.0.1:8091 127.0.0.1
 
 启动时机上,服务端连不上注册中心就应该直接失败退出:此时服务还没对外提供流量,失败代价最小,拖着带病上线反而危险。〔W12-1 p12〕还有个容易忽略的顺序细节:要**先确保端口打开,再注册**,否则客户端拿着列表打过来,连接被拒。〔W12-2 p14〕
 
-注册自己的地址有个小坑:不能用 `127.0.0.1`,得注册和客户端同处一个局域网的地址。从配置文件读不可靠,常见办法是枚举网卡取第一个非环回的 IPv4(`net.InterfaceAddrs` 遍历,跳过 loopback 和 IPv6),平台注入环境变量或 UDP 拨号探测出口 IP 也是可行做法。课件里的 `GetLocalIP` 函数就是枚举网卡这路,找不到时返回 `ERR_NO_LOCAL_IP_FOUND`。〔C:dachang/etcd/service_registration_center/common.go:25-51〕〔W12-2 p16〕
+注册地址要从客户端视角确认可达,跨主机访问通常不能使用 `127.0.0.1`。可以由平台配置或注入,也可枚举网卡、探测出口地址；多网卡、NAT 等环境下不能保证自动选出的第一个地址可达。课件的 `GetLocalIP` 枚举网卡,找不到时返回 `ERR_NO_LOCAL_IP_FOUND`。〔C:dachang/etcd/service_registration_center/common.go:25-51〕〔W12-2 p16〕
+
+UDP 拨号的做法是用 `net.Dial("udp", "8.8.8.8:80")`,再从 `conn.LocalAddr()` 取本地地址。它通常不发送数据包,而是让内核按到该目标的路由选择出口地址；若客户端走另一条网络路径,这个地址未必可达,多网卡或 NAT 场景应以实际网络配置验证。〔W12-2 p16〕回环地址指向调用方自己的网络命名空间,一般不能作为跨主机服务地址。在 K8s 里应使用客户端可达的 Pod 地址,或使用 Service 名称访问；Pod 重建后 IP 可能改变。〔W12-2 p18〕
+
+### etcd 官方 SDK 怎么注册:Manager、Update 和退出清理
+
+etcd 直接提供了 gRPC 服务注册与发现的 Resolver 实现,服务端注册不用自己拼 etcd API,走 `endpoints` 包四步:〔W12-2 p7〕
+
+1. 创建 Manager:`endpoints.NewManager(cli, "service/user")`,第二个参数 target 就是服务名;
+2. 注册:`em.AddEndpoint(ctx, key, endpoints.Endpoint{Addr: addr})`。key 必须以服务名为前缀,实际 key = `"service/user/" + addr`(示例里 addr=`127.0.0.1:8090`,key 即 `service/user/127.0.0.1:8090`);`Endpoint` 的 metadata 一般是给客户端用的(比如后面第六节的权重);
+3. 注册数据有变动时调 `Update`。别扭之处:传入的是 `endpoints.Add` 操作,因为 key 已经存在,实际效果就是覆盖更新了数据。而且 etcd 这里没有提供 Edit 操作,作者原话是"无力吐槽"。课件里用 ticker 模拟元数据变化(更新 Metadata 时间戳),`etcdctl get` 同一个 key 能看到 Metadata 从 16:48:10 → 16:48:13 → 16:48:18 依次变化;〔W12-2 p8〕
+4. 正常退出按顺序做两件事:先 `em.DeleteEndpoint(ctx, key)` 删除自己注册的 Endpoint(取消注册),再 `server.GracefulStop()` 做 gRPC 优雅退出。顺序不能反:先停服务器再删,客户端会在删掉之前就开始拿到一个已死的地址。〔W12-2 p9〕
+
+### 宕机残留:谁清理、客户端怎么感知
+
+上面这套注册没有租约,那进程被强制关闭(`kill -9`,走不到 DeleteEndpoint 的优雅退出路径)之后会怎样?作者用强制关闭服务器模拟宕机验证过:`etcdctl get service/user/127.0.0.1:8090` 在宕机后依然返回这个节点,Metadata 时间戳一直停留在同一时刻。**注册残留没有被清掉**。按理论宕机后注册数据应该没了,实际却还在。〔W12-2 p10〕
+
+残留的因果:没有租约时,这条注册只是一条普通 KV,etcd 不会因为进程死亡而删它,唯一的删除路径就是优雅退出里的 DeleteEndpoint,进程崩溃时恰好走不到。谁最终清掉它?靠 Lease:注册数据挂上租约之后,进程死亡 → 无人续约 → 租约到期,etcd 按租约机制清掉挂在该租约上的 key。租约过期自动删除是 Lease 机制本身,不需要任何组件"发现"进程死了。〔W12-2 p10-11〕客户端这边感知变化不靠轮询:Resolver/SDK 封装了 Watch 加拉取,etcd 上节点一消失,客户端本地列表随之更新。但这条链路有秒级延迟窗口,窗口内调用方只会连不上,要靠自己的 failover 换节点重试。〔W12-2 p40〕
 
 ### 心跳就是租约续租
 
-注册成功不等于一劳永逸。注册机制的本质是**租约**:数据带过期时间,心跳就是续租。心跳有两种模式:服务端主动(只要没收到网络错误就当连接正常)或注册中心主动探测；心跳失败,注册中心就判定节点崩溃并通知客户端。〔W12-1 p14〕"失败"可以是一次,也可以是连续多次,这两个参数都是权衡:间隔越短压力越大；判定次数越少发现越快但越怕偶发抖动误踢,越多越稳但发现越慢。〔W12-1 p15〕
+注册成功不等于一劳永逸。注册机制的本质是**租约**:数据带过期时间,心跳就是续租。心跳有两种模式:服务端主动(只要没收到网络错误就当连接正常)或注册中心主动探测;心跳失败,注册中心就判定节点崩溃并通知客户端。〔W12-1 p14〕"失败"可以是一次,也可以是连续多次,这两个参数都是权衡:间隔越短压力越大;判定次数越少发现越快但越怕偶发抖动误踢,越多越稳但发现越慢。〔W12-1 p15〕
 
-etcd 把这套机制做成 Lease 加 KeepAlive:先 `Grant` 创建带 TTL 的租约,`Put` 时用 `WithLease` 把 key 挂上租约,再 `KeepAlive` 自动续约；节点崩溃没人续租,key 到期自动消失。etcd 的 KeepAlive 默认每隔 ttl/3 续约一次,选项很少。大多数微服务框架直接用它的租约机制当心跳,实践中没什么问题,只是没有自定义重试和判定策略的空间。〔W12-2 p11-12〕课件里 `etcd.go` 的 `keepAlive` 函数演示了 Grant、Put 带租约、KeepAlive 的基本用法。〔C:dachang/etcd/etcd.go:59-85〕
+etcd 把这套机制做成 Lease 加 KeepAlive:先 `Grant` 创建带 TTL 的租约,`Put` 时用 `WithLease` 把 key 挂上租约,再 `KeepAlive` 自动续约;节点崩溃没人续租,key 到期自动消失。etcd 的 KeepAlive 默认每隔 ttl/3 续约一次,选项很少。大多数微服务框架直接用它的租约机制当心跳,实践中没什么问题,只是没有自定义重试和判定策略的空间。〔W12-2 p11-12〕课件里 `etcd.go` 的 `keepAlive` 函数演示了 Grant、Put 带租约、KeepAlive 的基本用法。〔C:dachang/etcd/etcd.go:59-85〕
+
+落到课件的服务端示例,完整流程四步(TTL 示例取 5 秒):〔W12-2 p11〕
+
+1. 创建租约:`var ttl int64 = 5`,调 `S.cli.Grant(ctx, ttl)` 拿到 `LeaseResp`;
+2. 开启自动续约:`kaCtx, kaCancel := context.WithCancel(context.Background())`,起 goroutine 调 `S.cli.KeepAlive(kaCtx, LeaseResp.ID)`,`for resp := range ch` 处理每次续约结果。作者建议只简单打个日志就够了。续约失败了实际上你也做不了什么;
+3. 对 Endpoint 的所有操作都带上租约 ID:`em.AddEndpoint(..., clientv3.WithLease(LeaseResp.ID))`,之后模拟元数据变化的 `Update` 也要带 `clientv3.WithLease(LeaseResp.ID)`,否则新写入的数据不挂租约;
+4. 退出时三步按序:先 `kaCancel()` 取消 kaCtx 退出续约的 goroutine,再 `em.DeleteEndpoint(ctx, key)`,最后 `server.GracefulStop()`。
+
+租约过期还有个坑要预想到:租约一旦过期被回收,续约就再也续不上,只能整个重新注册。课件服务端对应的处理是续约收到 `rpctypes.ErrLeaseNotFound` 时把 leaseID 置 0,退回 `Grant` 加 `Put` 的注册分支重走一遍。〔C:dachang/etcd/service_registration_center/server/service_hub.go:54-84〕
 
 ### 优雅下线五步
 
-收到退出信号能不能立刻结束进程?不能:进程里可能还有读了一半的请求,客户端可能正发着下一个请求。完整流程是五步:通知注册中心自己要下线；不再接受新请求,网络上读了一半的请求读完即拒,不进业务代码；等在处理的请求和定时任务结束；结束运行；整个退出过程有超时控制,超时强退。〔W12-1 p18-19〕课件里的服务端收 `SIGINT`/`SIGTERM` 后先主动注销再退出,即使没来得及注销,最晚一个 TTL 之后注册中心也会把这个节点踢掉。〔C:dachang/etcd/service_registration_center/server/server.go:64-75〕
+收到退出信号能不能立刻结束进程?不能:进程里可能还有读了一半的请求,客户端可能正发着下一个请求。完整流程是五步:通知注册中心自己要下线;不再接受新请求,网络上读了一半的请求读完即拒,不进业务代码;等在处理的请求和定时任务结束;结束运行;整个退出过程有超时控制,超时强退。〔W12-1 p18-19〕课件里的服务端收 `SIGINT`/`SIGTERM` 后先主动注销再退出,即使没来得及注销,最晚一个 TTL 之后注册中心也会把这个节点踢掉。〔C:dachang/etcd/service_registration_center/server/server.go:64-75〕
 
 ### 客户端发现的两个时机
 
-客户端做服务发现有两个时机:启动时发现,从配置或注册接口拿到全部要用的服务,初始化时就查好,失败就不启动；或者惰性发现,第一次真正调用某个服务时才去查。后者冷启动快,但首次调用会多一次查询延迟。另外客户端和注册中心之间也要保持连接(心跳),这样节点变动才能推得过来。〔W12-1 p20〕
+客户端做服务发现有两个时机:启动时发现,从配置或注册接口拿到全部要用的服务,初始化时就查好,失败就不启动;或者惰性发现,第一次真正调用某个服务时才去查。后者冷启动快,但首次调用会多一次查询延迟。另外客户端和注册中心之间也要保持连接(心跳),这样节点变动才能推得过来。〔W12-1 p20〕
+
+### etcd 客户端服务发现:一个 target 搞定
+
+对比服务端的一长串注册代码,客户端这边简单很多:客户端不需要关心同步数据之类的事情,SDK 都处理了(Watch、拉取等细节被 etcd 的 resolver 实现封装)。用法两步:〔W12-2 p13〕
+
+```go
+etcdResolver, err := resolver.NewBuilder(cli)
+cc, epr := grpc.Dial("etcd:///service/user",
+    grpc.WithResolvers(etcdResolver), // 首先是三个,不要漏了
+    grpc.WithTransportCredentials(insecure.NewCredentials()))
+userClient := NewUserServiceClient(cc)
+resp, err := userClient.GetById(ctx, &GetByIdReq{Id: 123})
+```
+
+target `"etcd:///service/user"` 的拆解:scheme 部分 `etcd` 对应 builder 的名字。`resolver.NewBuilder(cli)` 返回的 builder 其 `Scheme()` 方法就返回 `"etcd"`;路径部分 `service/user` 是服务名,与服务端注册 key 的前缀对应。Dial 选项必须带上 `grpc.WithResolvers(etcdResolver)`,原文提醒"首先是三个,不要漏了",还包括 `grpc.WithTransportCredentials(insecure.NewCredentials())`。拿到 `cc` 之后正常构造 client 调用,调用方感知不到背后走了注册中心。〔W12-2 p13〕
+
+### 改造 ginx.Server:注册接进启动流程
+
+把这套东西接进自己的框架,核心修改是扩展 ginx.Server 的功能,让它负责和注册中心打交道,只改造了 Serve 方法。Serve 从创建 ctx 到阻塞的顺序:〔W12-2 p14〕
+
+1. `ctx, cancel := context.WithCancel(...)`,存到 `s.cancel`,初始化一个控制整个过程的 ctx(也可以考虑让外面传进来);
+2. `port := strconv.Itoa(s.Port)`,对端口做 `net.Listen("tcp", ...)`;Listen 失败直接 `return err`;
+3. 确保端口打开(启动成功)之后才调用 `s.register(ctx, port)`。原文特别强调"我们是在确保端口打开之后才注册的",先确保启动成功再注册服务,否则客户端拿着列表打过来连接被拒;
+4. 最后 `return s.Server.Serve(L)` 阻塞。
+
+`register(ctx, port)` 内部依次做:`clientv3.NewFromURL("http://localhost:12379")` 建 etcd 客户端存到 `s.etcdClient`;`serviceName := "service/" + s.Name`,`endpoints.NewManager(cli, serviceName)` 存到 `s.etcdManager`;`ip := netx.GetOutboundIP()` 获得自己的 IP;`s.etcdKey = serviceName + "/" + ip`,`addr = ip + ":" + port`;`cli.Grant(ctx, s.EtcdTTL)` 创建租约;`cli.KeepAlive(ctx, LeaseResp.ID)` 开启续约(goroutine 处理返回的 ch);最后 `em.AddEndpoint(ctx, s.etcdKey, endpoints.Endpoint{Addr: addr}, clientv3.WithLease(LeaseResp.ID))` 添加服务节点。这里没有要提供的 metadata。〔W12-2 p15〕
+
+作者指出这种写法的缺陷:Server 和 etcd 强绑定在一起;类似 go-zero、ego、Kratos 之类的框架都允许你使用不同的注册中心,但写法是类似的。〔W12-2 p15〕
 
 ## 三、拿 etcd 实现一遍
 
@@ -245,7 +299,7 @@ etcd 在 CAP 里应当归为 **CP**:它用 Raft 保证强一致,〔W12-2 p36〕�
 
 普通加权轮询有个观感很差的缺陷:权重高的节点会连续收到请求,比如 B 连收两个、C 连收三个,瞬时压力集中。〔W13-1 p10〕平滑加权轮询(SWRR)解决的就是这个,它给每个节点引入"当前权重",流程四步:算总权重；每个节点当前权重加自己的初始权重；选当前权重最大的；选中的减去总权重。〔W13-1 p11〕
 
-初始权重 10、20、30(总 60)时,前两次的推演:第一次三家加权重后是 10、20、30,C 最大被选中,C 减 60 变 -30；第二次加完是 20、40、0,B 最大被选中,B 减 60 变 -20。完整序列是 C、B、A、C、B、C,三个节点交替出现,没有谁连续挨打。直接跑一遍:
+初始权重 10、20、30(总 60)时,前两次的推演:第一次三家加权重后是 10、20、30,C 最大被选中,C 减 60 变 -30；第二次加完是 20、40、0,B 最大被选中,B 减 60 变 -20。完整序列是 C、B、A、C、B、C；跨周期或其他权重下仍可能连续选中同一节点。直接看这组权重:
 
 ```go
 package main
@@ -304,11 +358,11 @@ func main() {
 grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"round_robin":{}}]}`)
 ```
 
-带上这段配置重跑开头的实验,4 次调用就会轮流落在 8090 和 8091 上,和第一节 `rrPicker` 的行为一致。〔W13-2 p5〕
+带上这段配置后,当两个地址对应的连接都就绪时,调用会在它们之间轮询；连接建立期间和节点不可用时不保证四次恰好平均分配。〔W13-2 p5〕
 
 ### 自己写一个 Picker 有多难
 
-gRPC 把负载均衡拆成两个接口:`Balancer` 负责维护连接状态、创建 `Picker`；`Picker` 只做一件事,每次 RPC 被调时返回一个连接。round_robin 的实现很简单,核心是用原子操作更新候选节点的下标,第一节我们照着写的 `rrPicker` 就是这个思路。〔W13-2 p6〕注意版本差异:我对照了本机模块缓存里的 gRPC v1.67.0 源码,`roundrobin.go` 里确实是原子递增下标,而且起始下标是随机的(所以第一节的 `rrPicker` 从下标 1 开始只是演示)；本项目 `go.mod` 里的 v1.84.0,`round_robin` 已经改成建立在 `endpointsharding` 之上,内部结构不同,对外语义(轮流挑选)相同,这部分我没有逐行核对。注意 `balancer.SubConn` 名不副实:明面上是 Conn,实际代表"连到某个节点",背后是这个节点的连接池。〔W13-2 p6〕
+gRPC 把负载均衡拆成两个接口:`Balancer` 负责维护连接状态、创建 `Picker`；`Picker` 每次 RPC 选取一个可用的 `SubConn`。〔W13-2 p6〕版本差异值得留意:本机模块缓存的 gRPC v1.67.0 使用原子递增下标并随机选择起始位置；项目的 v1.84.0 则建立在 `endpointsharding` 之上。开头的 `rrPicker` 只是教学模型,不等同于任一版本的实现。`SubConn` 是 balancer 管理的逻辑子连接,不应直接理解成一个连接池。
 
 自定义加权轮询的接入是三步:实现 `PickerBuilder` 接口(它唯一的 `Build` 返回一个 Picker)；把 PickerBuilder 包装成 `balancer.Builder` 注册进 gRPC 的全局表；Dial 时用上面那段 JSON 指定名字。注册靠算法包的 `init` 函数,业务代码匿名引入触发 init,之后按名字查找,这是 Go 生态的标准插件模式。〔W13-2 p16〕〔W13-2 p8〕权重数据则走服务发现返回的元数据:Resolver 返回的每个地址携带 attributes,注册中心里 `metadata=weight=123` 这类数据放进去,PickerBuilder 建立时取出；元数据在地址生命周期里不变,权重变了要靠 Resolver 触发地址更新来传播。〔W13-2 p13〕〔W13-2 p14〕
 
@@ -389,7 +443,7 @@ A B A B A 的有效权重现在是 15
 
 ## 小结
 
-- 服务发现三代方案:IP 直连、DNS、注册中心,演进主线是"客户端缓存 + 新鲜度"的权衡,注册中心用主动通知打破 DNS 两难。〔W12-1 p5-7〕
+- 服务发现可用 IP 直连、DNS 或注册中心；都需要权衡缓存、新鲜度与故障处理。〔W12-1 p5-7〕
 - 注册生命周期:启动先开端口再注册、失败即退出；租约加续约当心跳；下线走五步,全程有超时。〔W12-1 p12-19〕〔W12-2 p14〕
 - etcd 实现三件套:`Grant` 建租约,`KeepAlive`(课件服务端用的是周期性 `KeepAliveOnce`)续约,`Delete` 注销；客户端查询建缓存再挂 Watcher。〔C:dachang/etcd/service_registration_center/server/service_hub.go:54-84〕〔C:dachang/etcd/service_registration_center/client/service_hub.go:96-106〕
 - 注册中心崩溃时的分工:老节点续服务、新节点注册失败即退出、客户端用缓存加 failover,小规模选型随意、大规模优先 AP。〔W12-2 p29-31〕〔W12-2 p42-44〕
@@ -399,7 +453,7 @@ A B A B A 的有效权重现在是 15
 ## 常见坑
 
 1. **忘了换默认负载均衡**:两个节点只有一个收到流量,一查是 `pick_first`。多副本部署却没分流,先查这个。〔W13-2 p4〕
-2. **注册了 `127.0.0.1` 或容器内网 IP**:客户端拿到地址连不上。注册地址必须是客户端可达的网卡 IP,不能从配置文件死读。〔W12-2 p16〕〔W12-2 p18〕
+2. **注册地址对客户端不可达**:跨主机注册 `127.0.0.1` 或错误的网卡地址都会导致连接失败；配置或自动发现后都应验证实际可达性。〔W12-2 p16〕〔W12-2 p18〕
 3. **先注册后开端口**:客户端拿着列表打过来连接被拒。要确保端口打开之后再注册。〔W12-2 p14〕
 4. **心跳参数拍脑袋**:间隔、判定次数是"发现速度换系统压力"的定价,不是随手写的常数。〔W12-1 p15〕
 5. **动态权重没有上下限**:权重滚雪球或归零,节点要么一直被选中要么永远没流量,降权要有下限。〔W13-1 p29〕
@@ -407,8 +461,8 @@ A B A B A 的有效权重现在是 15
 
 ## 判断题与答案
 
-1. 租约 TTL 为 5 秒,服务端被 `kill -9`,客户端最早什么时候能把流量切走?有哪几段延迟?
-   答案:`kill -9` 没机会优雅注销,只能等租约到期,加上注册中心判定和通知,客户端通常在 TTL 之后不久感知；具体延迟由心跳间隔和失败判定次数决定,间隔越短、判定越严,切换越快但系统压力越大。〔W12-1 p15〕
+1. 租约 TTL 为 5 秒,服务端被 `kill -9`,客户端什么时候能把流量切走?有哪几段延迟?
+   答案:租约从最后一次成功续约后开始计时,宕机时剩余 TTL 不一定是 5 秒；到期删除、Watch 传播和客户端更新还需要时间。客户端也可能通过连接失败或健康检查提前切走,不必等注册记录消失。重试须考虑幂等性和调用截止时间。〔W12-1 p15〕
 2. 平滑加权轮询为什么要在选中后减去总权重?
    答案:不减,当前权重最高的节点会一直最高,流量全压给它；减掉总权重相当于"记账",让别的节点有机会反超,最终选中比例严格等于权重比,且分布平滑。
 3. 注册中心崩溃期间上线的新服务,注册失败就退出,这个设计的理由是什么?

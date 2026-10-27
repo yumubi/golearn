@@ -18,17 +18,15 @@ title: P23 · Linux 运行时：进程、信号、fd 与容器
 
 Rust 程序员对这层的直觉是现成的：std::process::Command 起的进程、
 libc 的 signal、std::os::fd，和 Go 共用同一个 OS 接口面。语言差异
-在"谁替你包装"：Go runtime 把信号 goroutine 化、把 cgroup 读进
-GOMAXPROCS；Rust 要靠 crate（signal-hook、automaxprocs 的对应物）
-或手写。
+在“谁替你包装”：Go runtime 提供信号通知；Go 1.25 起，在适用的
+Linux 配置下还会参考 cgroup CPU 限额设置默认 GOMAXPROCS。
+具体版本及覆盖条件见 P25。
 
 `go build` 的产物是一个普通的可执行文件。OS 运行它时给三样东西：
 **一个 PID、一张 fd 表、一组信号处置**。进程活着 = 内核任务结构
-存在；"读文件/开端口" = 内核往 fd 表里加一行；"被 Ctrl-C" = 内核
-往这个任务投一个 SIGTERM/SIGINT。
-
-Go 程序和 OS 的全部交互就这三样。反过来，运维世界的核心动作
-（kill、ulimit、容器限额、容器健康检查）也全是这三样的包装。
+存在；打开文件或 socket 会占用文件描述符；终端里的 Ctrl-C 通常
+向前台进程组发送 SIGINT。进程还使用内存、系统调用等其他 OS 接口；
+本章先聚焦 PID、fd、信号与容器限额之间的关系。
 这章把包装拆开。
 
 ## 进程：PID 与退出码
@@ -38,18 +36,18 @@ $ go build -o /tmp/httpkv ./exercises/p8fast/httpkv/
 $ /tmp/httpkv &
 $ pgrep -f "^/tmp/httpkv"
 91736                     # ← OS 分配的 PID
-$ echo $?
-0
+$ wait $!                   # 等后台 httpkv 退出，再读取它的状态
+$ echo $?                   # 0 表示正常退出
 ```
 
 每个进程有父进程（PPID）。shell 启动的程序，父就是 shell；容器里
-PID 1 是 ENTRYPOINT 那个进程。**PID 1 特殊**：内核不给它默认信号
-处置，没人装 handler 的 PID 1 收到 SIGTERM 什么都不做。这就是
-"容器里 Ctrl-C 没反应 / docker stop 卡满宽限期（默认 10 秒）"
-的根源。
+PID 1 是入口进程时尤其要留意信号：Linux 对 PID namespace 中的
+init 进程有特殊限制，未安装处理器的信号可能不会按普通进程的默认
+方式终止它。容器停止的宽限期可配置；Docker Linux 容器通常默认
+10 秒，超时后才发送 SIGKILL。
 
-`$?` 读的 8 位退出码（P20 讲过 0/1/2 惯例）：正常退出是 `exit(n)`，
-被信号杀死是 128+信号号。实证（sh wait 拿后台进程的退出码）：
+`$?` 是 shell 上一条命令的状态；等待子进程后才是该进程的状态。
+shell 对信号终止通常编码为 128+信号号，具体表示取决于 shell：
 
 ```sh
 $ sh -c '/tmp/httpkv & P=$!; sleep 1; kill -9 $P; wait $P; echo exit=$?'
@@ -69,8 +67,8 @@ $ go version -m /tmp/httpkv | head -2
 ## 信号：SIGTERM 送达之后
 
 信号是内核发往进程的异步通知。默认处置四种：终止、终止+core、
-忽略、停止。SIGTERM/SIGINT 的默认处置是**直接终止，Go 代码一行都
-不会执行**，所以优雅关停必须先劫持：
+忽略、停止、继续。未注册通知时 SIGTERM/SIGINT 通常使程序终止，
+不会执行应用层的优雅关停流程，因此需要先注册通知：
 
 ```go
 // exercises/p8fast/httpkv/main.go:173
@@ -98,10 +96,9 @@ $ lsof -ti :8090 | wc -l
 0                        # ← 端口干净释放
 ```
 
-时间线：SIGTERM 由内核投递 → Go runtime 的信号 handler 把它转成
-`ctx.Done()` 就绪 → main 从 `<-ctx.Done()` 醒来 → `Shutdown` 排空
-在途请求 → 进程以 0 退出。**信号处理 goroutine 化**是 Go 的独特
-设计（C 里 handler 只能调 async-signal-safe 函数）。
+时间线：SIGTERM 由内核投递 → `os/signal` 通知使 context 取消 →
+main 从 `<-ctx.Done()` 醒来 → `Shutdown` 等待普通 HTTP 请求收尾。
+退出状态还取决于程序如何处理错误；`Shutdown` 不等待被 hijack 的连接。
 
 两条铁律：不捕获 SIGKILL/SIGSTOP（内核保留，容器强杀就是它）；
 信号只发通知，清理逻辑写在主流程里（`Shutdown`），不要塞 handler。
@@ -117,15 +114,14 @@ $ lsof -ti :8090 | wc -l            # 端口释放，但是内核代劳
 0
 ```
 
-`shut-log=0` 就是"默认处置直接终止"的实证：内核直接回收进程，
-Go runtime 连跑一行用户代码的机会都没有。容器强杀
+`shut-log=0` 说明这次 SIGKILL 没给应用执行清理流程的机会：内核回收进程。
 （`docker kill`）就是这个语义，P25 的优雅关停窗口靠
 `docker stop` 的 TERM 先行才存在。
 
 ## fd：一切 I/O 的把手
 
-Unix 的"一切皆文件"落到实处就是 fd 表：0=stdin、1=stdout、
-2=stderr，之后每开一个 socket/文件/pipe 递增。看 httpkv 的：
+Unix 用 fd 表管理文件、socket、pipe 等 I/O 句柄；惯例上
+0=stdin、1=stdout、2=stderr。关闭后的编号可以被后续打开操作复用。
 
 ```sh
 $ lsof -p $(pgrep -f "^/tmp/httpkv") | awk '$4 ~ /^[0-9]+[uwr]$/ {print $4, $5}' | head -6
@@ -173,11 +169,11 @@ fd 0/1/2 的去向完全由启动方式决定（nohup、`>log`、终端），
 httpkv 容器化全程（真跑）：
 
 ```sh
-# 1. 交叉编译：静态 ELF，不依赖任何 so
+# 1. 在构建上下文中生成 Linux ELF（架构需与目标机器匹配）
 $ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-  go build -trimpath -ldflags="-s -w" -o /tmp/httpkv ./exercises/p8fast/httpkv/
-$ file /tmp/httpkv
-/tmp/httpkv: ELF 64-bit LSB executable, ARM aarch64
+  go build -trimpath -ldflags="-s -w" -o httpkv ./exercises/p8fast/httpkv/
+$ file httpkv
+httpkv: ELF 64-bit LSB executable, ARM aarch64
 
 # 2. 镜像：alpine 垫底 + 一个二进制（多阶段构建见 P25）
 $ docker build -t golearn-httpkv -f - . <<'EOF'
@@ -209,8 +205,8 @@ exec /usr/local/bin/httpkv: exec format error    ← 内核拒绝执行
 ```
 
 `file` 命令一眼定性：ELF 是 Linux 的，Mach-O 是 macOS 的。
-`CGO_ENABLED=0` 保证不链系统库（glibc/musl 都不沾），二进制
-是纯静态的。
+此例禁用 cgo 并构建纯 Go 程序，避免依赖 cgo 引入的系统动态库；
+具体二进制的链接方式仍应按目标平台和构建结果检查。
 
 `docker stop` 对 PID 1 发 SIGTERM，httpkv 的信号链在容器里照常
 工作：
@@ -221,10 +217,9 @@ $ docker logs golearn-httpkv 2>&1 | tail -1
 {"level":"INFO","msg":"shutting down"}   # ← 优雅关停在容器里原样成立
 ```
 
-反例：如果 main 不装 handler（没有 `signal.NotifyContext`），PID 1
-无视 SIGTERM，docker stop 等满宽限期（Linux 容器默认 10 秒，
-`docker stop -t` 可改）后发 SIGKILL（`$?`=137）
-（在途请求全断）。这就是云原生清单里"必须处理 SIGTERM"的 OS 依据。
+反例：如果 PID 1 没有为 SIGTERM 安装处理器，该信号可能不会使其
+退出；`docker stop` 在配置的宽限期后发送 SIGKILL，强制中断在途
+请求。容器里的服务应处理停止信号，并给关停留出足够时间。
 
 ## cgroups：限额与 GOMAXPROCS
 

@@ -5,7 +5,7 @@ title: 11 HTTP 与 gRPC：两种接口形态与它们共同的骨架
 # 11 HTTP 与 gRPC：两种接口形态与它们共同的骨架
 
 
-> 详细程度：深入 · 约 75 分钟
+> 详细程度：深入 · 约 90 分钟
 > 材料：TB09 W02-1 W03-1 W04-1 W04-2 W05-1 W05-2 W10-1 W13-2、C:go_basic/http C:go_basic/grpc C:go_basic/protoc、旧长版 `notes/p10-grpc.md` `notes/p8-fast-track.md`
 > 前置：04 接口与组合，10 分层与依赖注入
 
@@ -98,7 +98,7 @@ mux.HandleFunc("GET /books/{id}", func(w http.ResponseWriter, r *http.Request) {
 2. `Write` 之前没调 `WriteHeader`，就隐式按 200 发。
 3. `WriteHeader` 之后再 `w.Header().Add` 无效。〔实测〕Go 1.26 下先 `WriteHeader(201)` 再 `Add` 一个头，客户端读不到。
 
-配套的另一半是客户端侧：**用完必须关 `resp.Body`**，否则这条连接不复用，每次请求都新建连接，协程和内存一起泄漏。便捷方法 `http.Get` 也一样要关。〔C:go_basic/http/client/main.go:25〕
+客户端用完必须关闭 `resp.Body`，释放资源。HTTP/1.x 中通常还需把响应体读到 EOF 才能复用连接；提前关闭可能使连接无法复用。便捷方法 `http.Get` 也一样要关。〔C:go_basic/http/client/main.go:25〕
 
 ### 超时：只设一个远远不够
 
@@ -254,13 +254,13 @@ client sees X-Note: set-before-write
 
 ### Session：状态存在服务端
 
-登录成功后服务端建一张会话，会话 ID 放进 Cookie，会话数据（user_id 之类）存在服务端存储里。gin-contrib/sessions 的存储实现有 cookie、memstore、redis、gorm 等一排，选型一句话：**单机随便，多实例必须选 redis**，否则实例 0 签发的会话实例 1 认不得。sess_id 永远放 Cookie，Session 数据才是 store 里存的东西，别搞混。〔W03-1 p6-8〕
+常见服务端 Session 把会话 ID 放进 Cookie，会话数据存在服务端存储。gin-contrib/sessions 也有 cookie store：它把会话数据放在客户端 Cookie 中，不属于这种服务端存储模式。多实例使用服务端会话时，可以选 Redis 等共享存储，或者设计其他一致的会话访问方式；各实例还需共享合适的密钥。〔W03-1 p6-8〕
 
 过期策略有四种：每次访问都刷（性能差）、快过期才刷、固定间隔刷、长短 token。前三种都能用「登录校验中间件顺手刷新」实现，第四种在下面讲。固定过期时间的问题很具体：设 10 分钟，9:59 还能用、10:01 就被踢,这对持续活跃的用户反而体验差。〔W03-1 p16-18〕
 
 ### JWT：把状态签进 token
 
-JWT 是三段式：header.payload.signature，前两段是 base64 的 JSON，第三段是对前两段的 HMAC 签名。它的哲学和 Session 正相反：**状态不在服务端，由签名保证不可篡改**。用标准库就能把签发与校验的全过程走一遍：〔W03-1 p22-23〕
+本例使用签名 JWT：header.payload.signature，前两段是 base64url 编码的 JSON，第三段使用 HMAC 签名。JWT 也可以使用非对称签名，并非都用 HMAC；签名提供完整性保护，不提供保密性。下面只演示 HS256 的基本过程：〔W03-1 p22-23〕
 
 ```go
 package main
@@ -312,7 +312,7 @@ func validate(token string, key []byte) (int64, error) {
 	if err := json.Unmarshal(raw, &claims); err != nil {
 		return 0, err
 	}
-	if time.Now().Unix() > claims.EXP {
+	if time.Now().Unix() >= claims.EXP {
 		return 0, fmt.Errorf("已过期")
 	}
 	return claims.UID, nil
@@ -350,7 +350,7 @@ func main() {
 过期: 已过期
 ```
 
-四行输出就是 JWT 的全部性质：payload 只是 base64 不是加密（谁都能解开看），但改一个字节签名就废；换密钥等于全量登出；过期是 payload 里的一个时间戳比较。课程接 gin 时用 `golang-jwt/jwt/v5` 的原始 API 而不是插件，因为插件把签发校验包起来反而看不清机制；token 走 `x-jwt-token` 响应头下发、`Authorization: Bearer` 上送，CORS 要相应放行 `AllowHeaders: Authorization` 和 `ExposeHeaders: X-Jwt-Token`，否则浏览器读不到。〔W03-1 p24-30〕课程里的校验写法：`GetHeader("Authorization")` 后 `strings.SplitN(authcode, " ", 2)` 取第二段（最多切两段，token 里不会再有空格），再 `jwt.ParseWithClaims(tokenStr, &uc, keyfunc)`。前端配合是响应拦截器读 `x-jwt-token` 存 localStorage、请求拦截器统一 `setAuthorization("Bearer "+token)`、401 跳登录页。〔W03-1 p27-28〕
+示例说明 payload 可读、篡改后签名不符，以及过期时间的判断；更换密钥会使依赖旧密钥且不再接受旧密钥的 token 失效。它不是生产级 JWT 校验器：生产代码应使用成熟库，限制允许的算法并校验 issuer、audience、过期时间等要求，妥善保管密钥。课程接 gin 时用 `golang-jwt/jwt/v5`；token 通过响应头下发、`Authorization: Bearer` 上送，CORS 要放行相应头。浏览器将 token 存入 localStorage 会暴露于 XSS，存储方案须按威胁模型选择。〔W03-1 p24-30〕
 
 ### 登出：无状态的代价
 
@@ -366,9 +366,23 @@ JWT 不可变，"退出登录"没法把已签发的 token 变无效:多实例下
 
 ### 短信验证码登录：一次"检查并写入"的原子化
 
-验证码登录是国内产品的默认登录方式，它的技术含量不在收发短信，在两条安全线和一次并发竞态。两条安全线：发码端控制频率（同号一分钟一条、验证码十分钟有效，外加系统限流兜底），校验端防暴力破解（验证通过即作废；失败三次作废；提示只说"不对"，不告诉对方还剩几次机会）。〔W04-2 p26〕竞态在发码端："检查这个号一分钟内发过没有"和"写入发送记录"是两步，两个请求同时检查都看到"没发过"，就双发短信，多花的是真金白银。这是分布式业务并发，进程内的 `sync.Mutex` 管不了别的实例，只能靠 Redis 单线程执行 lua 脚本，把检查和写入封成原子操作。〔W04-2 p30-31〕〔W04-2 p2〕〔W04-2 p7〕
+验证码若允许前导零，6 位数字有一百万种可能，因此仍要严格限流并防暴力破解。第一条安全线是控制发送频率：同一手机号一分钟以内只能发送一次；验证码有效期十分钟；系统本身也有限流。第二条是限制验证尝试：验证通过后立即作废，三次失败后也作废。失败时不暴露剩余次数。〔W04-2 p26〕
 
-lua 脚本里 key 的剩余 TTL 就是状态机，三分支：不存在或冷却已过就写入验证码、过期 600 秒、计数键置 3；剩余 TTL 大于 9 分钟说明一分钟冷却还没过，拒绝；有 key 但没有过期时间属于异常状态，宁可拒绝服务也不猜。〔W04-2 p28〕〔W04-2 p32〕用锁模拟 Redis 的单线程语义跑一遍：
+代码上这两条线分别落在两个方法里：在 service 包里放一个 CodeService，里面只定义两个接口。`Send(ctx context.Context, biz string, phone string) error`：根据业务、手机号码生成一个随机验证码并发送，在这个接口里要控制住发送频率；`Verify(ctx context.Context, biz string, phone string, inputCode string) (bool, error)`：验证验证码，在这个接口里要保证验证码不会被暴力破解。两个接口天然按"业务 biz + 手机号"两个维度组织，发送与验证各自的安全职责分别落在两个方法上，而不是混在一个接口里。〔W04-2 p27〕
+
+验证码是一个有有效期的东西，最适合的存储就是 Redis，并设置过期时间十分钟，key 设置为 `phone_code:$biz:$phone` 的形态。发送的思路按 key 状态分四种情况：Redis 中没有这个 key，直接发送；有 key 但没有过期时间，说明系统异常（p29 伪代码注释是"可能有同事手贱改了数据"）；key 有过期时间但剩余过期时间还大于 9 分钟，说明一分钟内已经发过一次，发送太频繁，拒绝；否则重新发送一个验证码。课程先给出的 SendV1 版本按这套思路写：先 `repo.Get` 查验证码，再按上述分支处理。但作者明确说"不行，因为有并发问题"，这就引出下一页的并发分析。〔W04-2 p28〕〔W04-2 p29〕
+
+典型的多发场景：线程 1、线程 2 先后查询 Redis，都看到"没有发过验证码"，于是各自发送，同一手机号收到两条短信。这就是"检查数据-做某事"场景的并发竞态。这种并发属于业务层面上、分布式环境下的并发，不是语言层面上的并发，所以不能使用 channel 或者 sync.Lock 来解决；解法是把"检查并且做某事"的逻辑在 Redis 层面上用 lua 脚本封装成一个整体操作，Redis 之所以安全，是因为它是单线程的，请求挨个执行。Redis 自己发不了验证码，所以约定：验证码在 Redis 里面存好了，就认为可以发送出去了。作者提醒：平时编程中但凡涉及"检查数据-做某事"的场景，都要考虑并发安全问题。〔W04-2 p30〕〔W04-2 p31〕
+
+lua 脚本入参：KEYS[1] 是要发送到的 key（code:业务:手机号形态的验证码 key），`cntKey = key .. ":cnt"` 存验证次数，ARGV[1] 是生成的验证码；脚本先执行 `local ttl = tonumber(redis.call("ttl", key))`，之后按 ttl 走三个分支：ttl == -1 说明 key 存在但没有过期时间（有人误操作，导致 key 冲突），返回 -2；ttl == -2（key 不存在）或者 ttl < 540（已发过一个验证码，且已经超过一分钟）时，依次 set key 为验证码、expire key 600 秒、set cntKey 为 3、expire cntKey 600 秒，返回 0（注释提醒：后续如果验证码有不同的过期时间，要在这里优化）；否则说明已经发送了一个验证码但还不到一分钟，返回 -1。三个返回值的语义：0 = 检查通过且已写入，可以发送；-1 = 发送太频繁；-2 = 系统异常，宁可拒绝服务也不猜。数字的来历：600 秒对应验证码十分钟有效期；剩余 TTL 要小于 540 才允许重发，也就是上一条验证码发出至少一分钟之后。"一分钟一条"的频率线就是这样落进数字里的。cntKey 在这里被初始化为 3，它存的就是验证次数。〔W04-2 p32〕
+
+SendCode 的调用链路是：CodeService 生成验证码 → CodeCache 存储验证码 → CodeRepository 执行 lua 脚本（在 Redis 中检查验证码并存储）；lua 执行 OK 之后，CodeService 再调用 sms（SmsService）发送验证码，发送 OK 结束。作者强调：基本上业务逻辑都在 lua 脚本，Send 方法真的要做的事情，也就是调用了 sms 来真的发送验证码。〔W04-2 p33〕
+
+验证验证码的流程三步：查询验证码，如果不存在说明还没发；存在且验证次数少于等于 3 次，比较输入的验证码和预期验证码是否相等；次数大于 3 次直接返回不相等。由此可以看出为什么发送验证码时要额外存储一个 cnt 字段。它就是验证次数。验证验证码同样要小心并发问题，所以也用 lua 脚本来封装逻辑。验证 lua 的三个分支：cnt <= 0，说明验证次数已经耗尽，返回 -1，不执行任何写命令；code == expectedCode（验证码相等）时不能删除验证码 key。删了就有可能有人跟你过不去、立刻再次发送验证码，所以把 cntKey set 成 -1，认为验证码不可用，返回 0；不相等（可能用户手一抖输错）时 DECR cntKey，返回 -2。相等分支的作废方式是反直觉的点：发码脚本把"key 不存在"当作"从没发过"，删码等于把一分钟冷却线一起抹掉；把 cntKey 置成 -1 一举两得，验证端 cnt ≤ 0 永远返回"次数耗尽"，旧码再也不能通过，发码端 key 还在，剩余 TTL 照常走完冷却，同时挡住"用旧码继续验证"和"删码后立刻重发"两条路。作者自认粗糙点：这个脚本并没有严格区分"验证码还没发"和"验证了太多次"两种情况。〔W04-2 p34〕〔W04-2 p35〕
+
+按照 DDD 的理论，或者按照一般的业务开发理论，前面放在 lua 脚本里的逻辑（检测、校验、保证使用安全和系统安全）应该放在 CodeService 上；然而 CodeService 在这里并不好做，因为它难以解决（分布式）并发问题，因此这段逻辑被放到了 Redis 的 lua 脚本里面。代价是牺牲可移植性：但凡换一个缓存，比如 memcache，就得重新写一遍这个逻辑；把 CodeService 留成薄封装，正是为了把替换缓存时的改动成本控住。〔W04-2 p37〕
+
+用锁模拟 Redis 的单线程语义跑一遍：
 
 ```go
 package main
@@ -437,6 +451,96 @@ func main() {
 
 标准库和 gin 怎么选：服务简单、想少依赖，1.22 以后的 `ServeMux` 够用；团队已经熟悉 gin 或者需要它的绑定校验时选 gin。两边的 handler 都能套进同样的"中间件等于包装函数"思路，没有谁更"正确"。
 
+## 四点五、RPC 的三块基石:序列化、粘包、请求关联
+
+前面几节一直在"框架给你什么"的层面看接口形态。gRPC 之所以用起来顺手,是因为它把三件底层的事都替你做完了:把结构体变成字节流(序列化)、在字节流上认出一条条消息(边界)、把响应送回正确的等待者(请求关联)。课程里有一个手写的迷你 RPC,把这三件事全部摊开在源码里,读完再看 gRPC,就能看清它替你做了什么。〔C:dachang/my_rpc/serialization/my_serializer.go:40-97〕
+
+### 序列化:一个接口三个引擎
+
+迷你 RPC 的序列化层只约定两个方法,`Marshal(object any) ([]byte, error)` 和 `Unmarshal(stream []byte, object any) error`,Gob、JSON、手写二进制三个实现全挂在这条最小契约上:〔C:dachang/my_rpc/serialization/serializer.go:3-5〕
+
+| 实现 | 底层引擎 | 写法 |
+|---|---|---|
+| `Gob{}` | 标准库 `encoding/gob` | `bytes.Buffer` 上套 `gob.NewEncoder/NewDecoder` 做 `Encode/Decode`〔C:dachang/my_rpc/serialization/gob.go:9-20〕 |
+| `Json{}` | `bytedance/sonic` | `Marshal/Unmarshal` 直接转发给 sonic〔C:dachang/my_rpc/serialization/json.go:3-15〕 |
+| `MySerializer{}` | 手写五段式二进制协议 | 反射取字段再走参数化编解码,下一小节展开〔C:dachang/my_rpc/serialization/my_serializer.go:183-196〕 |
+
+切换实现不碰任何业务代码,`common.go` 里一个全局变量说了算,生效行之外的两行注释着,换实现挪个注释就行:〔C:dachang/my_rpc/common.go:14-16〕
+
+```go
+var Serializer = serialization.MySerializer{}
+
+// var Serializer = serialization.Json{}
+// var Serializer = serialization.Gob{}
+```
+
+测试对象是一个混合了五种基础类型的 `RpcData`:`A int`、`B float32`、`C bool`、`D float64`、`E string`、`Id string`,外加一个故意放进去的小写字段 `f int`。源码注释明说:可导出的字段才会被序列化,`f` 不可导出,不进字节流〔C:dachang/my_rpc/common.go:8-13〕;序列化和反序列化两头的反射循环都用 `IsExported()` 把非导出字段跳过去〔C:dachang/my_rpc/serialization/my_serializer.go:186-196〕。这带来一个容易忽略的约束:字节流里只有"一列导出字段的值",没有字段名。两端结构体的导出字段集(顺序加类型)必须对齐,否则反序列化就整体错位。gRPC 用 `.proto` 契约给两端发同一份生成代码,杜绝的正是这一类错位。
+
+### 手写五段式二进制协议
+
+`MySerializer` 的协议按传输顺序分五段,序列化入口是批量的 `MarshalArguments(arguments ...any)`:〔C:dachang/my_rpc/serialization/my_serializer.go:40-97〕
+
+| 段 | 内容 | 占用 |
+|---|---|---|
+| ① | 魔数 `MAGIC` | 5 字节,`{37, 61, 57, 23, 111}`〔C:dachang/my_rpc/serialization/my_serializer.go:21〕 |
+| ② | 参数个数 | 8 字节,大端 int64 |
+| ③ | 每参数 1 字节类型枚举 | `iota` 顺序 `TYPE_INT=0/TYPE_BOOL/TYPE_FLOAT32/TYPE_FLOAT64/TYPE_STRING`〔C:dachang/my_rpc/serialization/my_serializer.go:9-15〕 |
+| ④ | 每参数 8 字节长度 | 大端 int64 |
+| ⑤ | 所有参数内容按序顺排 | 各参数长度之和 |
+
+两个实现细节值得点出来。第一,一个 `int` 参数写进流之前被显式转成 `int64` 再 `binary.Write`(源码注释:`binary.Write` 要求定长类型,`int` 的长度跟机器有关):〔C:dachang/my_rpc/serialization/my_serializer.go:48-69〕
+
+```go
+case int:
+	err := binary.Write(buffer, binary.BigEndian, int64(v))
+```
+
+第二,拼包是先攒后拼:类型 switch 循环里各参数内容先写进 scratch buffer,最后才按 ①→④ 写头、在尾部追加内容 buffer,总容量按 `len(MAGIC)+8+len(types)+8*len(types)+内容` 一次预分配〔C:dachang/my_rpc/serialization/my_serializer.go:86-95〕。用两个参数 `(int 123, string "go")` 手拼一遍,十六进制是 `25 3d 39 17 6f 00…02 00 04 … 00 7b 67 6f`,共 41 字节:开头 5 字节是魔数,接着 8 字节个数 2,然后类型枚举 `00 04`(int 和 string),两个 8 字节长度(8 和 2),最后 `00 00 00 00 00 00 00 7b` 是 123、"go" 是字符串,harness 复现了同一布局的十六进制输出〔实测:work/run/C_dachang__my_rpc/E1/main.go:9-25〕。
+
+反序列化入口 `UnmarshalArguments` 的检查是层层递进的:总长小于 `len(MAGIC)+8` 报"数据流长度太短";头 5 字节不等于魔数报"魔数校验失败"并附收到的字节;解出参数个数 `n` 后,`n<=0` 直接返回 `(nil, nil)`,是空结果而不是 error;随后在"读类型枚举之前"和"累计完所有长度字段、算出内容总长之后"各做一次剩余长度检查,源码注释写明动机:每获得一个信息就检查一下数据长度,免得将来发生越界 panic(index out of range)。〔C:dachang/my_rpc/serialization/my_serializer.go:100-181〕第二次检查的位置值得体会:它发生在"已知 totalLen"和"真正切内容"之间:拿到长度表之后、消费任何内容字节之前,先确认剩下的字节够不够。外层 `MySerializer.Unmarshal` 还要先过"必须传指针""必须传结构体指针"两道类型检查,再进入这套防御流程〔C:dachang/my_rpc/serialization/my_serializer.go:203-217〕。魔数加长度检查,正是二进制协议不吃陌生字节流的通行做法;gRPC 消息前的压缩标志和 4 字节长度前缀,是同一思路的工业版。
+
+### TCP 粘包与魔数分隔
+
+有了序列化还差一步:字节流上怎么认出一条消息的边界。TCP 是面向字节流的,一次 `Read` 到的数据可能包含多个报文,也可能只包含半个报文,一条报文在什么地方结束需要通信双方事先约定好。传输层这里约定的分隔符是 `MAGIC = []byte{1,1,5,2,0}`。注意它与上一小节序列化协议里的魔数 `{37, 61, 57, 23, 111}` 是两个不同的常量,各自管各层的事。〔C:dachang/my_rpc/transport/server/tcp.go:25-28〕〔C:dachang/my_rpc/transport/common.go:15〕
+
+服务端每次 `Read` 用 256 字节缓冲(注释:设定一个最大长度,防止 flood attack),跨 `Read` 保留一个 `bytes.Buffer` 攒半包,对每次读到的 data 用 `bytes.Index(data, MAGIC)` 循环切分。切分循环三分支:〔C:dachang/my_rpc/transport/server/tcp.go:29-47〕
+
+1. **分隔符在本次读的中间**(`pos > 0`):buffer 里的旧半包加 `data[:pos]` 合成一条完整报文,打印并 `Reset`,然后从分隔符之后继续找下一条。
+2. **本次读一开头就是分隔符**(`pos == 0`):若 buffer 非空,说明上次的半包到这条分隔符为止凑齐了,打印并 `Reset`;buffer 为空说明收到一条空报文,跳过即可。
+3. **本次读里找不到分隔符**:整段余量写进 buffer 当半包攒着,退出内层循环等下一次 `Read` 拼后续字节。
+
+演示场景里客户端连发 3 条 `"china"+MAGIC` 就关闭，服务端延迟读取以增加多条消息合并到一次读取的机会。〔C:dachang/my_rpc/transport/client/tcp.go:17-20〕〔C:dachang/my_rpc/transport/server/tcp.go:28-31〕但上述示例只在每次读取的数据中搜索分隔符：分隔符跨两次 Read 时可能漏掉，正文中出现分隔符也会误切；固定读取缓冲区也不能限制累计 buffer 的大小。生产协议应处理跨读取边界、限制帧大小，并使用长度前缀或明确的转义规则。
+
+### UDP 报文语义与 xid 请求关联
+
+Echo 示例的传输层选了 UDP,理由写在构造函数注释里:UDP 面向报文实现方便,若用 TCP 需自行按魔数对字节流进行分隔,上文的切分循环就是"若用 TCP"的代价。一次 `Read` 恰好对应一条 datagram,天然没有粘包问题。〔C:dachang/my_rpc/client/echo_client.go:22-27〕
+
+报文语义的代价是"请求-响应不再自动成对":多条响应乱序到达时,谁也说不清哪条响应属于哪个请求。`EchoClient` 的解法是给每个请求发唯一号,靠号回填:〔C:dachang/my_rpc/client/echo_client.go:15-33〕
+
+- 结构体持有 `conn`、`serializer` 和 `sync.Map` 类型的 `requestBuffer`;构造函数 `DialTimeout("udp", …, 30min)` 建连后启动常驻接收协程 `go client.receive()`,此后收发完全异步。
+- `Call` 五步:① `xid.New().String()`(rs/xid 分布式唯一 id 生成器)生成 id 写进 `request.Id`;② 序列化整个请求;③ 建容量 1 的 `chan my_rpc.RpcData`,以 id 为 key `Store` 进 `requestBuffer`;④ `conn.Write(data)` 发出请求;⑤ 阻塞在 `resp := <-streamCh` 直到响应送达。〔C:dachang/my_rpc/client/echo_client.go:60-79〕
+- `receive` 协程循环:4096 字节缓冲 `Read` → 反序列化成 `RpcData` → 按 `resp.Id` 到 `requestBuffer.Load`;命中则**先 `Delete(resp.Id)` 再把 resp 推进取出的 chan** 唤醒等待方。先删再投,保证派发后 entry 不残留,防止 `sync.Map` 泄漏;未命中(超时后迟到的响应或 id 对不上)只打日志"request buffer里没有id %s",不投递。〔C:dachang/my_rpc/client/echo_client.go:37-56〕
+- `Call` 定义为指针接收者,因为要修改成员 `requestBuffer`。〔C:dachang/my_rpc/client/echo_client.go:59-60〕
+- main 里 10 个 goroutine 各持独立 EchoClient 串行调 10 次 `Call`,校验 `resp.A` 与发出的随机数相等,验证了并发下"按 id 归位"依然成立。〔C:dachang/my_rpc/client/echo_client.go:82-106〕
+
+服务端那一半:每收到一条 datagram 就 `go server.handle(...)` 并发处理,handle 里随机 `Sleep` 0 到 500ms,故意让"先请求的不一定先拿到响应",逼出客户端按 id 归位的必要性;然后原样把数据序列化回给对方。〔C:dachang/my_rpc/server/echo_server.go:45-59〕
+
+### 三种引擎的速度账
+
+基准测试对象是上面那个 `RpcData`,每次 op = 一次 `Marshal` 加一次 `Unmarshal` 完整往返:〔C:dachang/my_rpc/serialization/test/serializer_test.go:10-17〕〔C:dachang/my_rpc/serialization/test/serializer_test.go:96-117〕
+
+| 引擎 | 作者机器〔C:dachang/my_rpc/serialization/test/serializer_test.go:112-117〕 | 本机复测 |
+|---|---|---|
+| Json(sonic) | 2221 ns/op | 863 ns |
+| Gob | 16154 ns/op | 7385 ns |
+| MySerializer(手写二进制) | 2845 ns/op | 1315 ns |
+
+排序在两台机器一致:Json < MySerializer < Gob。Gob 比 Json 慢约 7 倍。Gob 的字段名等自描述信息是它"跨端对齐字段"的底气,也是它慢的主因;手写二进制略慢于 sonic(约 1.3 倍)但比 Gob 快约 5.7 倍。复测命令 `go test ./my_rpc/serialization/test/ -run "^$" -bench "BenchmarkGob|BenchmarkSerializer|BenchmarkJson" -benchtime=100000x`;环境前提:go1.26 下 sonic v1.12.x 因 linkname 依赖 `encoding/json` 内部符号而链接失败,本机复测用 stdlib json 替换后三个数字成立〔实测:work/digest/C_dachang__my_rpc.md〕。
+
+### 回到 gRPC
+
+现在读 gRPC 的选型说明,可以把"序列化用 Protobuf"翻译成前面刚写过一遍的东西:`.proto` 契约对齐两端的字段集,相当于把本节"两端导出字段必须一致"从口头约定变成编译期保证;protobuf 的二进制编码与本节五段式同属"类型加长度加内容"的家族;gRPC 在 HTTP/2 帧上对每条消息做边界处理,就是粘包问题的现成解法;一次一元调用能拿回"属于这次请求"的响应,靠的是 HTTP/2 流 id,和 `requestBuffer` 按 id 派发是同一个思想。底层三基石都清楚了,第五节看契约与流就只是换语法。
+
 ## 五、gRPC：契约先行
 
 选型上，资料给的口诀是"遇事不决选 gRPC"：利用 HTTP/2 的双向流，支持流控、压缩，跨语言，社区强。〔W10-1 p26〕（该页还写了"基于 QUIC"，这是错的，gRPC 跑在 HTTP/2 上。）"契约先行"指先写 `.proto`（接口描述语言，平台无关），再用编译器生成各语言的客户端和服务端代码；序列化用 Protobuf，二进制格式，课程的说法是序列化速度和压缩效率在同类协议里名列前茅。〔W10-1 p27-29〕
@@ -459,7 +563,7 @@ service student{
 }
 ```
 
-`stream` 写在请求前、响应前还是两边，决定四种形态：一元、服务端流、客户端流、双向流。读法：请求前写了 `stream`，客户端就是流式发送；响应前写了 `stream`，服务端就是流式返回；两边都写就是双向流。四种流的生命周期有一处不对称，最容易被忘：**客户端创建的流最终要调 `CloseSend`（双向流）或 `CloseAndRecv`（客户端流），服务端不用关**。课程里的类比是 HTTP 客户端要关 response body，而服务端不用关 request body。〔C:go_basic/grpc/client/main.go:119〕〔C:go_basic/grpc/client/main.go:155〕
+`stream` 写在请求前、响应前还是两边，决定一元、服务端流、客户端流和双向流。客户端流发送完成通常调用 `CloseAndRecv`，双向流不再发送时调用 `CloseSend`，并继续接收直到结束；服务端处理函数返回即可结束流。提前放弃接收时应取消调用的 context，以释放资源。〔C:go_basic/grpc/client/main.go:119〕〔C:go_basic/grpc/client/main.go:155〕
 
 ### 拦截器链：签名变了，骨架没变
 
@@ -670,7 +774,7 @@ HTTP 侧的坑（超时只设一个、忘关 `resp.Body`、把 `http.ErrServerCl
 ### C:go_basic/http、C:go_basic/grpc、C:go_basic/protoc 的补充点
 
 - 服务端逐行 Flush 做流式响应：先设 Content-Length，断言 `w.(http.Flusher)` 后每行 Write 加 Flush 强制写到 TCP；客户端提前 Close 断开，服务端 Write 会报错退出，必须检查 err 并 break，否则 goroutine 忙等。不声明长度则走 chunked。〔C:go_basic/http/server/main.go:93-115〕
-- header key 写入自动正规化（tRAce-id 变 Trace-Id），大小写不敏感，读取用 `http.CanonicalHeaderKey`；同一 header 第二次 `SetCookie` 无效（header key 不可重复），客户端 `request.AddCookie` 可以加多个同名不同值，服务端解析出两个。〔C:go_basic/http/server/main.go:41-44〕〔C:go_basic/http/server/main.go:117-135〕
+- header 名大小写不敏感。`http.SetCookie` 可以追加多个 `Set-Cookie` 响应头，浏览器按各 Cookie 的名称、Domain、Path 等处理；它们不能简单合并成一个逗号分隔的头。客户端可用 `request.AddCookie` 添加 Cookie。〔C:go_basic/http/server/main.go:41-44〕〔C:go_basic/http/server/main.go:117-135〕
 - 客户端便捷方法 `http.Get/Post/PostForm/Head` 不能设 header，要设就用 NewRequest 加 `client.Do`，超时挂在 `http.Client{Timeout}`；生产应复用 Client 实例（自带连接池）。〔C:go_basic/http/client/main.go:200-227〕
 - Recv 循环里 `io.EOF` 是正常结束标志，其他错误才需要处理，把 EOF 当错误会误报。〔C:go_basic/grpc/server/student.go:60-72〕
 - gRPC 默认单条消息上限 Recv 4M（Send 默认 MaxInt32），传大对象要 `MaxCallRecvMsgSize` 显式调大；TLS 一行开启：服务端 `grpc.Creds(credentials.NewServerTLSFromFile(...))`，客户端 `NewClientTLSFromFile`，即使 insecure 也必须设 `WithTransportCredentials`。〔C:go_basic/grpc/server/main.go:52-68〕

@@ -75,9 +75,8 @@ bubble 测，只能靠子进程冒烟（跑一次看退出码）。P21 选简单
 
 ## synctest.Wait 与 durably blocked
 
-`synctest.Wait`：等 bubble 里**除当前 goroutine 外**的全部 goroutine
-进入 durably blocked。"durably"是精髓：不是"阻塞着"就行，是
-"**不需要外部事件就能继续**"的阻塞才算：
+`synctest.Wait` 等 bubble 里**除当前 goroutine 外**的全部 goroutine
+进入 durably blocked。这里的“durable”指只能由同一 bubble 内的事件解除的阻塞，不能依赖 bubble 外部的活动；不是说阻塞本身无需事件就能继续：
 
 | 算 durably blocked | 不算 |
 |---|---|
@@ -175,17 +174,14 @@ func FuzzParseArgs(f *testing.F) {
 }
 ```
 
-fuzz 的语料是**资产**：interesting 输入缓存在构建缓存（failing
-才落 `testdata/fuzz/`），之后每次普通 `go test -run FuzzParseArgs`
-（不带 `-fuzz`）都会重放全部语料当回归测试（真跑 0.2s）：
+fuzz 的语料是**资产**：新发现的 interesting 输入保存在 fuzz 缓存，失败输入通常写入 `testdata/fuzz/`。普通 `go test` 不带 `-fuzz` 时重放 `f.Add` 种子和 `testdata/fuzz/` 中的语料，不会把缓存里的全部 interesting 输入当作普通回归用例：
 
 ```sh
 $ go test -run FuzzParseArgs ./exercises/p21test/
 ok  	golearn/exercises/p21test	0.209s
 ```
 
-**性质测试的复利**：250 个语料输入 × 3 条性质，每次 CI 白拿，
-不用写一行额外断言。
+要把某个重要输入长期纳入普通 CI 回归，应将它保存到 `testdata/fuzz/` 或显式加入种子，而不是依赖机器本地的 fuzz 缓存。
 
 种子质量决定起步：空输入、未知 flag、unicode、超长串，每条覆盖
 一个分支。fuzz 参数只支持基本类型（`[]string` 不行），用空格分隔
@@ -198,8 +194,7 @@ fuzz: elapsed: 1m0s, execs: 28529755 (0/sec), new interesting: 188 (total: 199)
 PASS
 ```
 
-2850 万个输入、0 crash、覆盖语料从 11 个种子长到 199 个，缓存在
-`testdata/fuzz/`，以后回归测试白拿。
+这次运行尝试了 2850 万个输入、没有发现 crash；新发现的 interesting 输入保存在 fuzz 缓存中，后续 fuzz 可利用它们，普通测试不会自动重放缓存。
 
 **fuzz 能抓到什么，演示一次**：把 `ExitCode` 的 usage 分支
 `return 2` 改成 `return 3`（植入 bug），种子语料直接命中：
@@ -210,7 +205,7 @@ PASS
         fuzz_test.go:57: usage error maps to 3, want 2
 ```
 
-例子只证明"-x 映 2"这一条路，性质证明"**所有** usage 错误都映 2"。
+例子只覆盖 `-x` 这一路；性质为每个实际运行的输入检查 usage 错误映射，但有限次 fuzz 不能证明所有可能输入都满足性质。
 
 ## 动手：练习 p21test（30-45 分钟，纯标准库）
 
@@ -266,15 +261,13 @@ bubble 里 rand 不确定会让虚拟账本对不上。提示：把 rand 抽象�
 
 ## Take-away
 
-1. synctest 在 runtime 层换计时器，无需注入；虚拟时间与真实墙钟
-   彻底解耦，测试毫秒级全绿且无 flake。
+1. synctest 提供 bubble 内的虚拟时间，无需为这些计时器注入时钟；它能消除依赖真实等待的部分不稳定性，但不能保证所有并发测试没有 flake。
 2. `Wait` 等的是 durably blocked：bubble 内 channel/Cond/WaitGroup/
    Sleep 算；锁、真实 I/O、系统调用不算。一个 goroutine 卡锁，
    全场时间静止（真机 fatal 实证）。
 3. bubble 三种死法要认得：synctest panic / runtime fatal / 泄漏
    收尾 panic。演示一律子进程隔离。
-4. fuzz 挂性质（不 panic/错误分类/映射域），种子覆盖全分支起步；
-   性质抓全称命题，例子抓单点。
+4. fuzz 挂性质（不 panic/错误分类/映射域），以种子覆盖重要分支，再用生成的输入寻找反例；有限测试不能证明全称命题。
 5. 真时钟路径（main）不在 bubble 射程内，子进程冒烟 + 退出码
    断言兜底。
 

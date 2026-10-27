@@ -5,7 +5,7 @@ title: 07 并发二：context、pipeline、worker pool、errgroup 与优雅关�
 # 07 并发二：context、pipeline、worker pool、errgroup 与优雅关停
 
 
-> 详细程度：深入 · 约 55 分钟
+> 详细程度：深入 · 约 60 分钟
 > 材料：TB09、TB33、TB35、`C:dachang/concurrence`、`C:go_basic/concurrence` · 旧长版：`notes/p14-pipelines.md`、`notes/p3-concurrency.md`
 > 前置：06 并发一（channel 四态、select、sync 选型、泄漏）
 
@@ -122,7 +122,7 @@ func handle() int {
 }
 ```
 
-`done` 给 1 个缓冲不是随手写的：如果无缓冲，超时后 `handle` 返回了，子 goroutine 还卡在 `done <- ...` 上没人接，就泄漏一个 goroutine（常见坑第 2 条）。
+`done` 给 1 个缓冲，使一次结果发送在调用方超时后仍可完成。但它不能中断 `LongTimeWork`：如果工作永远不返回，goroutine 仍会滞留。实际任务应接受并检查 context，或使用支持取消的 I/O。
 
 用法约定：`ctx` 放函数第一个参数，不放进结构体字段；`WithValue` 的 key 用自定义类型（不是裸 string/int），避免和别人的 key 碰撞；值只用于跨 API 边界携带请求范围数据（追踪 ID 之类），不当可选参数传。〔C:go_basic/concurrence/context.go:76-127〕
 
@@ -130,7 +130,7 @@ func handle() int {
 
 ## 二、pipeline：每一级都要听得见取消
 
-pipeline 是"生成器、处理器、汇聚"串起来的 channel 链。核心规则只有一条：**每一级的每一次发送，都要和 `ctx.Done()` 一起放进 `select`**。否则下游提前走了，上游就永久卡在发送上，这就是 06 讲的泄漏。
+pipeline 是“生成器、处理器、汇聚”串起来的 channel 链。每一级不仅发送时要监听取消，等待上游接收时也要监听取消；否则上游不关闭时，下游仍可能一直阻塞。
 
 先看一个两级 pipeline（生成、平方）的完整样子：
 
@@ -161,11 +161,19 @@ func square(ctx context.Context, in <-chan int) <-chan int {
 	out := make(chan int)
 	go func() {
 		defer close(out)
-		for x := range in {
+		for {
 			select {
-			case out <- x * x:
 			case <-ctx.Done():
 				return
+			case x, ok := <-in:
+				if !ok {
+					return
+				}
+				select {
+				case out <- x * x:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()
@@ -189,7 +197,7 @@ func main() {
 25
 ```
 
-每级的骨架一模一样：`go func` 里 `defer close(out)`，循环里 `select { case out <- ...: case <-ctx.Done(): return }`。`defer close(out)` 保证无论正常跑完还是被取消，接收方的 `range` 都能退出；`select` 保证被取消时发送方也能退出。两个出口缺一不可。
+每级都由发送方 `defer close(out)`；发送和等待输入都通过 `select` 监听取消。因此即使上游不再发送也不关闭，取消仍能让 `square` 退出。取消与通信同时就绪时 select 可任选，所以这不是“取消后绝不再发送”的保证。
 
 为什么"发送方负责关闭"？因为接收方不知道后面还有没有数据，它去 `close` 会让还没送完的发送方 panic（send on closed channel）。只有掌握全部发送权的一方，才敢说"我再也不发了"。
 
@@ -203,11 +211,19 @@ func merge(ctx context.Context, cs ...<-chan int) <-chan int {
 		wg.Add(1)
 		go func(c <-chan int) {
 			defer wg.Done()
-			for x := range c {
+			for {
 				select {
-				case out <- x:
 				case <-ctx.Done():
 					return
+				case x, ok := <-c:
+					if !ok {
+						return
+					}
+					select {
+					case out <- x:
+					case <-ctx.Done():
+						return
+					}
 				}
 			}
 		}(c)
@@ -217,7 +233,7 @@ func merge(ctx context.Context, cs ...<-chan int) <-chan int {
 }
 ```
 
-〔实测〕`gen` 接两路 `square` 再 `merge`，消费 5 个结果后 `cancel()`，等 50ms，`runtime.NumGoroutine()` 回到 1（只剩 main，残留 0）。把 `select` 里的 `ctx.Done()` 分支去掉，就会残留一批卡在发送上的 goroutine。
+扇入的每个转发 goroutine 都监听取消，汇聚 goroutine 等它们全部退出后关闭输出。上游也必须配合取消，否则即使扇入退出，上游仍可能卡在发送上。
 
 扇出会打乱顺序。需要保序有两个办法：按下标把结果写进切片（各 goroutine 写自己的槽位，没有竞争），或让任务带序号、收齐再排序。按下标写最简单，第三节的 worker pool 就是这么做的。
 
@@ -312,7 +328,7 @@ fmt.Println(g.Wait()) // task 2 failed，远小于 300ms 就返回
 
 〔实测〕`go run .` 跑：`Wait` 返回 `task 2 failed`，耗时约 0.1ms；`SetLimit(2)` 后连 `Go` 四次，调用方阻塞约 50ms（每个任务睡 50ms，两批跑完）。
 
-为什么能"远小于 300ms"？task 2 立刻返回错误，`WithContext` 把派生 ctx 取消，其余三个任务的 `select` 里 `ctx.Done()` 分支立刻命中，它们不再等 300ms。这里有个前提：**任务必须监听 ctx**。如果任务不 `select ctx.Done()`，一个失败后兄弟还在白跑，`Wait` 只是"先返回"，不是"先让兄弟停"。
+为什么能“远小于 300ms”？task 2 返回错误后取消派生 ctx，其余任务监听到取消并退出。前提是任务配合取消：如果任务不监听 ctx，它会继续执行，`Wait` 仍要等所有任务返回，不能提前返回。
 
 只返回第一个错误是设计如此。要收集全部错误，用 `errors.Join` 或自己 `append`（05 讲过）。对照：Kotlin 的 `coroutineScope`、Java 的 `StructuredTaskScope`（21 起的预览 API）是同一个"一个失败取消兄弟"的模型；JS 的 `Promise.all` 遇到第一个失败就返回，但**不会取消其余任务**。
 
@@ -353,7 +369,7 @@ queued: 2 dropped: 3
 
 ## 六、优雅关停：停止接收、等在途、设兜底
 
-关停顺序固定：先让监听器不再接新请求，再等已经接收的做完，最后设一个总超时，到点强退。`Shutdown` 会立即关闭所有 listener 和空闲连接，并等待活动连接处理完。〔TB09 p9〕
+关停时先停止接收新请求，再等待已接收的请求，并设置总超时。`Shutdown` 关闭 listener 和空闲连接，等待活动连接空闲；超时后返回 context 错误，不会自动强制关闭所有活动连接。需要强制终止时，调用方还要决定是否调用 `Close`。〔TB09 p9〕
 
 ```go
 package main
@@ -412,7 +428,7 @@ Serve 返回: http: Server closed
 
 ## 七、并发安全的集合与单例
 
-- **map 并发写会 `fatal error`，不能 recover**；数组、切片、结构体并发改只是脏写。要共享 map，用 `sync.RWMutex` 包一层，或读多写少的缓存用 `sync.Map`。读写都很重时，分段锁（按 key 哈希分到多个 map，每个一把锁）降低冲突。〔C:go_basic/concurrence/collection_safety.go:6-11〕〔C:dachang/concurrence/concurrent_hash_map.go:10-106〕
+- **map 的并发读写或写写需要同步**；运行时有时会以不可 recover 的 fatal error 终止，但不能依赖它检测所有竞争。数组、切片、结构体的竞争也不安全。要共享 map，可用 `sync.RWMutex` 包一层，或在适合的访问模式下使用 `sync.Map`；高竞争场景可考虑分段锁。〔C:go_basic/concurrence/collection_safety.go:6-11〕〔C:dachang/concurrence/concurrent_hash_map.go:10-106〕
 - **单例与懒初始化**：`sync.Once`，或带返回值的 `sync.OnceValue`（1.21 起）。三个 goroutine 同时抢，初始化只跑一次：
 
 ```go
@@ -446,7 +462,7 @@ load once
 ## 小结
 
 1. context 的寿命规则：子不长于父；`cancel` 用 `defer` 挂上；取消原因用 `WithCancelCause` + `Cause`。
-2. 超时标准写法：`WithTimeout` + 独立 goroutine + `select` 等结果和 `ctx.Done()`；结果 channel 给 1 个缓冲。
+2. 超时处理可以监听 `ctx.Done()`；如果通过独立 goroutine 返回一次结果，缓冲 channel 可避免结果发送卡住，但不能中断不配合取消的工作。
 3. pipeline 每级都要 `select ctx.Done()`，发送方负责 `close`；扇入用 `WaitGroup` 再关输出。
 4. worker pool 用任务 channel + N 个 worker 钉死并发；按下标写结果保序。
 5. errgroup 补齐 WaitGroup 的三块：错误、取消、并发上限；任务必须监听 ctx。
@@ -476,7 +492,7 @@ load once
 **答案**
 
 1. 约 50ms 后到期，且 `Err()` 是 `context deadline exceeded`。因为子 context 的 deadline 取父子中更早的那个，父到期就传播给子。
-2. 缓冲让子 goroutine 在超时后仍能把结果送进 channel 再退出，不依赖接收方在场；无缓冲则发送方永远阻塞在那里。
+2. 一次结果发送可以放进缓冲，不依赖接收方继续接收；但工作本身必须能够结束或配合取消，否则仍可能泄漏。
 3. 前两个 `Go` 立刻返回，第三个起会阻塞，直到有 worker 空出来（闸门满时 `Go` 阻塞调用方）。
 4. 阻塞上游适合必须送达的数据；丢弃适合指标、日志；拒绝适合有明确失败语义的请求（调用方可重试）。
 5. 先停监听器，新请求进不来，等在途的规模才不会再涨；反过来会边等边接新请求，可能永远等不完。
@@ -519,7 +535,7 @@ load once
 
 - 双协程池对照：Simple 版是共享 tasks chan 加 N 个 worker for-range，close 即停、WaitGroup 收尾。RoutinePool 版给每个 worker 配容量 1 的 tasks chan，Submit 轮转提交，可能轮到空 worker。再用 CAS 状态机防重复 run 和 close。〔C:dachang/concurrence/routine_pool.go:16-154〕
 - 泄漏抓现行：`runtime.NumGoroutine()` 看趋势，挂上 net/http/pprof 后访问 /debug/pprof/goroutine 能看到每个泄漏 goroutine 卡在哪一行；现场是 1ms 超时等 5ms 的 rpc，子 goroutine 卡在无缓冲发送上，每请求泄一个。〔C:dachang/concurrence/main/routine_leaky.go:19-59〕
-- 连接对象可以放心共享：net.Conn、sql.DB、gorm.DB、grpc.ClientConn 都能多 goroutine 共用，不用外面包锁；其中 net.Conn 的标准库承诺是各一个读方和一个写方。〔C:dachang/concurrence/concurrent_connection/client/tcp/main.go:1-65〕
+- `net.Conn` 的接口契约允许多个 goroutine 同时调用方法；其他连接或客户端类型的并发安全性应分别查阅其文档，不能一概推断。〔C:dachang/concurrence/concurrent_connection/client/tcp/main.go:1-65〕
 - 信号量的额度必须归还：QpsLimit 每次处理先取令牌，处理完要在 defer 里还（`<-qps`），取还不对称，额度越漏越少。〔C:go_basic/concurrence/qps_limit.go:10-19〕
 - 三级流水线的实盘形状：单协程 walkDir 遍历文件名入 fileList，15 个读协程逐行进 lineBuffer，5 个处理协程 atomic 求和；上游 close 后下游 for-range 退出，逐级 Wait+close 收敛；另起 Ticker 定时打印两级缓冲的堆积量，用它指导并发度调整。〔C:go_basic/concurrence/deal_file.go:79-124〕
 

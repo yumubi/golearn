@@ -5,7 +5,7 @@ title: 09 泛型：该用的地方，和绕不过的限制
 # 09 泛型：该用的地方，和绕不过的限制
 
 
-> 详细程度：标准 · 约 40 分钟
+> 详细程度：标准 · 约 60 分钟
 > 材料：TBX04、TBX05、TBX01 · 旧长版：`notes/p33-generics-boundary.md`、`notes/p8-fast-track.md`
 > 前置：你写过 Java/Rust/TS 中任意一门的泛型或模板代码
 
@@ -98,7 +98,7 @@ func main() {
 
 1. **类型参数** `T`：方括号里的类型占位符，声明时不知道它具体是什么，调用时才确定。跟普通参数一样，只是它占的是"类型"这个位置。
 2. **约束** `Number`：规定 `T` 可以是哪些类型。约束就是接口，Go 把它扩展成还能写**类型集合**：`~int | ~int64 | ~float64` 意思是"底层类型是 int、int64、float64 之一的类型"。
-3. **具化**：调用时编译器把 `T` 替换成具体类型，生成一份真正的函数。`Sum(1, 2, 3)` 背后是编译器先做 `sumInt := Sum[int]`，再调 `sumInt(1, 2, 3)`。
+3. **实例化**：调用时用具体类型实参替换类型参数并检查约束。`Sum(1, 2, 3)` 的类型实参可推断为 `int`，也可显式写成 `Sum[int](1, 2, 3)`；是否为每个类型生成独立机器码是编译器实现细节。
 
 类型实参大多能由编译器从实参推断出来，所以通常不用写 `Sum[int](...)`，写 `Sum(1, 2, 3)` 就行。`MyInt` 能传进去，靠的是约束里的 `~`：`MyInt` 底层类型是 `int`，`~int` 把它框了进来；去掉波浪线，`MyInt` 就进不去。〔TBX05 p11-12〕下一节细看这一点。
 
@@ -128,7 +128,7 @@ main.Vector[int]{1, 2, 3, 4}
 main.Vector[string]{"a", "b", "c", "d"}
 ```
 
-`Vector[int]` 和 `Vector[string]` 是两个不同的类型，底层分别是 `[]int` 和 `[]string`，各有一份自己的 `Dump`。C++ 里 `vector<int>` 和 `vector<string>` 各生成一份代码。Go 同样在编译期具化、不靠 Java 那样的擦除，但实现上更折中：编译器按类型的内存形状（GC shape）分组生成代码，所有指针类型共用一份，再通过隐含的字典传入具体类型信息。这一点材料没讲，细节以官方设计文档为准，写代码时不必依赖它。
+`Vector[int]` 和 `Vector[string]` 是两个不同的实例化类型，底层分别是 `[]int` 和 `[]string`，都可以调用 `Dump`。编译器如何共享或生成机器码属于实现细节，不应作为语言保证。
 
 ## 二、`~` 和类型集合：约束能框住谁
 
@@ -228,9 +228,9 @@ http://api/user/1
 17
 ```
 
-API 从想象中的 `client.Get[User](url)` 变成 `NewGet[User](client, path, decoder).Do()`，少一层优雅，但能编译。`dec` 是"拿到原始响应后怎么解析成 `T`"的回调，类型参数 `T` 落在了 `GetReq` 和 `NewGet` 上，绕开了方法不能带类型参数的限制。Java 背景会觉得别扭，因为这是过程式设计，`Client` 被降级成配置载体。
+API 从想象中的 `client.Get[User](url)` 变成 `NewGet[User](client, path, decoder).Do()`；类型参数落在 `GetReq` 和 `NewGet` 上，绕开了方法不能声明额外类型参数的限制。这里的 `Do` 只是拼接字符串并调用回调，**没有发起 HTTP 请求**；真实客户端还需要处理网络、解码和错误。
 
-### 限制二：约束不能当类型声明
+### 限制二：含类型项的接口不能当普通值类型
 
 想限制一个接口只接受几种特定类型（比如 SQL Builder 的 `Select` 只收 `string` 和 `Aggregate` 两种列），有人会想用约束当参数类型：〔TBX04 p7-8〕
 
@@ -254,7 +254,7 @@ func main() {}
 cannot use type Selectable outside a type constraint: interface contains type constraints
 ```
 
-约束只能和类型参数一起用，不能独立当类型。所以"处理有限几种输入"这件事，泛型约束帮不上忙，长期看 `interface{}` 参数仍会留在中间件设计里。〔TBX04 p7-8〕
+含类型项的非基本接口只能作为约束，不能作为普通参数类型；只包含方法的基本接口则既可作值类型也可作约束。泛型函数可以限制同一个类型参数的输入，但不能用这个约束直接创建同时容纳 `string` 和 `Aggregate` 的异构参数列表。〔TBX04 p7-8〕
 
 **绕法：标记接口**。用一个带私有方法的接口当"准入标记"：〔TBX04 p10-11〕
 
@@ -270,9 +270,9 @@ func (Aggregate) aggr() {}
 func (s *Selector) Select(cols ...Selectable) *Selector
 ```
 
-为什么不能用空接口？因为空接口所有类型都实现它，等于没拦。塞进一个未导出的方法 `aggr()`，只有包内实现它的 `Column`、`Aggregate` 能进来，外部无法冒充。代价是哪怕只用普通列，也得写成 `Select(Column("name"))`，不能再裸传字符串。
+空接口允许任何类型，不能限制输入。未导出方法让其他包无法自行声明同一个包私有方法，但其他包仍可能通过嵌入该接口或已有实现来满足接口，所以这不是严格封闭的类型枚举。代价是普通列要写成 `Select(Column("name"))`。
 
-### 限制三：约束只能是接口，不能是结构体
+### 限制三：嵌入结构体不形成子类型约束
 
 业务里常见需求：ORM 的 `Insert` 只接受嵌入了 `BaseEntity`（共享字段和公共方法）的实体。自然会想写 `func Insert[E BaseEntity](e *E)`，让所有嵌入 `BaseEntity` 的实体通过，行不通：〔TBX04 p8-9〕
 
@@ -280,7 +280,7 @@ func (s *Selector) Select(cols ...Selectable) *Selector
 in call to Insert, E (type User) does not satisfy BaseEntity
 ```
 
-Go 的约束必须是接口，不能是结构体，这条路走不通。它堵死的是"共享字段"这条路，对业务开发的影响比中间件更大。〔TBX04 p8-9〕
+约束可写具体类型，`[E BaseEntity]` 相当于只接受 `BaseEntity` 本身，并非接受所有嵌入它的结构体。嵌入不会建立子类型关系；Go 也没有直接表达“包含某个字段”的通用约束。〔TBX04 p8-9〕
 
 **绕法：Getter/Setter 接口**。把共享字段提取成方法，约束写成接口，再配合嵌入一个 `BaseEntity` 让每个实体不用重复实现：〔TBX04 p11-12〕
 
@@ -304,6 +304,155 @@ func Insert[E Entity](e E) {}
 ```
 
 约束写成 `Entity` 接口，`User` 通过嵌入 `BaseEntity` 拿到 `Id`/`SetId`，就能作为 `Insert[*User](u)` 的实参。代价是 Go 习惯直接访问字段，这里被迫给每个共享字段加一对方法，不优雅但管用。〔TBX04 p11-12〕
+
+## 三点五、泛型落进真实数据结构：二分、堆、container/heap、Set
+
+前面学的类型参数、约束、`~` 与类型集合，落到真实数据结构上才见真章。这一小节的四个例子全部来自课程的数据结构课（泛型版）：一个泛型二分、一个手写小根堆、一个适配 `container/heap` 的优先队列、一个泛型 `Set`,它们分别练习 `[T cmp.Ordered]`、数组隐式树、接口适配五方法和 `comparable` 约束。第十三节榜单 TopN 会用到 `container/heap`，那里只讲用法，这里补齐它的底层。
+
+### 泛型二分：begin<=end 的边界与区间版双端短路
+
+第一个例子：泛型二分查找。签名是 `func BinarySearch[T cmp.Ordered](arr []T, target T) int`，约束用标准库 `cmp.Ordered`（1.21 起 `cmp` 包承担了旧 `constraints` 包的角色），一份实现就能服务所有可排序类型，测试里以 `int` 实例化。〔C:go_frame/data_structure/binary_search.go:1-52〕
+
+```go
+func BinarySearch[T cmp.Ordered](arr []T, target T) int {
+	begin := 0
+	end := len(arr) - 1
+	for begin <= end {
+		middle := (begin + end) / 2
+		if arr[middle] == target {
+			return middle
+		}
+		if arr[middle] < target {
+			begin = middle + 1
+		} else {
+			end = middle - 1
+		}
+	}
+	return -1
+}
+```
+
+注意边界是 `begin <= end` 而不是 `begin < end`。源码注释原话：之所以是 `<=`，是因为"区间内只剩下一个元素时也应该跟 target 进行比较，而不是直接返回-1"。写成 `<`，区间收缩到只剩一个元素（`begin == end`）时就退出循环返回 -1，这个唯一的候选被漏判。用 `arr = []int{1, 3, 6, 8, 10}` 查 `6` 推演（教学推导）：begin=0、end=4，middle=2，`arr[2]=6` 命中返回 2；查 `2` 则走三轮：middle=2，6>2 使 end=1 → middle=0，1<2 使 begin=1 → begin=end=1，middle=1，3>2 使 end=0，此时 begin>end 退出返回 -1。〔C:go_frame/data_structure/binary_search.go:1-52〕
+
+两点预期管理：其一，数组里有多个等于 target 的元素时，注释明确"只返回其中某一个的下标"，不保证最左也不保证最右；其二，未命中时 begin 与 end 一路向对方滑，begin 只增（middle+1）、end 只减（middle-1），正常退出循环返回 -1。官方测试验证了两条路径：`TestBinarySearch` 跑 100 轮（每轮生成长度 100 的随机数组、排序、随机 target），命中下标校验 `arr[index] == target`，返回 -1 时全表扫描反证 target 确实不存在；`TestBinarySearch1` 用固定数组查 1、6、10。〔C:go_frame/data_structure/binary_search.go:1-52〕这个二分有配套基准：1200 个元素的数组，模拟 B+树单个节点内的查找，实测 46.83 ns/op（源码注释里的 55ns 是旧机器数据）。〔C:go_frame/data_structure/binary_search_test.go:50-107〕〔实测：work/run/C_go_frame__data_structure/E2/out.txt〕
+
+第二个例子是**区间版** `BinarySearch4Section[T cmp.Ordered]`，返回第一个 `>=target` 的元素下标，即插入位置。前置条件写在注释里：arr 必须单调递增且不存在重复元素，空数组直接返回 -1。它的骨架每轮循环先做双端短路检查：
+
+```go
+for {
+	if arr[begin] >= target {
+		return begin
+	}
+	if arr[end] < target {
+		return end + 1
+	}
+	...
+}
+```
+
+两个短路各自兜住一类边界：`arr[begin] >= target` 说明 begin 已经滑到 target 之后（target 比首元素还小时首轮即返回 0）；`arr[end] < target` 说明 end 已经滑到 target 之前，target 大于全部元素时 `end+1` 即 `len(arr)`,这正是"比最后一个元素还大返回长度、比第一个元素还小返回 0"的由来。短路不成立才进入二分：`arr[middle] > target` 时 `end = middle-1`（注释提醒 `arr[end]` 可能会跑到 target 前面），`arr[middle] < target` 时 `begin = middle+1`（`arr[begin]` 可能会跑到 target 后面），相等直接返回 middle。以 `arr=[1,3,6,8,10]`、`target=4` 推演（教学推导）：begin=0、end=4，双端检查 1<4、10>=4 均不触发；middle=2，6>4 使 end=1；再查 arr[0]=1<4、arr[1]=3<4 触发第二个短路，返回 `end+1=2`,正是 4 的插入位置。官方测试 `TestBinarySearch4Section` 跑 30 轮随机 float64 严格验证：target=arr[0]-1 期望 0、target=末元素+1 期望 len(arr)、target=arr[0] 期望 0、每个相邻元素中点期望 i+1、每个 arr[i+1] 期望 i+1。〔C:go_frame/data_structure/binary_search.go:26-52〕〔C:go_frame/data_structure/binary_search_test.go:65-107〕
+
+### 手写小根堆：数组隐式树、O(N) 建堆、ReplaceTop
+
+第三个例子是泛型小根堆 `Heap[T cmp.Ordered]`，内部只有一个切片 `arr`，用数组隐式存完全二叉树：下标 i 的左孩子是 `2i+1`、右孩子是 `2i+2`、父节点是 `(i-1)/2`。`NewHeap` 先 `slices.Clone` 输入切片再包装，避免污染调用方数据。〔C:go_frame/data_structure/heap.go:1-21〕
+
+```go
+func (heap *Heap[T]) downwardAdjust(parent int) {
+	left := 2*parent + 1
+	if left >= len(heap.arr) { //没有左孩子，说明parent已经是树的叶节点了
+		return
+	}
+	//从父子三人（如果没有右孩子，则是父子二人）中找到最小者
+	minIndex := parent
+	...
+	// 最小者跟父节点交换
+	if minIndex != parent {
+		heap.arr[minIndex], heap.arr[parent] = heap.arr[parent], heap.arr[minIndex]
+		heap.downwardAdjust(minIndex) //递归向下调整
+	}
+}
+```
+
+下滤 `downwardAdjust(parent)`：左孩子下标越界说明 parent 已是叶子，直接返回；否则在父子三人（无右孩子则父子二人）中找最小者，最小者不是父节点就交换，并从被换下去的位置递归继续下滤。这与第十三节"维持前 100"的小顶堆是同一棵树：父节点比子节点小，堆顶是当前第 N 名。〔C:go_frame/data_structure/heap.go:22-49〕〔W09-1 p19〕
+
+关键在 `Build`。从 `NewHeap` 拿到的只是元素摆放未调整的切片，还不能保证堆序。`Build` 是自底向上的 O(N) 建堆：
+
+```go
+n := len(heap.arr)
+if n <= 1 {
+	return
+}
+lastIndex := n / 2 * 2              //最下层、最右那个三角形区域的右孩子在数组里的下标
+for i := lastIndex; i > 0; i -= 2 { //逆序检查每一个三角形区域
+	right := i
+	parent := (right - 1) / 2   //右孩子可能是不存在的，但父节点一定存在
+	heap.downwardAdjust(parent)
+}
+```
+
+三个细节：起点 `lastIndex = n/2*2` 是最下层、最右那个三角形区域的右孩子下标,把数组按"父+两个孩子"分成一个个三角形区域，从最后一个三角形扫起；步长 `i -= 2` 从右往左逐三角形逆序，每个三角形由右孩子下标反推 `parent = (right-1)/2`；注释强调"右孩子可能是不存在的，但父节点一定存在",最下层可能只有左孩子没有右孩子，但只要右孩子下标被拿来当锚点，反推出的父节点必然落在数组里。n<=1 直接返回。〔C:go_frame/data_structure/heap.go:50-76〕
+
+之后的增删各是两步：`Push` 把元素 append 到数组尾部，再对新下标 `len-1` 做 `upwardAdjust`（比父小则交换并向上递归，到下标 0 为止）；`Pop` 取出 `arr[0]`，用最后一个元素覆盖堆顶、缩容 `arr[:len-1]`，再 `downwardAdjust(0)`，空堆返回错误。ReplaceTop 是维护 TopN 的关键路径：非空时直接 `arr[0] = ele` 后 `downwardAdjust(0)`，一次下滤完成换顶；先 `Pop` 再 `Push` 要经历一次下滤加一次上滤，调整动作约为其两倍,所以"堆满后新分数比堆顶大才替换"应走 ReplaceTop 语义；堆为空时 ReplaceTop 退化为 Push。〔C:go_frame/data_structure/heap.go:77-125〕官方测试 `TestHeap` 用 `{50, 20, 49, 15, 30, 62}` `NewHeap` 后 `Build`、`Push(5)`，循环 `Pop` 全部元素，即一次堆排序。〔C:go_frame/data_structure/heap.go:16-21〕
+
+### container/heap 适配：五方法、两个坑
+
+标准库 `container/heap` 不提供现成堆类型，任何类型实现五个方法就能被 `heap.Init`/`heap.Push`/`heap.Pop` 操作：`Len() int`、`Less(i, j int) bool`、`Swap(i, j int)`、`Push(x interface{})`、`Pop() interface{}`。课程用 `PriorityQueue[T cmp.Ordered]`（底层 `[]*Item[T]`，`Item` 含 `Info string` 与 `Value T`）示范：〔C:go_frame/data_structure/std_heap.go:1-36〕
+
+```go
+func (pq PriorityQueue[T]) Less(i, j int) bool {
+	return pq[i].Value < pq[j].Value
+}
+
+// 往slice里append,需要传slice指针
+func (pq *PriorityQueue[T]) Push(x interface{}) {
+	item := x.(*Item[T])
+	*pq = append(*pq, item)
+}
+
+// 让slice指向新的子切片，需要传slice指针
+func (pq *PriorityQueue[T]) Pop() interface{} {
+	n := len(*pq)
+	item := (*pq)[n-1]
+	*pq = (*pq)[0 : n-1]
+	return item
+}
+```
+
+两个坑。**坑一：Less 的方向决定堆序语义**。`Less(i,j)` 返回 `pq[i] < pq[j]` 就是小根堆（堆顶最小），返回 `>` 就是大根堆（堆顶最大）,调转比较方向即在小根与大根之间切换。源码注释声称"golang 默认提供的是小根堆，而优先队列是大根堆，所以这里要反着定义 Less"，这个说法与代码实际行为不符：`<` 就是常规小根堆 Less，并未反向（反向应写 `>`）；`TestStdHeap` 的注释也写明 `heap.Pop` 删除的堆顶"即最小的元素"，逐个 Pop 得到按 Value 升序的输出。想要"每次弹出 Value 最大的元素"的优先队列，把 Less 改成 `>` 即可。〔C:go_frame/data_structure/std_heap.go:5-23〕〔C:go_frame/data_structure/std_heap.go:12-23〕
+
+**坑二：Push/Pop 必须用指针接收者**。`Push` 里 `*pq = append(*pq, item)`，append 可能更换底层数组，必须把新 slice header 写回；`Pop` 里 `*pq = (*pq)[0:n-1]` 切掉尾元素改变了长度。两者都修改 slice header，因此接收者必须是 `*PriorityQueue[T]`,值接收者的修改作用在副本上会丢失。源码在两个方法上方分别标注"往slice里append,需要传slice指针""让slice指向新的子切片，需要传slice指针"。还有一处签名细节：接口要求 `Push(x interface{})`，实现里需要 `x.(*Item[T])` 把 any 断言回具体元素类型。〔C:go_frame/data_structure/std_heap.go:24-36〕
+
+调用侧的用法（`TestStdHeap`）：`make(PriorityQueue[int], 0, 10)` 后直接对 pq 逐个 `Push` 三个元素（普通 append，未建堆），`heap.Init(&pq)` 建堆，再 `heap.Push(&pq, D)` 走接口增元素，循环 `heap.Pop(&pq)` 实现堆排序；调用处一律传 `&pq`。对照第十三节 TopN：那里 `heap.Push(h, it)` 进堆、堆满后 `heap.Pop(h)` 再 `heap.Push(h, it)` 挤掉当前最小者，用的正是这套五方法协议。〔C:go_frame/data_structure/std_heap.go:12-23〕〔W09-1 p22〕
+
+顺带对照手写版与标准库版的取舍：手写 `Heap[T]` 值语义内聚可控，标准库要求实现五方法接口但能适配任意类型与优先级规则。〔C:go_frame/data_structure/binary_search.go:1-52〕
+
+### 泛型 Set：comparable 约束与 struct{} 值
+
+第四个例子回到“类型本身带参数”。用 map 模拟 set 是 Go 社区多年的惯用法，Go 1.18 起就可以定义这样的泛型具名类型；它不是 Go 1.24 引入的泛型类型别名。〔C:go_basic/v24/generic_type_alias.go:1-11〕
+
+```go
+type Set[T comparable] map[T]struct{}
+
+func NewSet[T comparable](n int) Set[T] {
+	m := make(map[T]struct{}, n)
+	return Set[T](m)
+}
+```
+
+三个设计点：**`comparable` 约束**允许 `T` 作为 map key；不过 Go 1.20 起接口类型也可能满足它，接口动态值若不可比较，作为 key 时仍会 panic。**`struct{}` 值**不携带成员数据，只借 key 的存在性表达集合。**参数 n** 是 `make` 的容量提示，不是硬上限；`Set[T](m)` 显式转换成具名类型，也可以直接 `make(Set[T], n)`。〔C:go_basic/v24/generic_type_alias.go:1-37〕
+
+五操作与底层 map 操作一一对应：`Add` 置 `set[ele] = struct{}{}`；`Len` 复用 `len(set)`；`Remove` 复用 `delete(set, ele)`；`Exists` 用 `_, exists := set[ele]` 的 comma-ok 双返回判存在；`Range` 用 `for key := range set` 遍历并对每个 key 调用回调。调用方从回调拿到元素，但这里的 `Set` 本身是导出的 map 类型，仍可直接访问底层 map。`Exists` 必须用双返回，因为 `struct{}` 的零值无法区分 key 存在与否。〔C:go_basic/v24/generic_type_alias.go:12-37〕
+
+官方测试 `TestSet` 位于外部测试包 v24_test、只依赖公开 API：`NewSet[int](10)` 后 `Add 2、4、6`，断言 `Len()==3`、`Exists(2)` 为真；`Remove(2)` 后断言 `Exists(2)` 为假、`Len()==2`；最后 `Range` 逐个回调打印，实测输出 4、6（map 遍历无序）。实测 TestSet PASS。〔C:go_basic/v24/generic_type_alias_test.go:9-52〕〔实测：work/run/C_go_basic__v24/E1/out.txt〕
+
+### 小结与连线
+
+- 泛型二分的边界是 `begin <= end`：区间剩一个元素时仍要比较一次；区间版 `BinarySearch4Section` 用 begin/end 双端短路找第一个 `>=target` 的下标。多命中只返回其中某一个，不保证最左或最右。〔C:go_frame/data_structure/binary_search.go:26-52〕
+- 手写堆用数组隐式存完全二叉树（左 2i+1、右 2i+2、父 (i-1)/2）；`Build` 自底向上按三角形逆序下滤是 O(N) 建堆；`Push` 上滤、`Pop` 尾换头后下滤；`ReplaceTop` 一次下滤，比 Pop+Push 少一半调整。〔C:go_frame/data_structure/heap.go:22-125〕
+- `container/heap` 适配五方法 `Len/Less/Swap/Push/Pop`；Less 方向决定小根/大根，Push/Pop 改 slice header 必须指针接收者。〔C:go_frame/data_structure/std_heap.go:1-36〕
+- `type Set[T comparable] map[T]struct{}` 自 Go 1.18 可用；`comparable` 允许类型参数作 key，但接口动态值仍须可比较。〔C:go_basic/v24/generic_type_alias.go:1-37〕
+
+这些结构都不是玩具：第十三节榜单 TopN 的小顶堆、业务里常见的去重集合，落点就是它们。判断"这里能不能用泛型"的判据，下一节展开。
 
 ## 四、该用与不该用
 
@@ -340,7 +489,7 @@ BenchmarkSpecialized-10    	     318	   3789612 ns/op	  802817 B/op	       1 all
 
 1. 泛型把算法和类型解耦：类型参数 `[T 约束]` 是占位符，约束是接口（可含类型集合），具化在编译期替换类型参数。
 2. `~int` 表示"底层类型是 int 的一切类型"；漏写 `~`，`MyInt` 这类自定义类型传不进去。
-3. 三个限制：方法不能有类型参数（用 Builder 绕）、约束不能当类型声明（用标记接口绕）、约束只能是接口（用 Getter/Setter 接口绕）。
+3. 三个限制：方法不能声明额外类型参数；含类型项的接口不能作为普通值类型；嵌入结构体不形成子类型约束。
 4. 适合：操作容器且不假设元素类型、通用数据结构、多次出现的样板代码。不适合：只调用一个方法、让代码更复杂。
 5. 泛型的性能收益来自"标准库能用更快的专用实现替换内部"，不是泛型本身更快。
 
@@ -363,9 +512,9 @@ BenchmarkSpecialized-10    	     318	   3789612 ns/op	  802817 B/op	       1 all
 
 **答案**
 
-1. 不能。去掉 `~` 后约束只收底层类型恰好是 `int`/`float64` 的类型；`MyInt` 的底层类型是 `int` 但本身不是 `int`，进不去。`~int` 才把"底层类型是 int 的一切类型"框进来。
+1. 不能。去掉 `~` 后约束只收类型本身是 `int` 或 `float64` 的类型；`MyInt` 底层虽是 `int`，本身却是不同的定义类型。
 2. 因为 Go 的方法（有 receiver 的函数）本身不能带类型参数，这是语法限制，编译器报 `method must have no type parameters`；普通函数没有 receiver，可以带。
-3. 用标记接口：`type Selectable interface{ aggr() }`，让 `Column` 和 `Aggregate` 实现 `aggr()`，`Select(cols ...Selectable)` 就能在编译期只收这两种。不能用空接口，因为它所有类型都实现。
+3. 用未导出方法的标记接口限制直接实现，再用 `Column` 和 `Aggregate` 实现；注意外部仍可能通过嵌入满足接口，不能把它当严格封闭的枚举。
 4. `ReadAll(r io.Reader)` 更易读也不慢；`ReadAll[R io.Reader]` 多一层类型参数，代码更复杂，没有收益。对某个值做的全部操作只是调用它的一个方法时，就用接口，不用类型参数。
 
 练习包 `exercises/p33gen/` 里有排序基准（`SortInts`、`SlicesSort`、`Specialized`）、`Set`、标记接口和编译错实拍，可以直接跑。
@@ -379,17 +528,17 @@ BenchmarkSpecialized-10    	     318	   3789612 ns/op	  802817 B/op	       1 all
 ### TBX05 泛型为什么来得这么晚，又是怎么定型的
 
 - Go 团队对泛型的顾虑写在 FAQ 里：不紧迫（早期优先级是规模化、可读性、并发）、与"简单"哲学有悖（新语法加类型系统与运行时的复杂实现）、一直没找到价值抵得过复杂性的方案。直到语言成熟才下决心，与包依赖、错误处理并列为三大待解问题。〔TBX05 p4-5〕
-- 2009 年 Russ Cox 那张"三选一"表（拖慢程序员、拖慢编译器、拖慢执行）如 CAP 一样不可兼得：不实现泛型就到处复制 `AddInt`；学 C++ 每类型实例化一份就拖慢编译器、代码膨胀；学 Java 装箱拆箱就拖慢执行。Go 最终选了编译期 hybrid 方案，接受编译器一度变慢约 15%（1.19 起已兑现优化承诺）。〔TBX05 p5,19〕
+- 2009 年 Russ Cox 那张"三选一"表（拖慢程序员、拖慢编译器、拖慢执行）如 CAP 一样不可兼得：不实现泛型就到处复制 `AddInt`；学 C++ 每类型实例化一份就拖慢编译器、代码膨胀；学 Java 装箱拆箱就拖慢执行。Go 最终选了编译期 hybrid 方案，接受编译器一度变慢约 15%（1.19 起已兑现优化承诺）。〔TBX05 p5〕〔TBX05 p19〕
 - 设计简史值得记住三个转折点：2018.8 的第一版草案用 `contract` 关键字定义约束；2020.6 Wadler（Haskell 设计者之一、Java 泛型设计者）发表《Featherweight Go》给出形式化证明，官方随后弃 contract 改用扩展 interface 作约束；2020.11 定稿方括号语法并去掉 `type` 关键字。今天写 `[T Stringer]` 就是这三步的产物。〔TBX05 p5-8〕
 - `any` 不是新类型，是 `interface{}` 的别名（1.18 起的预定义标识符），语义与性能完全等价；`Vector[T any]` 里写 `interface{}` 是一回事。〔TBX05 p14〕
 - 写约束的接口和写传统行为的接口建议分开定义。约束接口扩展了类型集合（`~int | ~int32` 加方法集），把它当普通接口变量用会报 `interface contains type constraints`（见限制二）；一个接口真的既需要方法集合又需要类型列表时才合并。〔TBX05 p11-12〕
 - 官方使用建议有正反两面，正文第四节只留了结论，这里补判据：容器操作且不假设元素类型（可替代反射方案，更快更安全）、通用数据结构（链表、二叉树等 Go 无原生支持的类型，替换 `interface{}` 存储免去类型断言）、多个类型实现完全相同时用类型参数，实现各异就用不同方法；第一遍就抽象是滥用，先重复再抽象。〔TBX05 p16-17〕
-- 老教程要过筛：`golang.org/x/exp/slices` 已转正为标准库 `slices`（1.21），`constraints` 包的角色现在由标准库 `cmp` 承担，示例里的 `constraints.Integer` 现行写法多用 `cmp.Ordered`。〔TBX05 p12,18〕
+- 老教程要过筛：`golang.org/x/exp/slices` 已转正为标准库 `slices`（1.21），`constraints` 包的角色现在由标准库 `cmp` 承担，示例里的 `constraints.Integer` 现行写法多用 `cmp.Ordered`。〔TBX05 p12〕〔TBX05 p18〕
 
 ### TBX04 三个限制的完整影响面与绕法代价
 
 - 限制一的影响面：客户端类应用最想要方法级泛型 API（`func Get[T any](url string) (T, error)`），Redis、Kafka 这类中间件客户端和 ORM、HTTP 框架全部受阻；把类型参数挪到接口上则每种模型一个实例（`Orm[User]`、`Orm[Order]`），模型数等于实例数，不可接受。〔TBX04 p2-5〕
-- 限制三的报错在 1.18 前版本有误导性：`myEntity does not implement BaseEntity` 让人以为实体没实现接口，实际是 `BaseEntity` 是结构体而约束只能是接口，现行报错文案已更准确。受影响最大的是 ORM 实体、前端参数接收这类要共享字段的业务代码，不只中间件。〔TBX04 p8-9〕
+- 结构体名称可以作为约束类型项，但只匹配该具体类型；嵌入不产生子类型关系，因此无法用它接受所有嵌入该结构体的实体。〔TBX04 p8-9〕
 - 三种绕法的代价对齐看：Builder 换编译可行，代价是链式样板与过程式风格；标记接口换编译期类型检查，代价是每列包一层（`Select(Column("name"))`）加私有方法噪音，但远好于 `interface{}` 参数拖到运行期 panic；Getter/Setter 换约束可行，代价是违背 Go 直接访问字段的习惯、代码量接近翻倍。〔TBX04 p9-12〕
 - 当年的悲观预判部分落空：泛型已进入标准库（`slices`、`maps`）和主流框架（ent、go-zero），但"泛型方法"缺位仍压制客户端 API 设计，标准库因此把容器辅助做成包级函数（`slices.Sort`）而不是方法。〔TBX04 p12〕〔TBX05 p15〕
 

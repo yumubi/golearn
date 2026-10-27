@@ -81,11 +81,11 @@ dnsproxi_queries_total{outcome="forwarded",qtype="A"} 1
 
 `cache/cache.go` 的核心结构在 13 节全讲过，这里只说源码里最值得抄走的三个决定。
 
-**决定一：命中用写锁。** `Cache.Get()` 的签名是读，干的事却包含"更新最后访问时间"（近似 LRU 的排序依据）。Go 的 map 没有原子操作可用，于是读路径升级成 `mu.Lock()`。代码注释直说了代价：读多写少的 RLock 优势打了折。对照你在 06 节见过的 Rust 版：Rust 在读锁里用 `fetch_max` 原子写，Go 没有等价物，只能付这个代价。这不是实现瑕疵，是语言差异在并发语义上的投影。
+**决定一：命中用写锁。** `Cache.Get()` 虽然叫 Get，却会更新 `access` 中的最后访问时间，供近似 LRU 排序使用。普通 Go map 的并发读写需要同步，因此这个实现用 `mu.Lock()` 保护整个更新，读多时会限制并发。它不是 Go 语言的唯一选择：也可以在适当的生命周期管理下，把访问时间放在条目中的原子变量，用原子操作更新；这会增加实现与维护成本。
 
 **决定二：逐出时三张表一起动。** 缓存用 `keys` 切片加三张 map（`slot` 反查下标、`m` 存条目、`access` 记访问时间）支持 O(1) 的随机抽样加交换删除。`removeSlot` 把最后一个元素搬进被删的洞，再修正被搬动者的 `slot`。源码注释记录了第一版的失误：漏改了 `m`，`len(keys)=3` 而 `len(m)=4`，容量上限静默失效，被测试当场抓住。教训是 05 节讲过的：多份冗余状态要同步修改，漏一处不会有任何报错，只有命中率莫名下降。
 
-**决定三：满仓准入不是比大小，是比频率。** 新条目要挤掉在位者时，比较两者的访问频率估计，新来的不够热就拒收（客户端照样拿到上游应答，只是不留档）。频率用 count-min 草图估计：4 行、每行 4 bit 计数器、16 格打包进一个 `uint64`，取各行最小值，可能高估但永不低估，估计值的"宁高勿低"方向恰好是准入需要的。判决函数在 `cache/sketch.go`：
+**决定三：满仓准入不是比大小，是比频率。** 新条目要挤掉在位者时，比较两者的访问频率估计，新来的不够热就拒收（客户端照样拿到上游应答，只是不留档）。频率用 count-min 草图估计：4 行、每行 4 bit 计数器、16 格打包进一个 `uint64`，取各行最小值。哈希碰撞可能抬高估计值；计数饱和和定期老化又会使估计不再等于历史总访问次数。判决函数在 `cache/sketch.go`：
 
 ```go
 func Admit(candidate, victim uint32, roll uint64) bool {
@@ -182,9 +182,9 @@ worker pool=2：按时拿到应答 337，超时 163，总耗时 25ms
 ## 小结
 
 1. 两种传输一个入口：TCP 侧用 `streamConn` 适配成 `net.PacketConn`，业务代码零感知；成帧是 2 字节前缀加 `io.ReadFull`。
-2. 缓存命中不是读：改写 ID、原地递减 TTL；命中要更新访问时间，Go 的 map 逼你用写锁。
+2. 缓存命中不是纯读：改写 ID、递减 TTL；这个实现还更新 map 中的访问时间，因此使用写锁。
 3. 逐出时 keys、slot、m、access 四份状态必须一起动，漏一份就是静默漂移。
-4. 准入比频率不比大小：count-min 草图宁高勿低、老化防锁死、随机放行防碰撞攻击。
+4. 准入比频率不比大小：count-min 草图可能因碰撞高估，老化防锁死、随机放行防碰撞攻击。
 5. 限流保护代理自身（在缓存前），熔断保护上游（在缓存后、转发前）；回填熔断器要区分"门没过"与"发出去"。
 6. 并发模型的形状就是 in_flight 的形状：pool 是闸门（背压），goroutine-per-packet 是漫滩（失控风险）；两者都有入口 recover。
 7. 观测的纪律：结构化日志带请求 ID，指标标签只收有限枚举。
@@ -212,7 +212,7 @@ worker pool=2：按时拿到应答 337，超时 163，总耗时 25ms
 **答案**
 
 1. `tcp.streamConn` 把一帧适配成一次 `ReadFrom`，业务看到的永远是一个"包"。TCP 应答的两字节前缀在 `streamConn.WriteTo` 里加，业务不感知。
-2. 命中要更新 `access`（近似 LRU），Go 的 map 没有原子操作，读只能升级写。Rust 版在读锁里用 `fetch_max` 原子写做到了"读锁加访问记录"，这是语言能力差异。
+2. 这个实现命中时要更新 `access` map，所以用写锁保护。也可以设计为读锁保护条目生命周期、用条目内的原子变量更新访问时间，但要额外处理并发和维护复杂度。
 3. 好处是命中查询不消耗令牌。坏处是上游故障时缓存未命中的查询会先占住缓存与锁资源再被熔断门拦下，限流对代理自身的保护后移；且命中路径变长。现在的顺序（限流在缓存前）优先保护自己。
 4. 不能。这组数字的前提是上游极快（微秒级回包）。上游一旦变慢，无 pool 的在飞数会涨到数百，每个 goroutine 都占着上游 socket 等 2 秒，内存与文件描述符先耗尽。两个数字说明的是"背压的代价"，不是"孰优"。
 
@@ -243,30 +243,41 @@ DNS_LISTEN=:15353 DNS_UPSTREAM=127.0.0.1:15300 DNS_CACHE=1 \
 - 选域的依据：Go 官方 2020 用户调查里 Web 编程第一、网络编程第四，作者据此从网络编程里选了实战题。网络编程通常只关注 TCP/IP 模型最上两层，传输层的 TCP/UDP 与应用层；socket 是传输层暴露给用户的编程接口，直接基于 socket 定义应用层协议是最常见的网络编程形式。〔TB36 p3-5〕
 - 定界模式与流无边界正文已讲（见"一、请求路径"），这里补 K3 的另一半通信模型：教学协议是典型的请求/响应，连接由客户端发起，之后一请求一响应交替进行，直到客户端主动断开；dnsproxi 的 TCP 口上就是一条连接里这样的一串请求响应对。〔TB36 p6-7〕
 - 阻塞 I/O 下一个线程只能陪一个连接干等；非阻塞未就绪立即返回 EAGAIN，调用方通常轮询，单独用在生产上浪费 CPU；多路复用让一个线程挂起在一堆 socket 上，由内核通知哪个可读可写，是主流服务器的选择。〔TB36 p8-11〕
-- Go 的"阻塞"是表象：底层 socket 实际是非阻塞的，运行时拦截 EAGAIN，把 goroutine 挂到 netpoller（Linux 用 epoll、macOS 用 kqueue、Windows 用 iocp），可读可写时再唤醒。阻塞的只是 goroutine，不占线程。〔TB36 p11-12〕
+- Go 网络库通常使用运行时网络轮询器：I/O 暂时不能继续时挂起 goroutine，条件满足后再唤醒，避免让每个等待网络的 goroutine 独占线程。不同操作系统的实现不同；例如 Linux 使用 epoll、macOS 使用 kqueue。〔TB36 p11-12〕
 - 服务端固定套路是 Listen+Accept 循环加 `go handleConn(c)`；端口被占用时 Listen 直接报 bind: address already in use。客户端 Dial 会阻塞到连接成功或失败，严格时限用 DialTimeout。〔TB36 p12-15〕
 - backlog 队列是隐藏的坑：服务端 accept 不及时，客户端 Dial 会阻塞排队；服务端一直不 accept，macOS 上约 1 分多钟、Ubuntu 约 2 分多钟才超时，长度由 somaxconn 等内核参数决定。〔TB36 p14-15〕
 - 连接建立后，两边内核各有一对发送/接收缓冲区。写阻塞不是死锁：对端收缓冲和本端发缓冲都满时 Write 才阻塞，服务端读走一段就恢复。〔TB36 p19-20〕
 - 读操作有四态：无数据阻塞、有部分数据立即返回（要 10 只到 2 也不等）、缓冲够则填满、设了 SetReadDeadline 就超时返回。deadline 是绝对时间，不重设则之后所有读全部超时，取消要传 time.Time{}。〔TB36 p16-18〕
-- 写操作有部分写入：服务端中途关掉，客户端又补写了 24108 字节才报 broken pipe，这 24108 字节没到达对端，得自己留着重发。写超时同理，不重设就一直超时。Read/Write 永远要综合 n 和 err 判断。〔TB36 p21-22〕
+- 写操作可能部分写入：服务端中途关掉，客户端又写入 24108 字节后才报 broken pipe，这是课程中的一次观察。写成功表示本地接口接受了字节，不证明对端应用已收到或处理；失败后也不能仅凭 `n` 判断对端处理了多少，是否重发要由应用协议决定。写超时后 deadline 不重设就仍然有效。Read/Write 要结合 `n` 和 `err` 判断。〔TB36 p21-22〕
 - 运行时用 fdMutex 串行化同一 fd 的读写：单次 write 写完整业务包是安全的，拆成多次写则不保证连续；并发读不重叠，但 buf 给小了会把一个业务包撕给两个 goroutine。〔TB36 p22-26〕
 - 对端关闭后，读会先吐完剩余数据再给 io.EOF；但全双工下你这边 Write 仍可能"成功"，数据只是进了本机内核缓冲，永远到不了对方。发现对端关了就收尾自己的 socket，继续写没有意义。〔TB36 p26〕
 
 ### TB37：Frame 与 Packet 两层抽象
 
-- 教学协议字段就三个：totalLength 定边界，commandID 分类型（0x01/0x02 请求、0x81/0x82 响应，iota 加偏移两组常量），ID 是每连接上的流水号，请求响应用同一个号配对；请求带 payload，响应换成 result（0 成功 1 失败）。〔TB37 p2-3〕
-- 业务层眼里不该有字节流，只有一条条 Frame；Frame 靠头上的 totalLength 相互隔离，Frame 的 payload 才是业务要的 Packet（头是 commandID，Body 是 ID 与数据）。〔TB37 p4-5〕
-- 编解码器接口 StreamFrameCodec 只认 io.Writer/io.Reader，不认 net.Conn：测试时用 bytes.Buffer 冒充连接，不需要真实网络。Encode 用 binary.Write 写大端 int32 长度再写 payload，短写报 ErrShortWrite；Decode 先读 4 字节长度再 io.ReadFull 读正文，短读报 ErrShortRead。〔TB37 p6-8〕
-- 三条实现注意：收发两端统一大端；binary.Read/Write 按参数宽度动字节（int32 就是 4 字节）；不设 deadline 时 io.ReadFull 会一直读满，只有 EOF 或 ErrUnexpectedEOF 才提前返回。不用 io.ReadFull 而单次 Read，短读会让解析错位。〔TB37 p8〕
-- 覆盖率怎么上去：ReturnErrorWriter/ReturnErrorReader 包装器按"第 N 次调用"返回错误，逼 Encode/Decode 走进 binary.Write、io.ReadFull 各错误分支，frame 包覆盖率到 90% 以上。只测正常分支等于没测编解码器。〔TB37 p8-11〕
-- 包级 Decode 取第一个字节当 commandID，switch 分发到各类型的 Decode；Encode 反向用 type switch 定 commandID 再 bytes.Join 拼包。教学示例 Submit.Decode 不校验 body 长度，不足 8 字节直接越界 panic，抄代码时记得补。〔TB37 p12-14〕
-- 服务端 handleConn 的调用结构是 read frame、frame decode、handle packet、packet decode、ack encode、frame encode、write ack，出错就 return 断连接，日志里的 frame decode error: EOF 是客户端正常退出，不是故障。〔TB37 p14-16〕
-- 客户端收应答的 goroutine 用 SetReadDeadline 1 秒加 continue 轮询 quit 通道，才能从阻塞的 Read 里跳出来响应退出通知；这个"超时当轮询"的手法在写守护 goroutine 时很常用。〔TB37 p17-19〕
+协议字段就三个，先把每个字段的角色钉死再写代码。第一个字段 totalLength 是整包的总长度，这个协议是高度简化的二进制模式定义协议，它的特点就是采用长度字段标识独立数据包的边界，因此 totalLength 是应用层"分割包"的最重要字段。第二个字段 commandID 标识包类型，共四种：0x01 连接请求包、0x02 消息请求包、0x81 连接响应包、0x82 消息响应包，代码写成两组 const：CommandConn = iota + 0x01（Submit 顺延得 0x02）、CommandConnAck = iota + 0x80（SubmitAck 顺延得 0x82）。第三个字段 ID 是"每个连接上"请求包的消息流水号：在该连接范围内顺序累加、步长为 1、循环使用，供请求发送方匹配响应包，因此一对请求与响应消息的流水号必须相同。请求包与响应包唯一的不同在最后一个字段：请求包是 payload，承载应用层业务数据；响应包换成 result，取值做了简化。成功用 0，失败无论原因一律用 1。〔TB37 p2-3〕
+
+TCP 连接上的数据是没有边界的字节流，但业务层眼里没有字节流、只有协议消息：连接上看到的应是一个挨一个的协议消息流。于是先抽象出 Frame：每个 Frame 表示一个协议消息，由头部的 totalLength 和 Frame 负载 payload 两部分构成，相邻 Frame 靠头上的 totalLength 隔离。再把 Frame payload 定义为 Packet：Packet 才是业务层真正需要的消息，头是 commandID（标识消息类型），Body 是 ID 加 payload（响应包则换成 result），对业务层有价值的数据都在 Packet Body 里。基于这两个抽象再做解包打包：decode 是把字节流转换成特定类型的协议消息结构，encode 反之。〔TB37 p4-5〕
+
+frame 包负责识别 TCP 流边界，定义统一接口 StreamFrameCodec 和类型 FramePayload []byte。接口只认 io.Writer/io.Reader、不认 net.Conn，就是为了能用 bytes.Buffer 冒充连接写测试。Encode(io.Writer, FramePayload) 把 Frame payload 编码成 Frame 写进 outbound 流：先算 totalLen = int32(len(framePayload)) + 4（长度字段自身占 4 字节），binary.Write(w, binary.BigEndian, &totalLen) 写 4 字节长度头，出错即返回；再 w.Write 写 payload，出错即返回；写入字节数不足 len(framePayload) 就返回 ErrShortWrite。Decode(io.Reader) 反方向：先 binary.Read 读 4 字节 totalLen，再 make 一个 totalLen-4 的 buf 用 io.ReadFull 读满，短于 totalLen-4 返回 ErrShortRead。〔TB37 p6-8〕
+
+三条实现注意：收发两端统一大端；binary.Read/Write 按参数宽度动字节（int32 就是 4 字节）；不设 deadline 时 io.ReadFull 会一直读满，只有 EOF 或 ErrUnexpectedEOF 才提前返回。不用 io.ReadFull 而单次 Read，短读会让解析错位。〔TB37 p8〕
+
+单测不需要真实网络：TestEncode 用满足 io.Writer 的 bytes.Buffer 冒充连接，断言两点。对 buffer 做 binary.Read（BigEndian）得到的 totalLen 应为 9（"hello" 5 字节加 4 字节长度头），且 buffer 剩余字节应恰好是 "hello"。TestDecode 直接构造 {0x0,0x0,0x0,0x9,'h','e','l','l','o'} 喂给 bytes.NewReader，断言解出的 payload 为 "hello"。要覆盖所有可测错误分支，就造 ReturnErrorWriter/ReturnErrorReader：内层 W/R 加计数器 wc/rc，每次调用先自增，达到 Wn/Rn 就返回 write error/read error，否则透传内层。Wn=1 时第一次调用（binary.Write 内部的 Write）就报错，模拟写长度头的 binary.Write 失败分支；Wn=2 时第一次（binary.Write 内部）正常、第二次（w.Write 写 payload）报错，模拟写 payload 的 w.Write 失败分支；Rn=1 时第一次调用报错，对应 binary.Read 读长度失败的分支；Rn=2 时第一次正常、第二次报错，对应 io.ReadFull 读 payload 失败的分支。四个用例都断言 err 非 nil。有了这两个注入器，frame 包覆盖率（go test -cover . 可查）到 90% 以上；只测正常分支等于没测编解码器。〔TB37 p8-11〕
+
+包级 Decode 取第一个字节当 commandID，switch 分发到各类型的 Decode；Encode 反向用 type switch 定 commandID 再 bytes.Join 拼包。教学示例 Submit.Decode 不校验 body 长度，不足 8 字节直接越界 panic，抄代码时记得补。〔TB37 p12-14〕
+
+服务端 handleConn 的调用结构是 read frame、frame decode、handle packet、packet decode、ack encode、frame encode、write ack，出错就 return 断连接，日志里的 frame decode error: EOF 是客户端正常退出，不是故障。〔TB37 p14-16〕
+
+客户端收应答的 goroutine 用 SetReadDeadline 1 秒加 continue 轮询 quit 通道，才能从阻塞的 Read 里跳出来响应退出通知；这个"超时当轮询"的手法在写守护 goroutine 时很常用。〔TB37 p17-19〕
 
 ### TB38：从基准到 bufio 与 sync.Pool
 
-- 优化循环固定四步：建基准、剖析找瓶颈、改代码、和基准比，不达标就带着新指标再来一轮。基准分两种：原生 benchmark 适合局部算法，程序整体用"度量指标加图形化面板"。〔TB38 p2-3〕
+Go 程序优化有个固定四步循环：第一步建立性能基准，没有初始"参照物"就无法检验优化是否有效；第二步性能剖析，用工具找影响性能的"瓶颈点"；第三步针对瓶颈点分析成因、有针对性地改代码；第四步采集优化后的性能数据与基准比较，确定优化效果。有提升说明这一轮优化有效；若指标仍没达到预期，就把优化后的新指标当新的性能基准，再走一轮，循环往复直到达标。基准分两种建法：Go 原生 benchmark 用例适合给局部热点（算法、数据结构实现）建基准；程序整体则用"度量指标加图形化面板"的方式。〔TB38 p2-3〕
+
+demo2 在 demo1 基础上拷贝而来，新建 metrics 包定义三个能反映服务端性能的度量项：client_connected（当前已连接的客户端数量）用 prometheus.Gauge，Gauge 是对数值的即时测量、反映瞬时快照；req_recv_rate 与 rsp_send_rate（每秒收请求、发响应的量）不直接存"每秒多少"，而是落成累加计数器 ReqRecvTotal、RspSendTotal，类型 prometheus.Counter。Counter 必须与 rate 函数一起使用才能算出每秒处理能力，度量名分别是 tcp_server_demo2_req_recv_total、tcp_server_demo2_rsp_send_total、tcp_server_demo2_client_connected。metrics 包的 init 干两件事：其一 prometheus.MustRegister(ReqRecvTotal, RspSendTotal, ClientConnected) 注册三个度量项；其二启动 http server 监听 8889 端口，/metrics 路径挂 promhttp.Handler。这正是 prometheus 配置里 tcp-server job 的采集目标，Prometheus 定期从 8889 拉取度量值。埋点在 main 包 handleConn：连接建立时 ClientConnected.Inc()；defer 函数在连接断开时 ClientConnected.Dec() 并 c.Close()；每次 frameCodec.Decode 成功拿到 framePayload（收到并解码一个消息请求）后 ReqRecvTotal.Add(1)；frameCodec.Encode 回写响应成功后 RspSendTotal.Add(1)。埋点位置错了速率就失真。〔TB38 p9-11〕
+
 - 观测设施是 Prometheus+Grafana 三容器（prometheus、grafana、node-exporter 采主机指标），scrape_interval 5s；node-exporter 面板不用手搭，import 官方 ID 1860 就有。〔TB38 p3-8〕
+
 - 速率指标要用 Counter 计数、Grafana 里配 rate() 表达式（如 rate(req_recv_total[15s])）才算出每秒处理量，直接取 Counter 值没有意义；Gauge 才是瞬时快照。埋点位置错了速率就失真：ReqRecvTotal 在解码成功后加，RspSendTotal 在回写响应后加。〔TB38 p10-11〕
 - 面板怎么建：node-exporter 那种现成看板直接 import，自家的指标要在 tcp-server-demo 仪表板里手动建三个 panel（req_recv_rate、rsp_send_rate、client_connected）；client_connected 直接取度量值，两个速率 panel 必须配 rate 表达式，如 rate(tcp_server_demo2_req_recv_total[15s])，返回 15 秒窗口内的每秒速率，这才是"服务端处理性能"的读法。〔TB38 p12-13〕
 - 第一版基准怎么定：压测器由 demo1 的 client 改造而来（demo2/cmd/client）；压测前提是硬件条件一致，同一台 4 核 8G CentOS 先启 server 再启 client，跑几分钟后看 Grafana 曲线，约 18.5w/s 就记为第一个基准，后续 bufio 27w/s、sync.Pool 29.2w/s 都以它为参照。dnsproxi 的压测纪律（先修 dnsq 自己的 bug、同机互打）是这条基准方法论的落地版。〔TB38 p13-14〕
