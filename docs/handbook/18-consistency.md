@@ -23,7 +23,7 @@ title: 18 分布式一致性：部分失败、补偿与共识
 2. 这个状态能不能被检测出来？
 3. 检测出来之后，靠什么把它修回去？
 
-还有三个常见干扰，缩写 NPC：网络延迟、进程暂停和时钟漂移。TCP 在连接正常时提供有序字节流，但连接可能中断，应用仍会遇到超时与结果未知；时钟校准也可能使墙上时钟跳变。分布式协议不能仅凭时间判断对方是否执行了操作。〔C:dachang/distributed_transaction/exception/npc.md:1-7〕
+还有三个"捣乱者"，缩写 NPC：网络延迟（TCP 保序不丢，但消除不了延迟）、进程暂停（GC 或云迁移可能停几分钟）、时钟漂移（石英钟本身有精度偏差、还受温度影响，NTP 对齐又会让本机时间前后跳）。分布式事务不依赖时间戳，真正天天咬人的是延迟和暂停。〔C:dachang/distributed_transaction/exception/npc.md:1-9〕后面的机制几乎都在和"响应还没回来"以及"请求其实还活着"作斗争。
 
 工程上的总原则只有三条，优先级从高到低：
 
@@ -52,6 +52,10 @@ title: 18 分布式一致性：部分失败、补偿与共识
 | TCC | Try 预留资源、Confirm 使用预留、Cancel 释放 | 预留资源提供一定隔离 | 一致性要求高、不接受"先改后补偿" |
 | XA | 两阶段提交，数据库原生支持 | 强，prepare 期间持锁 | 并发不高、无热点争抢 |
 
+**TCC 的短事务限制与失败重试**：TCC 只适合短事务，分支的执行顺序要自己写代码控制，AP 重启后全局事务只能回滚、不能继续；Confirm/Cancel 失败时 dtm 会不断重试到成功，建议监控，重试超过 3 次就报警并人工介入。〔C:dachang/distributed_transaction/分布式事务模式.md:23-27〕〔C:dachang/distributed_transaction/分布式事务模式.md:9-13〕
+
+**XA 的两阶段与恢复**：XA 是数据库原生两阶段提交，prepare 阶段所有参与者锁住资源并报 ready，commit/rollback 由 TM 裁决；主流数据库都支持，而且不需要 Barrier。xa end 之后、prepare 之前同一连接读写会报 XAE07；锁超时是 ERROR 1205，可用 innodb_lock_wait_timeout 调整。崩溃恢复分三种：已经 commit 的没事，还没 prepare 的回滚，prepare 过的要等 xa recover 裁决。代价是 prepare 期间锁不释放、伤害吞吐，commit 结果对客户端未知；适用条件是并发不高、没有热点争抢。〔C:dachang/distributed_transaction/分布式事务模式.md:29-53〕
+
 选型口诀（DTM 官方建议）：**不需要回滚用二阶段消息，需要回滚用 SAGA，一致性要求高用 TCC，并发不高且没有热点用 XA**。〔C:dachang/distributed_transaction/分布式事务模式.md:54-56〕三个典型场景帮你把口诀落到地上：
 
 - **秒杀**：创建订单和扣库存不是原子操作。用二阶段消息：Prepare 阶段去 Redis 扣库存（大概率失败，秒杀成功是小概率事件），Commit 阶段向 MySQL 写订单。〔C:dachang/distributed_transaction/分布式事务模式.md:57〕
@@ -60,7 +64,7 @@ title: 18 分布式一致性：部分失败、补偿与共识
 
 ## 二、三大异常与 barrier：补偿机制的地基
 
-SAGA 的补偿动作会遇到三类异常，这也是一切补偿方案的公共考点：〔C:dachang/distributed_transaction/exception/npc.md:9-13〕
+SAGA 的补偿动作会遇到三类异常，这也是一切补偿方案的公共考点：〔C:dachang/distributed_transaction/exception/npc.md:11-15〕
 
 - **空补偿**：补偿比分支操作先到（操作还没执行就收到了补偿），此时补偿应该什么都不做，直接返回成功。
 - **悬挂**：分支操作在补偿之后才到达，此时分支操作应该拒绝执行，否则资源永远悬着。
@@ -68,7 +72,7 @@ SAGA 的补偿动作会遇到三类异常，这也是一切补偿方案的公共
 
 前两个异常来自 NPC：网络延迟让两个请求以任意顺序到达；进程暂停让"先发"的请求后执行。
 
-DTM 的解法是**子事务屏障**（barrier）：在本地数据库建一张表，唯一键是 `gid-branchid-op`（全局事务 ID、分支 ID、操作类型 action 或 compensate），用 `insert ignore` 判断是否第一次到达。四步：〔C:dachang/distributed_transaction/exception/npc.md:22-28〕
+DTM 的解法是**子事务屏障**（barrier）：在本地数据库建一张表，唯一键是 `gid-branchid-op`（全局事务 ID、分支 ID、操作类型 action 或 compensate），用 `insert ignore` 判断是否第一次到达。四步：〔C:dachang/distributed_transaction/exception/npc.md:17-29〕
 
 1. 开启本地事务。
 2. 对当前操作 `op`，`insert ignore` 一条 `gid-branchid-op`；影响 0 行说明是重复请求，直接提交返回成功。这一步管**幂等**。
@@ -304,7 +308,11 @@ broker 挂着: 1 已发送: false
 
 原课对步骤 11 只说明它可选、目的是判定是否支付成功；把它接到前两种未知结果上（回调迟迟不到或处理失败时，拿交易号主动查一次微信，把"未知"变成"已知"）是本节的教学衔接，后文对账兜底用的正是这个查询。
 
+**接入微信支付的材料**：先以企业名义创建一个小程序（公众号也可以），再以企业名义创建一个商户号并申请开通微信支付，最后把商户号和小程序关联起来；材料里的示意图是企业下多个 app 与商户号的关系。〔W15-1 p11〕
+
 **微信那一侧的预下单**：整个支付是"我们在微信里创建一个订单，而后用户支付了这个订单"，所以第一步就是创建订单，对应微信 API `https://api.mch.weixin.qq.com/v3/pay/transactions/native`。请求有四个必传的关键参数：`mchid`（商户号 ID）、`out_trade_no`（接入方自己的交易号/订单号）、`appid`（小程序或公众号 ID，必须已绑定到该商户号）、`notify_url`（回调地址，微信把支付结果通过这个接口通知你）。调用成功后响应里含 `code_url` 字段，即二维码对应的地址（形如 `weixin://wxpay/bizpayurl/...`），正常由前端把 `code_url` 转成二维码展示在页面上，用户扫码即可支付；支付完成后，下单时传过去的 notify_url 就会收到微信的回调。〔W15-1 p13-14〕
+
+**Prepay 先落一条支付记录，目的就是本地去重**：NativePaymentService 的 Prepay 一上来先初始化一条支付记录，在本地挡住重复请求；即便省掉本地去重，BizTradeNO 也会透传给微信作为 out_trade_no，微信同样按它去重。这套极简设计的前提是当前只支持打赏，几乎没有商品信息和结算信息，能传给微信的数据很少。〔W15-1 p18〕
 
 **Prepay 的幂等键是 out_trade_no，重试是"把同一笔再问一遍"**：原课讨论的重试全部是调用方（webook/payment 服务这一侧）自己重发 Prepay 请求，微信不会替你重发下单〔自〕。微信按请求里的 `out_trade_no` 认单，同一个交易号在微信侧只对应一笔单：即便我们不去重，微信侧也会按它去重。〔W15-1 p17-18〕所以重试不是"再建一笔"，而是"把同一笔再问一遍"：第一次没到微信，这次就是全新创建；第一次已到微信，这次是重复请求，应答规则见下一段。反方向的约定同样成立：每个业务动作要生成新的交易号（打赏侧用 `fmt.Sprintf("reward-%d", rid)` 拼），对同一个业务方，要支付两次就必须想办法生成两次 BizTradeNO，否则第二次业务动作创建不出第二笔支付单。〔W15-1 p17〕
 
@@ -365,6 +373,10 @@ func main() {
 
 - **定时对账**：借助 cronjob 触发对账定时任务，逻辑是找到超时的订单、同步订单状态。这里的超时是指 Prepay 的时候设置了订单 30 分钟超时，因此可以预期扫出来的就是没走完的超时单；担忧时间精度和并发问题的话，可以找 31 分钟之前的订单（一分钟偏移是原课给的做法，用意是避开 30 分钟边界上的误判〔自〕）。也可以进一步借助分布式锁让这个任务全局唯一，但原课判断没特别大的必要。〔W15-1 p32〕
 - **及时对账**：定时对账最坏要等一个扫描周期，更及时的做法是处理回调失败的时候立刻触发一次对账，并且只比对出故障的这一条；发起方式两种都可以：直接调用一个对账接口，或者发消息到 Kafka，后续再去对账。〔W15-1 p33〕
+
+**cronjob 对账示例（静态示意，未在本机实测）**：这个例子的逻辑就是扫出 Prepay 超时（30 分钟）的订单，逐条调对账同步订单状态；如果担心时间精度和并发问题，把查询条件改成 31 分钟之前的订单。代码例子只做静态阅读，没有运行输出。〔W15-1 p32〕
+
+**支付系统的面试问法**：把这一节压成五个问题：一是微信支付流程，重点是 Prepay 和处理回调；二是支付回调怎么处理，最关键的是怎么分发/区别不同环境收到的回调；三是金额怎么存，能讲三种方案、各自优缺点和自己的偏好；四是怎么防止重复支付，核心是业务方提供唯一凭证并用它去重；五是微信支付回调处理失败怎么办。〔W15-1 p35〕
 
 两层对账的动作是同一个：拿 `BizTradeNO` 查微信订单状态，按查询结果更新本地。下面的教学示例把三种查询结果都演了：第三方无此单（用户没付过，保持现状）、状态一致（不动）、有差异（修成微信的状态）。对账接口的具体 URL、扫描周期的具体数值原课未规定，只给了上述触发条件。〔W15-1 p31〕
 
@@ -600,46 +612,46 @@ func main() {
 - 接口最小化：`mchid`、`appid`、`notify_url` 都是支付服务自己知道的配置，不该出现在 API 参数里；外部只传 description、out_trade_no、amount。提前为支付宝做通用化是过早抽象，将来字段变多再拆实现类组合复用。〔W15-1 p15-16〕
 - native 支付只涉及三处代码：下单接口创建订单、处理回调、可选的主动查询；Prepay 参数里 `out_trade_no` 是我方业务交易号，`notify_url` 是回调地址，响应的 `code_url` 前端转成二维码。〔W15-1 p12-14〕
 - 处理回调不要手动验签解密，坑多，直接用微信 SDK 的 NotifyHandler；Web 层负责把微信支付状态翻译成内部状态。〔W15-1 p22〕
-- PreReward 的入参来自打赏这一业务动作：Biz（article）、BizId（文章 ID）、BizName、TargetUid（作者）、Uid（打赏人）、Amt；NativePrePay 时把 `BizTradeNo` 填成 `reward-rid`，支付侧因此能反解出打赏记录 ID。〔W15-2 p6〕
-- 课程只支持微信扫码一种支付方式，是刻意的假设：多方式时用户选金额的同时选方式，Web 按方式调不同的 reward 接口，前面的幂等与对账设计不受影响。〔W15-2 p7〕
+- PreReward 的调用链：用户在文章页点打赏，Web 先按文章 ID 查文章信息，拿到作者和标题，再调 Reward 服务的 PreReward；Reward 内部完成建打赏记录与调 Payment 的 NativePrePay，返回 codeURL 和 rid，前端展示二维码。接口挂在 `ArticleHandler` 下，因为它就是“打赏文章”的接口。PreReward 的入参来自打赏这一业务动作：Biz（article）、BizId（文章 ID）、BizName（文章标题）、TargetUid（文章作者）、Uid（当前登录用户）、Amt（打赏金额）。返回体里 codeURL 给前端转二维码，rid 是打赏记录 ID，后续查打赏支付结果要用。〔W15-2 p6〕
+- 课程只支持微信扫码一种支付方式，是刻意的假设；只支持一种方式，gRPC 接口和内部业务实现都能保持简单。多方式时用户选金额的同时选方式，Web 按方式调不同的 reward 接口，前面的幂等与对账设计不受影响（这句是本节推导）。〔W15-2 p7〕
 - 账号服务的 Credit 接口一次请求带多笔账：`CreditRequest{biz, bizId, items[]}`，每条 `CreditItem{account, account_type, amt, currency, uid}`；一个业务拆几笔账要在接口里定义清楚，账号服务是对账、统计、报表的核心。〔W15-2 p21〕
 - 本地调试收不到回调：notify_url 必须是公网地址，标准解法是 nginx 多域名分发，test/dev/live 各一个域名，dev 转发到能回到本机的跳板机。〔W15-1 p20-21〕
-- PreReward 四步：查缓存二维码、建打赏记录（Status=Init）、调 NativePrePay（BizTradeNo=reward-rid）、缓存返回的二维码。缓存命中说明用户上次点了打赏又放弃，直接复用，少调一次支付服务；这步是纯优化，不缓存也行。〔W15-2 p8-9〕
-- 支付结果用 Kafka 广播：Payment 处理完微信回调、更新本地之后发事件，各业务方自己订阅；Reward 消费后只更新本地 DB，按 BizTradeNO 反解出 rid 更新状态。〔W15-2 p11〕〔W15-2 p14〕
-- 要不要统一支付接口：一开始就知道用户选了哪种方式（如只支持微信扫码），就不抽象，按方式直接写；需要"查询支付结果"这种不知道方式的通用能力才抽象。审视现有代码时按这个尺度抽共性和个性。〔W15-2 p27〕
-- 表设计从简：只存 Amt、Currency、Description、BizTradeNO、TxnID 这些必要字段；业务方传来的数据业务方自己存了就别重复存，非存不可的原始报文塞进 BLOB 备查。〔W15-1 p19〕
-- 回调进 MQ 可行但不提早：回调 QPS 与正向支付一样，payment-web 轻量解密撑得住；MQ 的多订阅者、重放调试收益要到多团队场景才显现。〔W15-1 p26〕
+- PreReward 四步：查缓存二维码、建打赏记录（Status=Init，拿到 rid）、调 NativePrePay（BizTradeNo 用 `reward-` 拼 rid，Description 拼上被打赏文章标题）、缓存返回的二维码。缓存命中说明用户上次点了打赏又放弃，直接复用，少调一次支付服务；未命中才走创建记录和调支付这两步。最后缓存的是含 rid 与 URL 的 CodeURL 对象；这步是纯优化，不缓存也行，去掉缓存最少保留创建打赏记录、获得二维码两步。〔W15-2 p8-9〕
+- 支付结果用 Kafka 广播：Payment 自己处理微信回调，业务方也要拿到支付结果，于是引入一个 Kafka；微信把结果通知 Payment，Payment 处理完回调、更新本地之后往 Kafka 发事件，不同业务方按需订阅。〔W15-2 p11〕Reward 消费后只更新本地 DB：`UpdateReward` 收到 BizTradeNO 和 status，先用 `toRid` 反解出 rid，再调 `repo.UpdateStatus(ctx, rid, status)` 更新状态；这个更新本身幂等，前提是发送方消息顺序没问题，重复消费最多重复更新。〔W15-2 p14〕
+- 要不要统一支付接口：设计系统通常倾向于屏蔽不同实现方式之间的差异，但原文提醒要把握尺度，过犹不及。支付系统可以分成两部分：和具体支付方式有关的，以及所有支付方式都具有的。分辨方法是：一开始就明确知道具体支付方式的（如只支持微信扫码），属于和具体支付有关，不需要抽象，按方式直接写；不清楚具体支付方式的，才要抽象出来（例如查询支付结果）。审视现有代码时按这个尺度抽共性和个性。〔W15-2 p27〕
+- 表设计从简：Payment 表只存必要字段，Id 主键自增，Amt、Currency、Description、BizTradeNO，以及 TxnID（`sql.NullString`，第三方支付平台的事务 ID，唯一）；业务方传来的数据业务方自己存了就别重复存，存了后面大概率也用不上，不到逼不得已不要多存数据。如果因为字段太少缺乏安全感，可以多存详细商品信息、结算信息，或者提供一个巨大的 BLOB 字段（如 `ExtraData`）存支付相关的其它字段。〔W15-1 p19〕
+- 回调进 MQ 可行但不提早：收到微信回调、解析内容后转发到 Kafka 的设计是可行的。常见缘由有四个：别的部门也关心回调时可以去订阅；重试机制掌握在自己手里；DEBUG 容易，payment-web 只做轻量解密，遇到问题可以绕开它在 Kafka 重发或模拟消息；削峰只能算聊胜于无，回调 QPS 与正向支付一致，正向支付撑得住的流量回调一般也撑得住，秒杀之类场景才可能更好。作者的结论是不要提早引入消息队列。〔W15-1 p26〕
 
 ### W15-2 打赏功能：消息、查询与记账
 
 - 用户怎么知道支付结果：支付时用户只跟微信交互，结果通知是异步的；前端轮询查询结果，失败立刻再查，超时或超次才报错。查询结果有三种可能：没收到回调、回调处理失败、成功。〔W15-2 p10〕
-- 查询走快慢两条路：快路径查本地 reward 表，已完结直接返回；本地状态未知时走慢路径去查 Payment 服务，回填本地再返回。降级时可以关掉慢路径保住 Reward 服务本身。〔W15-2 p16〕
-- 查询必须校验归属：把查询人的 uid 传给 Reward 服务核对 rid 是不是他打赏的，否则交易号可被枚举，越权看别人的打赏记录。〔W15-2 p15〕
-- 有序性应按状态机判断：重复更新未必能抵抗乱序，例如迟到的 Init 不能覆盖 Success；支付和退款等有顺序语义的事件可按业务 key 分区，并在消费端限制合法状态转换。〔W15-2 p13〕
+- 查询走快慢两条路：快路径查本地 reward 表，已完结直接返回；本地状态未知时走慢路径去查 Payment 服务，把状态转换后更新本地打赏状态，再返回数据库里的数据。慢路径查 Payment 失败只记日志，直接返回数据库里的数据；按降级理论，触发降级时也可以选择不去查 Payment，或者关掉慢路径保住 Reward 服务本身。〔W15-2 p16〕
+- 查询必须校验归属：后端只暴露一个查询打赏结果的接口，`RewardHandler.GetReward` 的请求带 `Rid=req.Rid`、`Uid=claims.Id`；Reward 服务核对 rid 是不是当前登录用户创建的，打赏的人和查询的人必须是同一个，否则交易号可被枚举，越权看别人的打赏记录（这句是本节推导）。返回 Data 暂时只需要状态（resp.Status 的字符串形式）。〔W15-2 p15〕
+- 有序性应按状态机判断：打赏从 Init 到 Success 的状态更新并非天然容忍乱序，"重复更新无害"只对同一状态的重投成立，迟到的 Init 不能覆盖 Success；支付、退款这类有顺序要求的事件才需要控制：Payment 初始化生产者时把分区器换成 sarama 的一致性 CRC 哈希分区器（`sarama.NewConsistentCRCHashPartitioner`），并设置 `Return.Successes=true`，再用 viper 读 Kafka 配置创建客户端。〔W15-2 p13〕
 - 发消息失败可以返回 nil：本地 DB 已经记下终态，Kafka 只是通知；因通知失败让微信回调整个流程重试反而危险。代价是必须有监控告警加异步补偿作业兜底。〔W15-2 p12〕
-- 记账归属三选一：打赏分（业务知道分成比例，课程选这个）、支付分（分账算支付流程一部分）、账号分（记账业务的一部分），没有显著优劣，选一个保持一致。〔W15-2 p20〕
+- 记账归属三选一：打赏分，因为打赏业务才知道具体分成比例；支付分，因为分账可以看作支付流程的一部分；账号分，因为分成可以看作记账业务的一部分。打赏分还有一个变体：打赏只计算分成，由支付来调用记账服务，具体做法是打赏调支付接口时提前告诉支付怎么记账，后续支付再调账号服务。作者认为三种没有明显优劣，课程选打赏分，因为他更倾向于让具体业务处理记账。〔W15-2 p20〕
 - 账号服务 Credit 接口一次带多笔账：平台抽成 10% 加作者 90% 两条 item；抽成为 0 也要记账（课程注释原话「虽然可能为 0，但是也要记录出来」）。课程只说了"要记录",理由是教学推导:省掉零金额记录不影响金额合计,但流水少了一行,无法完整还原"这笔业务事件分了两笔账"的事实,排查和审计时对不上条数。〔W15-2 p25〕
-- CreditRequest 与 CreditItem 的字段全景：CreditRequest 只有三个字段，`biz`（注释「唯一标识业务」）、`biz_id`、`items`（注释「不同账号金额变动」）；每条 CreditItem 有 `account`、`account_type`（注释「账号类型」）、`amt`（注释「金额」）、`currency`、`uid` 五个字段。两条注释别混：`account` 的原注释是"在一些复杂的系统里面，用户可能有多个"，说的是复杂系统里一个用户可以有多个账号（此时用 account 指定记到哪个账号）；"系统账号这个字段可能会没有"是 `uid` 的注释（平台侧抽成账没有自然人 uid）。接口的关键是把同一个业务拆成多笔账、在接口里定义清楚，账号服务是对账、统计、报表的核心。〔W15-2 p21〕
-- Reward 侧分账与幂等遗留：先算平台抽成 `weAmt = int64(float64(r.Amt) * 0.1)`，再一次 `Credit` 调用 `Biz="reward"`、`BizId=rid`，Items 带两笔：`Amt=weAmt`（平台抽成，注释「虽然可能为 0，但是也要记录出来」）与 `Amt=r.Amt-weAmt`（作者得九成），`Currency` 均为 "CNY"。同一笔打赏消息重复消费会重复记账，作者明说"这里我没有处理一个问题：幂等。这是你作业中的一个选项"；落地时至少用 Biz 加 BizId 做幂等键。〔W15-2 p25〕
+- CreditRequest 与 CreditItem 的字段全景：CreditRequest 只有三个字段，`biz`（string，注释「唯一标识业务」）、`biz_id`（int64，业务 ID）、`items`（repeated CreditItem，注释「不同账号金额变动」）；每条 CreditItem 有 `account`（int64，账号）、`account_type`（AccountType，注释「账号类型」）、`amt`（int64，注释「金额」）、`currency`（string，货币）、`uid`（int64，用户）五个字段。两条注释别混：`account` 的原注释是"在一些复杂的系统里面，用户可能有多个"，说的是复杂系统里一个用户可以有多个账号（此时用 account 指定记到哪个账号）；"系统账号这个字段可能会没有"是 `uid` 的注释（平台侧抽成账没有自然人 uid，这是结合 p25 的分账代码得出的结论〔W15-2 p25〕）。接口的关键是把同一个业务拆成多笔账、在接口里定义清楚，账号服务是对账、统计、报表的核心。〔W15-2 p21〕
+- Reward 侧分账与幂等遗留：先算平台抽成 `weAmt = int64(float64(r.Amt) * 0.1)`，再一次 `Credit` 调用 `Biz="reward"`、`BizId=rid`，Items 带两笔：`Amt=weAmt`（平台抽成，注释「虽然可能为 0，但是也要记录出来」）与 `Amt=r.Amt-weAmt`（作者得九成），`Currency` 均为 "CNY"。同一笔打赏消息重复消费会重复记账，作者明说"这里我没有处理一个问题：幂等。这是你作业中的一个选项"，Credit 调用没有处理幂等，作者把它留成教学留白；落地时至少用 Biz 加 BizId 做幂等键。作业要求设计一个方案，保证同一个 biz+bizId 不会重复记账，还要考虑进一步优化性能；参考思路包括唯一索引、Redis 去重、布隆过滤器等。〔W15-2 p25〕〔W15-2 p32〕
 - 流水表带 Biz 和 BizId 两个字段是 DEBUG 神技：对照设计是只用一个单独的 txn_id 来标记一笔变动，课程选择额外带这对业务 ID，注释原话「加上这些业务 ID，DEBUG 的时候贼好用」；打赏、支付、记账三个服务之间的对账和排查全靠它们串联。〔W15-2 p23〕
-- 事务边界划在"更新余额加记流水"上：同一库就是一个本地事务；金融级的分库分表之后一笔账跨库，本地事务失效，只剩补偿加对账，别指望数据库救。例外是钞能力：买 Oracle、买服务器、买操作系统，事实上仍可以继续用本地事务，外企和银行就是这么干的（微信、支付宝的细节作者不清楚）。〔W15-2 p24〕
+- 事务边界划在"更新余额加记流水"上：同一库就是一个本地事务；金融级的分库分表之后一笔账跨库，本地事务失效，业务层要靠补偿与对账兜底（补偿与对账的具体机制见本章前四节，这句是本节推导）。例外是钞能力：买 Oracle、买服务器、买操作系统，事实上仍可以继续用本地事务，外企和银行就是这么干的（微信、支付宝的细节作者不清楚）。〔W15-2 p24〕
 - Account 表的拆分尺度：账号服务实现分两件事，更新余额加记流水，至少两张表：Account 存余额，AccountActivity 记变动。这两步要么同成功、要么同失败，任何一步单独落库都会让余额和流水对不上，所以必须放进同一个本地事务。Account 表字段设计要提前考虑出海的币种问题但不必提前写多币种代码，要为审计、会计、对账预留空间；字段真多起来再拆 AccountAudit（审计）、AccountTax（税务）这类伴生表，加起来才二三十个字段就不着急拆。〔W15-2 p22〕〔W15-2 p24〕
 - AccountActivity 流水表比 Account 简单，同样要考虑币种。字段与索引：Id 主键自增；Uid、Account、AccountType 三个字段都带 `gorm:"index:account_uid"` 复合索引；Amount int64、Currency、Ctime、Utime。金额增减有两种设计：直接用正负数表达增大减小，或不引入负数、另加方向字段标记增减；课程选正负数，原注释「暂时我们还不需要」。〔W15-2 p22-23〕
 - 支付单号直接用业务方的还是自己生成：课程实现直接用业务方传来的 BizTradeNO 做微信的 out_trade_no；大型系统会在 Payment 里自建 PaymentSN（UUID，或编入商品 ID、商品类型等信息），但无论哪种，去重都必须依赖业务方的 BizTradeNO，不能用自己生成的序列号去重。〔W15-1 p23〕
-- 回调接口放 BFF 还是 Payment 自启：把回调当普通 HTTP 接口塞进 BFF 是形态一，接入快，适合小公司初期；课程选形态二，Payment 自己启 Web 接口，为的是能在回调路径上做专门治理（分发到多环境、验签、幂等这些前面讲过的机制都挂在这条路径上）。〔W15-1 p24〕
+- 回调接口放 BFF 还是 Payment 自启：把回调当普通 HTTP 接口塞进 BFF 是形态一，接入快，小公司初期可以先这么接；形态二是 Payment 自己启 Web 接口，作者一般推荐这一种，因为能在回调路径上做专门治理（分发到多环境、验签、幂等这些前面讲过的机制都挂在这条路径上），课程也选形态二。〔W15-1 p24〕
 
 ### C:dachang/distributed_transaction：DTM 的细节与坑
 
 - 所有模式共享"最终成功"兜底：二阶段消息的分支、SAGA 的补偿、TCC 的 Confirm/Cancel 都必须重试到成功，失败超阈值报警转人工。〔C:dachang/distributed_transaction/分布式事务模式.md:9-13〕
-- barrier 的并发语义靠数据库唯一键：事务未提交时，另一事务写相同 `gid-branchid-op` 会被唯一键锁阻塞；`insert ignore` 撞键不报错只给 warning，必须用 `RowsAffected>0` 判断是否真的插进去了。唯一键漏建，三个控制全部失效。〔C:dachang/distributed_transaction/exception/ap/barrier.go:9-23〕
-- 二阶段消息的 DoAndSubmitDB 把本地事务和 Submit 原子绑定：本地事务成功才插入 barrier 记录并 Submit；进程没来得及返回就宕机，dtm 回查 QueryPrepared，它一上来先插 rollback 记录，所以宕机默认按失败处理，业务方必须接受"宁可少转不可多转"。〔C:dachang/distributed_transaction/msg/ap/main.go:73-103〕
+- barrier 的并发语义靠数据库唯一键：事务未提交时，另一事务写相同 `gid-branchid-op` 会被唯一键锁阻塞；`insert ignore` 撞键不报错只给 warning，必须用 `RowsAffected>0` 判断是否真的插进去了；不违反唯一键的 insert ignore 不会阻塞。唯一键漏建，三个控制全部失效。〔C:dachang/distributed_transaction/exception/ap/barrier.go:9-23〕
+- 二阶段消息的 DoAndSubmitDB 把本地事务和 Submit 原子绑定：本地事务成功才插入 barrier 记录并 Submit；返回 error 时插 rollback 记录，dtm 把全局事务标为失败。进程没来得及返回就宕机，dtm 回查 QueryPrepared，它一上来先插 rollback 记录，所以宕机默认按失败处理，业务方必须接受"宁可少转不可多转"；二阶段消息的分支 trans_in 由 dtm 异步调用，默认必成功。〔C:dachang/distributed_transaction/msg/ap/main.go:73-103〕
 - TCC 的代价是业务侵入：RM 要实现 Try/Confirm/Cancel 三接口加资源冻结字段；Try 全成才 Confirm，一失败全 Cancel；返回时 Try 已完成但 Confirm 通常没完，最终成功由 dtm 无限重试保证。TCC 只适合短事务：AP 重启后全局事务只能回滚不能继续，这点和 SAGA 不同。〔C:dachang/distributed_transaction/tcc/ap/main.go:60-194〕
 - XA 的坑：prepare 期间锁不释放，高并发热点必死；xa end 之后 prepare 之前同连接再读写报 XAE07；AP 在 prepare 后宕机，锁悬着，要人工 `xa recover` 裁决。RM 的 handler 必须用 ShouldBindJSON 而不是 Bind，XA 分支会被多次调用且有时没有请求体，Bind 会 400 中止让 dtm 误判失败。〔C:dachang/distributed_transaction/xa/rm/main.go:47-49〕
 - 手写补偿的教程代码是 for 死循环加 Sleep，没有重试上限，生产必须加次数阈值、报警、人工介入。〔C:dachang/distributed_transaction/exception/ap/main.go:104-113〕
-- dtm 客户端怎么用：分支 handler 从请求 query 里取 gid、branch_id、op、trans_type 构造 Barrier（`dtmcli.BarrierFromQuery`），再用 `CallWithDB` 把业务包进 barrier 事务；分支返回值三态，nil 成功、ErrOngoing 框架重试、ErrFailure 触发补偿。〔C:dachang/distributed_transaction/saga/ap/main.go:59-126〕
+- dtm 客户端怎么用：分支 handler 从请求 query 里取 gid、branch_id、op、trans_type 构造 Barrier（`dtmcli.BarrierFromQuery`），再用 `CallWithDB` 把业务包进 barrier 事务，框架在内部完成幂等、空补偿、防悬挂三项控制；分支返回值三态，nil 成功、ErrOngoing 框架重试、ErrFailure 触发补偿。〔C:dachang/distributed_transaction/saga/ap/main.go:59-126〕
 - TCC 在 RM 侧的样子：Try 调资源接口把金额挪进 `trading_balance` 冻结字段（带防负条件），Confirm 还原进真实余额，Cancel 反向解冻；AP 里 TccGlobalTransaction 串行 CallBranch。〔C:dachang/distributed_transaction/tcc/ap/main.go:60-194〕
 - XA 的代码形状：RM 用 `XaLocalTransaction` 包本地 SQL（xaID 是 gid 加 branchID），数据库自动两阶段；AP 用 XaGlobalTransaction 串行调各 RM，Prepare 成功就返回，commit 大概率还没完成。〔C:dachang/distributed_transaction/xa/rm/main.go:46-62〕
-- 手写 SAGA 的编排：AP 起全局 gid，分支先过 Barrier(action)（拦住说明已执行，直接成功）再调 RM 转账，本地事务成功 Commit 失败 Rollback；任一分支失败触发全部补偿，补偿先过 Barrier(compensate) 幂等，再查 action 占位判断空补偿，然后循环重试到成功。〔C:dachang/distributed_transaction/exception/ap/main.go:64-170〕
+- 手写 SAGA 的编排：AP 起全局 gid，分支先过 Barrier(action)（拦住说明已执行，直接成功）再调 RM 转账，本地事务成功 Commit 失败 Rollback；任一分支失败触发全部补偿，补偿先过 Barrier(compensate) 幂等，再查 action 占位判断空补偿，然后循环重试到成功（Sleep 5s，超过阈值报警）。〔C:dachang/distributed_transaction/exception/ap/main.go:64-170〕
 
 ### C:dachang/raft：教学版实现的工程细节
 
