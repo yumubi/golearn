@@ -439,7 +439,7 @@ func main() {
 
 ## 七、作用域与遮蔽
 
-作用域在编译期决定，外层声明的标识符对内层可见。真正咬人的是 `:=`：它在内层块里会**新建**变量，遮蔽外层同名变量，这是最阴险的低级 bug。〔TB11 p1-2〕〔TB11 p4〕
+作用域是针对**标识符**的概念，不局限于变量：每个标识符（变量、常量、类型、函数、导入的包名）都有自己的作用域，即声明之后可以被有效使用的源码区域。作用域是**编译期**概念：编译器在编译过程中检查每个标识符，对超出作用域的使用直接报编译错误（go1.26.4 实测报 `undefined`）。〔TB11 p4〕〔TB11 p11〕划定原则只有一条：声明于外层代码块中的标识符，其作用域包括**所有内层代码块**，显式块和隐式块都适用，所以包级变量在 `func`→`if`→`for` 层层嵌套的隐式块里可以直接使用（实测编译通过）。〔TB11 p4〕这条规则同时也是遮蔽问题的土壤，真正咬人的是 `:=`：它在内层块里会**新建**变量，遮蔽外层同名变量，这是最阴险的低级 bug。〔TB11 p1-2〕〔TB11 p4〕
 
 ```go
 package main
@@ -462,7 +462,104 @@ func main() {
 
 `x` 被改成了 12（`Sscan` 真的写进了 `&x`），但外层 `err` 还是 nil，因为 `if` 里的 `:=` 声明了一个**新的** `err`，遮蔽了外层的，错误被静默丢弃。这类 bug 难查就在于代码看起来"确实处理了 err"，其实处理的是另一个变量。
 
+原课用更小的例子开场（节选）：包级 `var a = 11`，`foo` 里执行 `a := 1` 和 `a += n`。〔TB11 p1-2〕
+
+```go
+var a = 11
+
+func foo(n int) {
+	a := 1
+	a += n
+}
+
+func main() {
+	fmt.Println("a =", a)                    // 11
+	foo(5)
+	fmt.Println("after calling foo, a =", a) // 11
+}
+```
+
+`foo` 里明明写了 `a := 1` 和 `a += n`，但 `foo` 调用前后包级 `a` 都是 11：`a := 1` 是在 `foo` 函数体这个内层块里**新建**的变量，`a += n` 改的只是这个内层变量，赋值从头到尾没有落到包级 `a` 上。〔TB11 p1-2〕原文对这类错误的定性值得记住：变量遮蔽是 Go 开发者日常最容易犯的编码错误之一，它低级又不容易查找，常常让人陷入漫长的调试过程；这个例子还能肉眼定位，更复杂的遮蔽可能把人折腾很久，最后只能靠工具捕捉。〔TB11 p2〕
+
+**函数边界上的标识符**。函数签名里的接收器、参数、命名返回值写在函数体大括号外面，看起来"不在任何代码块里"，但它们属于函数定义的一部分，作用域就是函数体这个显式代码块：`func (t T) M1(x int) (err error)` 里，`t`、`x`、`err` 在函数体的任意内层块中都可以直接使用，直到函数体的收尾大括号处才终止。〔TB11 p6〕函数体**内部**声明的常量、变量和类型走另一条规则：作用域**始于声明语句的末尾**，终止于**最内层包含块的末尾**:声明那一行之前的代码不能用这个名字，出了所在块也不能再用。〔TB11 p6-7〕把原文的作用域标注翻译成注释（讲解用片段，不能独立编译）：
+
+```go
+func (t T) M1(x int) (err error) { // 代码块 1：t、x、err 的作用域从这里开始
+	m := 13 // m 的作用域始于本行末尾
+
+	{ // 代码块 2
+		type bar struct{} // bar 的作用域始于本行末尾
+		{ // 代码块 3
+			a := 5 // a 的作用域始于本行末尾
+			{ // 代码块 4
+				// ... ...
+			}
+			// a 的作用域终止于此
+		}
+		// bar 的作用域终止于此
+	}
+	// m、t、x、err 的作用域终止于此
+}
+```
+
 隐式代码块不止花括号：`if`、`for`、`switch` 自身各有一层，`switch` 的每个 `case` 又各有一层。〔TB11 p3〕预定义标识符（`new`、`len`、`true` 等）不是关键字，可以被遮蔽：`type new int` 之后 `new(int)` 就编译不过。〔TB11 p4-5〕实践上两条：不要用预定义名当变量或类型名；函数保持短小，缩短遮蔽的查找范围。
+
+**三连遮蔽：一次用全所有规则**。原课收尾给了一个真实案例（节选，`errors`、`fmt` 的导入从略；它与 `type new int` 的组合从 Go 1.17 起报编译错误，版本差异见下文）：〔TB11 p8-10〕〔TB11 p13〕
+
+```go
+var a int = 2020
+
+func checkYear() error {
+	err := errors.New("wrong year")
+
+	switch a, err := getYear(); a {
+	case 2020:
+		fmt.Println("it is", a, err)
+	case 2021:
+		fmt.Println("it is", a)
+		err = nil
+	}
+	fmt.Println("after check, it is", a)
+
+	return err
+}
+
+type new int
+
+func getYear() (new, error) {
+	var b int16 = 2021
+	return new(b), nil
+}
+
+func main() {
+	err := checkYear()
+	if err != nil {
+		fmt.Println("call checkYear error:", err)
+		return
+	}
+	fmt.Println("call checkYear ok")
+}
+```
+
+原文（2021 年语境）的运行输出：
+
+```text
+it is 2021
+after check, it is 2020
+call checkYear error: wrong year
+```
+
+`getYear` 返回了正确的年份 2021，`checkYear` 结尾却打印 2020、还向 main 返回了非 nil 的错误。原文把这归为变量遮蔽的"锅"。逐处"找找茬"，一共三处遮蔽：〔TB11 p8-10〕
+
+**遮蔽一：标识符遮蔽预定义标识符。** `type new int` 用 `new` 这个名字定义了新类型，遮蔽了预定义标识符 `new`。此时若在 main 下方补上 `p := new(int)`，2021 年的编译器会报 "type int is not an expression"。意识不到 `new` 被遮蔽，这个提示会让人不知所措。但要注意：遮蔽 `new` **并不是本例输出反常的原因**，它只影响后续想用 `new` 分配内存的代码。〔TB11 p9-10〕
+
+版本差异（现行 go1.26.4 实测）：单独声明 `type new int` 可以编译；同包内再写 `new(int)` 报 `int (type) is not an expression`；没有 `type new int` 时 `new(int)` 正常编译。留言区另反馈：Go 1.17.1 下示例的 `type new int` 与赋值语句的组合报 cannot use new value as type int in assignment。改成别名 `type new = int` 后不再报错（本章末「想深入」TB11 笔记记了这条）。〔TB11 p13〕
+
+**遮蔽二：switch 隐式块遮蔽包级变量。** switch 语句在它自身的隐式代码块里，通过短变量声明 `a, err := getYear()` 重新声明了变量 `a`，遮蔽了包级 `a`。2021 被赋给了 switch 隐式块里新声明的 `a`，包级 `a` 从未被赋成正确年份，这就是打印 "after check, it is 2020" 的原因。〔TB11 p10〕
+
+**遮蔽三：同一句短声明遮蔽外层显式块的 err。** 还是 `a, err := getYear()` 这一句，除新声明 `a` 之外还声明了名为 `err` 的变量，遮蔽了 `checkYear` 函数显式代码块里声明的 `err`。case 2021 里的 `err = nil` 落到了 switch 隐式块的 `err` 上，外层 `err` 仍是非 nil 的 "wrong year"，于是 `checkYear` 虽然从 `getYear` 拿到了正确年份，却把错误返回给了 main，main 打印 "call checkYear error: wrong year"。〔TB11 p10〕
+
+这个案例的共性结论：短变量声明与控制语句的结合十分容易导致变量遮蔽，并且很不容易识别，日常开发要尤其注意两者结合使用的地方。〔TB11 p10〕
 
 Go 1.22 起，`for` 用 `:=` 声明的循环变量**每次迭代新建一份**（前提是该文件采用 Go 1.22 或更高语言版本）；用 `=` 赋值给已有变量仍会复用该变量：
 
