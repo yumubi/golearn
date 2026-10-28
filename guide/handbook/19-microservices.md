@@ -163,9 +163,11 @@ func main() {
 
 - **生成的服务端接口强制组合一个空实现**（`mustEmbedUnimplemented...Server`）。目的同样是向后兼容：接口以后加方法时，老实现因为组合了空实现而仍然编译通过，不会让所有存量服务一夜之间编译失败。〔W10-1 p49〕
 
-API 定义放哪也是拆分期的决定。gRPC 场景下就是 Protobuf 文件放哪里，主流有三种方案：方案一，同一个仓库，公司（或部门）只有一个统一的 API 仓库，所有微服务的 API 定义都放在这里；方案二，各微服务内部维护一个 API 目录，放各自的 Protobuf 定义；方案三，每个微服务有一个实现仓库加一个 API 仓库，Protobuf 文件放 API 仓库。〔W10-3 p7〕
+API 定义放哪也是拆分期的决定。使用 gRPC 时，Protobuf 文件放在哪里是一个相当难解决的问题。〔W10-3 p7〕主流有三种方案：方案一，同一个仓库，公司（或部门）只有一个统一的 API 仓库，所有微服务的 API 定义都放在这里；方案二，各微服务内部维护一个 API 目录，放各自的 Protobuf 定义；方案三，每个微服务有一个实现仓库加一个 API 仓库，Protobuf 文件放 API 仓库。〔W10-3 p7〕
 
-选型条件与团队规模和组织形态强相关：小规模应用（团队规模不超过 30 人）建议方案一；巨型应用且团队组织架构合理的建议方案三。课程落地用的就是方案一：在 webook 下面建一个 api 目录放 Protobuf 定义。api 下面理论上还能放别的定义，比如 Thrift、Swagger；proto 按服务拆分目录，旁边配一个 gen 目录放生成代码；具体服务再加上版本号目录（也可以省略）。〔W10-3 p7-8〕
+选型条件与团队规模和组织形态强相关：小规模应用（团队规模不超过 30 人）建议方案一；巨型应用且团队组织架构合理的建议方案三。课程落地用的就是方案一：在 webook 下面建一个 api 目录放 Protobuf 定义。api 下面理论上还能放别的定义，比如 Thrift、Swagger；proto 按服务拆分目录，旁边配一个 gen 目录放生成代码；具体服务再加上版本号目录（也可以省略），比如 interactive 服务就是 api/proto/intr/v1/interactive.proto。〔W10-3 p7-8〕
+
+目录按服务和版本摆好之后，接下来要往里面填 Interactive 的定义。课程在 v1 版本目录下写 Interactive 的 Protobuf 定义，内容参照本地 Service 里的接口直接翻译过来：service 名用 InteractiveService，rpc 至少列出 IncrReadCnt、Like、CancelLike（取消点赞）、Collect（收藏）、Get、GetByIds。这一步就是把原本的本地调用包装成 gRPC 调用；package 这一项可以不配置，原文说它没什么特别的作用。〔W10-3 p9〕
 
 定义写好之后是生成代码。直接用 protoc 有三个痛点：插件难管理；protoc 命令本身不好记，每次使用都要输入一大堆参数；各种文件目录、package 定位简直要命（原课把改用 buf 这一步标注为可选）。所以引入 buf 来管理 protobuf，安装参考 buf.build/docs/installation，先试自己操作系统的安装方式，不行就用 npm。〔W10-3 p10〕在项目顶级目录放 buf.gen.yaml，定义 buf 怎么管理和编译 protobuf：`go_package_prefix` 解决每次都要写老长一段 go package 的问题；`plugins` 是关键配置，指定两个插件（Go 语言插件和 gRPC 插件），并在两个插件里分别指定 out（输出目录）和 opt（选项）。生成在顶级目录触发，两种等价方式：作者封装好的 `make grpc`，或者直接执行 `buf generate webook/api/proto`；buf 还有其他配置项，需要时再去看。〔W10-3 p11〕
 
@@ -223,13 +225,13 @@ service: article/8 +1
 
 如果你的抽象没做好，这一步就会要求修改 Service 的实现，那是危险信号：先回头把本地接口整理干净，再拆进程。〔W10-3 p12〕04 章的"接口写在使用方""包装器、适配器"在这一步全部派上用场。
 
-框架选型在这门课里是顺便带过的一步，但选型逻辑值得记全。Go 下候选有四个：**gRPC** 专注于 RPC，但也提供了负载均衡之类的基本功能，生态最好、相关开源软件非常多；**go-zero** 是集成 Web 开发和微服务开发的框架，底层通信就是用 gRPC，插件丰富、由中国人维护、没有语言壁垒；**Dubbo-go** 实现了 Dubbo 协议，可以无缝和 Java 的 Dubbo 应用通信，功能强、社区活跃，同时也支持 gRPC 协议；**go-micro** 专注于微服务、简单易用，有自己的协议，也适配了 gRPC 协议。〔W10-3 p5〕作者按三个维度对比：功能性上，业务没有特别之处的话，主流框架基本都能满足实际需要，四者没有特别大差距；成熟度上（社区支持度、搜索引擎支持度、招聘人才难度），gRPC 最好；非功能性上（性能），中小公司基本不考虑，而 gRPC 性能毫无疑问最好。据此课程选定 gRPC。〔W10-3 p4-5〕所以作者的选型建议是：遇事不决选 gRPC，绝对不会出错。〔W10-1 p26〕
+微服务化真正动手之前，要先确定微服务框架的选型。课程此前已经定了用 gRPC，这里虽然只是顺便带过，选型逻辑还是值得记全。〔W10-3 p4〕Go 下候选有四个：**gRPC** 专注于 RPC，但也提供了负载均衡之类的基本功能，生态最好、相关开源软件非常多；**go-zero** 是集成 Web 开发和微服务开发的框架，底层通信就是用 gRPC，插件丰富、由中国人维护、没有语言壁垒；**Dubbo-go** 实现了 Dubbo 协议，可以无缝和 Java 的 Dubbo 应用通信，功能强、社区活跃，同时也支持 gRPC 协议；**go-micro** 专注于微服务、简单易用，有自己的协议，也适配了 gRPC 协议。〔W10-3 p5〕作者按三个维度对比：功能性既可以说最重要，也可以说最不重要，业务没有特别之处的话，主流框架基本都能满足实际需要，四者没有特别大差距；成熟度上（社区支持度、搜索引擎支持度、招聘人才难度），gRPC 最好；非功能性上（性能），中小公司基本不考虑，而 gRPC 性能毫无疑问最好。据此课程选定 gRPC。〔W10-3 p4-5〕所以作者的选型建议是：遇事不决选 gRPC，绝对不会出错。〔W10-1 p26〕
 
 ### 启动 Interactive：独立微服务的启动件
 
 外壳写完，最后一步是把 Interactive 变成可独立启动的微服务。要补齐三个启动件：模块内的 wire 装配、main 函数、一份自己的配置文件。wire 部分不用从零写：第六节"集成测试跟着搬"已经为 Interactive 写过一套测试用的 IoC 加 wire（模块少，相比 webook 简单很多），把测试的 wire 相关代码抄一份即可，再按主应用形态改差集。Interactive 作为一个完全独立的模块，配置之类的模块它也有一份，可以认为 webook 中 main 函数的部分它差不多都会有一份。〔W10-3 p16〕
 
-wire 装配分两组〔W10-3 p17〕。`serviceProviderSet` 收 Interactive 全链路的 provider：`dao.NewGORMInteractiveDAO`、`cache.NewRedisInteractiveCache`、`repository.NewCachedInteractiveRepository`、`events.NewInteractiveReadEventConsumer`、`service.NewInteractiveService`、`grpc.NewInteractiveServiceServer`。`thirdProvider` 收 ioc 初始化：`ioc.InitRedis`、`ioc.InitDB`、`ioc.InitLogger`、`ioc.InitKafka`、`ioc.InitGRPCServer`、`ioc.NewConsumers`。`Init() *App` 通过 `wire.Build(thirdProvider, serviceProviderSet, wire.Struct(new(App), fieldNames...: "*"))` 返回 App。和测试版相比有两处差集：一是 `thirdProvider` 里 `InitTestDB`、`InitLog` 换成正式的 `InitDB`、`InitLogger`，再新增 `InitGRPCServer` 和 `NewConsumers`，四项变六项；二是测试版散装列在 `wire.Build` 的 server、dao、cache、repository、service，正式版收进 `serviceProviderSet`，并补上事件消费者（测试不装配消费者）。
+wire 装配分三组〔W10-3 p17〕。`serviceProviderSet` 收 Interactive 全链路的 provider：`dao.NewGORMInteractiveDAO`、`cache.NewRedisInteractiveCache`、`repository.NewCachedInteractiveRepository`、`events.NewInteractiveReadEventConsumer`、`service.NewInteractiveService`，gRPC Server 的 provider 不在这一组。`thirdProvider` 收 ioc 初始化的四项：`ioc.InitRedis`、`ioc.InitDB`、`ioc.InitLogger`、`ioc.InitKafka`。`Init() *App` 的 `wire.Build` 直接列出 `thirdProvider`、`serviceProviderSet`、`grpc.NewInteractiveServiceServer`、初始化 gRPC Server 的 provider、`ioc.NewConsumers`，最后是 `wire.Struct(new(App), fieldNames...: "*")`，`Init()` 返回 `new(App)`。和测试版相比〔W10-3 p14〕：`thirdProvider` 仍是四项，只把 `InitTestDB`、`InitLog` 换成正式的 `InitDB`、`InitLogger`；测试版散装列在 `wire.Build` 里的 dao、cache、repository、service 收进 `serviceProviderSet`，并补上事件消费者（测试不装配消费者）；`wire.Build` 另外增加初始化 gRPC Server 和消费者的两个 provider。
 
 配置文件相比 webook 主应用只是多了一个 gRPC 启动端口，其余 db、redis、kafka 配置齐全〔W10-3 p17-18〕：
 
@@ -448,7 +450,7 @@ B 的剩余预算不到 0.7s（程序按 100ms 取整并截断，所以打印 0.
 
 - **每个服务一套 main、装配、配置**。原来一个 `main` 函数管全部，现在每个服务有自己的 `main`、wire 文件和配置文件，启动时要注意工作目录与配置路径，配错了服务起不来或连错库。〔W10-3 p16-18〕
 - **集成测试跟着搬**：测试从统一目录挪进模块，测试目标从本地实现改为 gRPC 服务端，断言改成 gRPC 返回的错误和 protobuf 响应。测试也要有自己的 IoC 装配（比主应用简单，模块少）。〔W10-3 p14-15〕
-- **开发环境变复杂**：要求每个开发把所有依赖的服务都起起来不现实，常见形态是单一测试环境（测试开发共用）、测试环境加一个开发环境、测试环境加多个开发环境（按功能分）。〔W10-3 p6〕
+- **开发环境变复杂**：要求每个开发把所有依赖的服务都起起来不现实，常见形态是单一测试环境（测试开发共用）、测试环境加一个开发环境（测试人员使用测试环境，开发人员本地电脑连开发环境）、测试环境加多个开发环境（测试人员使用测试环境，开发不同功能的人使用不同的开发环境）。〔W10-3 p6〕
 - **跨服务调用需要一个聚合层**：`ArticleHandler` 这类直接持有另一个服务客户端的结构，把帖子数据和互动数据聚合后再返回。材料的说法是把 ArticleHandler 看作聚合服务本身，勉强可以算 DDD 里的 Application Service。〔W10-3 p21〕
 - **测试覆盖率的新含义**：现在"用了点赞收藏服务的代码"也要覆盖到 80%，因为那是你的调用链。〔W10-2 p14〕
 
