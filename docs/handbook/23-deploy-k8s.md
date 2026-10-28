@@ -1,4 +1,9 @@
+---
+title: 23 部署与 Kubernetes：你描述要的状态，控制器负责逼近
+---
+
 # 23 部署与 Kubernetes：你描述要的状态，控制器负责逼近
+
 
 > 详细程度：速通 · 约 30 分钟
 > 材料：W03-1 W03-2、C:go_frame/k8s、K:krm-backend-第八章 K:krm-backend K:krm-frontend · 旧长版：`notes/p26-deploy.md`
