@@ -76,6 +76,56 @@ func (t *T或T) MethodName(参数列表) (返回值列表) {
 
 数量上，每个方法只能有一个 receiver 参数：Go 不支持在 receiver 部分放置包含多个 receiver 参数的参数列表，也不支持变长 receiver 参数〔TB24 p3〕；语言规范同样写明 receiver 参数段“必须声明单个非变长参数”（本机 go1.26.4 工具链 `doc/go_spec.html:2985-2986`）。
 
+### receiver 的基类型：不能是指针或接口类型
+
+数量之外，Go 对 receiver 参数的基类型本身还有一条约束：**基类型不能是指针类型，也不能是接口类型**〔TB24 p4〕。规范原句是 `A receiver base type cannot be a pointer or interface type`（receiver 基类型不能为指针或接口类型，本机 go1.26.4 工具链 `doc/go_spec.html:2990-2991`）。同一句规范还规定了 receiver 参数类型的两种合法形式：一个定义类型 `T`，或指向定义类型 `T` 的指针 `*T`（`doc/go_spec.html:2988-2989`）；无论写成哪种，`T` 都是基类型，这条约束检查的是 `T` 自己，而不是 receiver 参数写成 `T` 还是 `*T`。〔TB24 p3-4〕
+
+先看原课的两个反例，它们演示了基类型分别为指针类型和接口类型时编译器的反应〔TB24 p4〕：
+
+```go
+type MyInt *int
+
+func (r MyInt) String() string { // 编译器报错：invalid receiver
+	// ...
+}
+
+type MyReader io.Reader
+
+func (r MyReader) Read(p []byte) (int, error) { // 编译器报错：invalid receiver
+	// ...
+}
+```
+
+两个例子都有意不能编译。`MyInt` 和 `MyReader` 这两个类型定义本身是合法的：`MyInt` 的底层类型是 `*int`，`MyReader` 的底层类型是 `io.Reader`。触发报错的是把它们用作基类型：编译器检查的是基类型的**底层类型**，一个落在指针类型上，一个落在接口类型上，方法声明就被拒绝。本机 go1.26.4 编译器按同样的次序实现这个检查：先剥掉 receiver 参数类型中的指针得到基类型（`src/cmd/compile/internal/types2/signature.go:452-456`），再检查基类型的底层类型是否为指针或接口（`signature.go:468-476`）；对 `MyInt`，现行编译器在该分支给出的信息是 `invalid receiver type MyInt (pointer or interface type)`，比原课标注的 `invalid receiver` 多出类型名和原因（`signature.go:475-483`）。
+
+最容易出错的是约束的落点：它约束基类型，不约束 receiver 参数的写法。拿开头的计数器对号入座（这段对号入座是我的推导，检查次序引自上述编译器源码）：`(c *Counter)` 的 receiver 参数类型是指针 `*Counter`，剥掉这一层指针后，剩下的基类型 `Counter` 是结构体，既不是指针也不是接口，所以完全合法；开头的 `Add` 用的正是这种写法。原课有读者问“*int 算指针类型，但是 *T 不算指针类型吗”〔TB24 p16〕，答案就是这层区别：`*` 出现在 receiver 参数类型上没有问题，出现在基类型自己的定义里（`type MyInt *int`）才违反约束。原课小结把“基类型不能是指针类型或接口类型”与方法声明的位置约束并列为两条独立约束〔TB24 p12〕，接下来看第二条。
+
+### 方法声明的位置：必须与基类型同包
+
+原课给出的最后一条约束与位置有关：方法声明必须与 receiver 参数的基类型的声明放在同一个包内〔TB24 p5〕。它就是上一小节那句规范原文的后半分句：`and it must be defined in the same package as the method`（并且基类型必须与方法声明在同一个包中，`doc/go_spec.html:2990-2991`）。规范另有一个正向说法：方法被“绑定”（bound）到它的基类型上（`doc/go_spec.html:2992`）。绑定意味着方法从声明那一刻起就归属于某个包里声明的类型，不存在“站在包外给类型挂方法”的写法。
+
+基于这条约束，原课给出两个推论〔TB24 p5〕。推论一：不能为原生类型（诸如 `int`、`float64`、`map` 等）添加方法。下面的代码试图为原生类型 `int` 增加新方法 `Foo`，编译器报错：
+
+```go
+func (i int) Foo() string { // 编译器报错：cannot define new methods on non-local type
+	// ...
+}
+```
+
+推论二：不能跨越 Go 包为其他包的类型声明新方法。`http.Server` 声明在标准库 `net/http` 包里，在你的包里为它加方法同样被拒绝：
+
+```go
+import "net/http"
+
+func (s http.Server) Foo() { // 编译器报错：cannot define new methods on non-local type
+	// ...
+}
+```
+
+两个推论是同一条约束的两种表现：`int` 和 `http.Server` 都不是本包内声明的基类型，编译器把这类基类型按“非本包类型”拒绝，两个例子的报错信息相同：`cannot define new methods on non-local type`（不能在非本包类型上定义新方法）。原课文把这行报错截断为 `non-loca`，完整形式以现行编译器源码为准：跨包定义的类型走 `cmd/compile/internal/types2/signature.go:464-466` 的分支，原生类型走同一函数的 `*Basic` 分支（`signature.go:485-486`），两处打印同一条信息。
+
+这条约束的收益和代价来自同一处（取舍为教学推导）：一个类型的方法集合被封闭在声明它的包内，读类型的声明就能确定它有哪些方法，第三方无法在别处悄悄扩充它；代价是不能扩展原生类型和别的包的类型。需要这类扩展时，惯用做法是定义一个自己的类型把值包装起来，再在新类型上声明方法，落地方式见第六节（嵌入）与第七节（包装器）。对照其他语言（以下为我的推导，非原课内容）：Rust 的 `impl` 必须与类型在同一个 crate 内，跨 crate 不能给外部类型实现 trait，例外只有 newtype 包装，与 Go 的同包约束同构；Java 没有对应约束，继承或装饰器都能扩展既有类型，方法归属最自由。原课小结也复述了这条位置约束：方法声明必须与 receiver 参数的基类型在同一个包中〔TB24 p12〕。
+
 ### receiver 的名字：作用域与省略
 
 receiver 参数也有作用域，规则来自第 11 讲、本讲复习：receiver 参数、函数/方法的参数、返回值变量，对应的作用域范围都是函数/方法体对应的显式代码块。〔TB24 p3-4〕（这条规则在 03 节“七、作用域与遮蔽”的“函数边界上的标识符”下有完整展开。）由此推出：receiver 部分的参数名不能与方法参数列表中的形参名、具名返回值中的变量名冲突，必须在该方法的作用域中唯一。〔TB24 p3-4〕
