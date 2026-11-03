@@ -1,0 +1,232 @@
+<doc>
+  <h1 id="ThEjgf5Q">澄清：用 Ryugi 风格重写 Go 手册的澄清文档</h1>
+  <p id="vJQOGP5v"><b>Round 2 已收口</b>——你的 4 条评论处理见 Round 2 一节的逐条回应；机器可验证的部分（机制深度、修辞尺度、引注保留、范围扩大到全部下载教程）已直接生效。</p>
+  <alert id="1B4n6imk" type="important">
+    <p>还差 2 件事：① 样张 C 的 Java↔Go 对照表被你判&quot;不适合人类阅读&quot;——我在下面给了一版重写的候选，请看 Round 2 的&quot;样张 C 重造&quot;；② 全部讨论收口后我把本文档收敛成正式设计方案。文档仍是讨论场所，继续用评论说话。</p>
+  </alert>
+  <table id="JKOwFiud">
+    <tr>
+      <th>
+        <p>#</p>
+      </th>
+      <th>
+        <p>待你决定</p>
+      </th>
+      <th>
+        <p>我的推荐</p>
+      </th>
+    </tr>
+    <tr>
+      <td>
+        <p>Q7</p>
+      </td>
+      <td>
+        <p>机制对照讲多深</p>
+      </td>
+      <td>
+        <p>讲到运行时行为（itab/vtable/方法集合），汇编留链接</p>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <p>Q8</p>
+      </td>
+      <td>
+        <p>修辞尺度</p>
+      </td>
+      <td>
+        <p>禁悬念标题与卖萌；保问题先行、例子即跑、失败直讲</p>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <p>Q9</p>
+      </td>
+      <td>
+        <p>提纲挈领怎么落地</p>
+      </td>
+      <td>
+        <p>每节开头三件套：对照表+问题清单+节间依赖</p>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <p>Q10</p>
+      </td>
+      <td>
+        <p>重写批次细节</p>
+      </td>
+      <td>
+        <p>before 取当前 handbook 文本；26/27 节豁免</p>
+      </td>
+    </tr>
+  </table>
+  <p id="b4EuohJv">另外两件事请直接表态：样张 C（提纲开法）和样张 D（机制讲法）像不像你要的样子；artboard 的 <a href="http://localhost:27319/artboard/A6NDYNECx0qEqVgnLiFCD">B 档方向</a>已按你的两点修正更新。</p>
+  <h2 id="wnsfoCLh">我对需求的理解</h2>
+  <h3 id="z0F-Yt2O">已知事实（来自仓库与历史会话，已核实）</h3>
+  <ul id="HlnpNgIJ">
+    <li>仓库是 golearn Go 教程：主路径 <code>guide/handbook/</code> 27 节 + 细节库 <code>notes/</code> 35 章（约 1.3 万行），另有 <code>docs/</code> 站点镜像。</li>
+    <li>你 10-27 起对现状语言的判断：&quot;写的一塌糊涂、东一斧头西一榔头、蜻蜓点水、问题没说到点子上&quot;，并点名廖雪峰的 js/python/java 教程和 dbwu/eddycjy 的 Go 文章作为风格参照。</li>
+    <li>当时已形成共识的讲法要领（你在 10-27 会话里认可的）：从会的代码出发 → 一次引入一个新东西 → 每段代码立刻跑 → 用小失败制造&quot;为什么&quot; → 失败后才给术语和原则；对 Java/TS/Python 背景读者建立体系。</li>
+    <li>仓库有批审机器：条目级台账 <code>audit/entry-ledger.jsonl</code> 共 3713 条，当前 <b>已落盘(双审通过) 263</b>、待审 2677、待清点 591、有理由省略 182。改 <code>guide/handbook/</code> 默认走 handbook-batch 双审工作流；直改不允许在台账标&quot;已审&quot;。</li>
+    <li>10-28 你在&quot;方法本质&quot;会话里看过按廖雪峰套路即兴重讲的内容（三个 six、receiver 决策），反馈是&quot;大体满意、深入性认可&quot;；那份内容没落盘，只是会话演示。</li>
+  </ul>
+  <h3 id="v-YWJiWi">我的猜测（标了 ⚠ 的是我替你补的，需要你确认或纠正）</h3>
+  <ul id="cEi65Gyq">
+    <li>⚠ &quot;语言风格&quot;指叙事节奏与口语化程度（问题先行、小失败推进、比喻、第二人称&quot;你&quot;），不是指排版或术语翻译。<b>已被 Round 1 部分推翻：风格之外还必须包含&quot;提纲挈领的机制分析&quot;（见 Settled S5）。</b></li>
+    <li>⚠ 这次重写主要动 <code>guide/handbook/</code>；<code>notes/</code> 保持细节库定位，暂不在范围内。</li>
+    <li>⚠ 重写仍要走批审机器（双审 + 台账回填），你不会为了风格放弃质量门禁。</li>
+  </ul>
+  <h3 id="L9RABK97">待确认</h3>
+  <ul id="jGXw2oYw">
+    <li>重写对象、验收标准、批审机器是否保留、节奏与范围——见 Round 1。</li>
+  </ul>
+  <h2 id="tYu8usrP">已经确定的决定</h2>
+  <ul id="cZXFlIzs">
+    <li><b>theirs</b> 风格基准：廖雪峰式教学节奏（问题先行、逐步演进、小失败、术语后置），参照 dbwu/eddycjy 的语言口语度。→ 来自 10-27 会话。</li>
+    <li><b>theirs</b> 读者画像不变：有 Java/TS/Python 背景的后端工程师，要建立 Go 体系而非查规则。→ 来自 skill 定义与你 10-27 反馈。</li>
+    <li><b>theirs</b> 完成判定不变：只有双审落盘（runId + 回执）算改完。→ 来自 skill 与 CROSS-MACHINE 纪律。</li>
+    <li><b>mine</b> 本澄清过程用 document artifact 承载，视觉对比用 artboard 承载；本文档收敛后整理成完整设计方案。</li>
+    <li><b>theirs</b> S1 · 重写对象：go-tutorial-writing skill 管辖的教程与手册（handbook 全 27 节为主线，notes 不在本次范围；docs 镜像按仓库规则同步）。→ 你对 Q1 的回答。</li>
+    <li><b>theirs</b> S2 · 验收基准：完整设计方案以&quot;目录/索引能一眼看出体系&quot; + &quot;机制讲解到实现层&quot;为双重标准，读者测试按 skill 的完整性规则执行。→ 你对 Q1 的回答。</li>
+    <li><b>theirs</b> S3 · 风格档位：B 档（廖雪峰节奏）但修两处——不讲&quot;先让问题撞墙&quot;式的悬念修辞；机制对照要提纲挈领、成体系，不做零碎点缀。→ 你对 Q2/Q3 的回答。</li>
+    <li><b>theirs</b> S4 · 试产章：04-interfaces（Q4 无人反对，按推荐）。→ 推荐生效。</li>
+    <li><b>theirs</b> S5 · 新增硬要求：面向 Java 背景，接口与多态一节必须详细对比 Java 与 Go 的多态实现机制（显式 implements + 单一 vtable vs 隐式方法集合 + itab），从 Java 工程师视角组织。→ 你 Round 1 反馈原文。</li>
+    <li><b>mine</b> S6 · Q5（已落盘条目重走双审）与 Q6（按篇分组推进）按推荐视为接受，细节在 Round 2 Q10 确认。→ 无人反对。</li>
+  </ul>
+  <h2 id="RBvO1aJZ">Round 1：影响整体方向的问题</h2>
+  <h3 id="bu_DT-BP">Q1（分叉点）重写对象和验收基准是什么？</h3>
+  <p id="JRqQdECT"><b>问题：</b>&quot;用 Ryugi 风格重写澄清文档&quot;的对象和&quot;改好了&quot;的标准是什么？</p>
+  <p id="iBbrjq7b"><b>我的推荐：</b>对象 = <code>guide/handbook/</code> 全部 27 节（notes/ 不动）；验收 = 读者测试（只读新文能答出：为什么需要此机制、例子发生了什么、何时用、边界在哪），批审机器照旧作为落盘门禁。</p>
+  <p id="a8CecEhZ"><b>理由：</b>27 节是读者主路径；notes 是回查库，风格改造收益低、破坏&quot;可引用细节&quot;的风险高。验收若只看&quot;读起来像不像廖雪峰&quot;，审稿 agent 无法执行；读者测试可进 handbook-learner 审稿角色，机器能跑。台账 263/3713 已落盘，风格重写和已落盘条目如何兼容（重写=新一轮批次）是本问题的直接推论，等你答复后进 Round 2。</p>
+  <ul id="BBr--PQA" type="check">
+    <li checked="true">对象含 notes/</li>
+    <li checked="false">验收只看风格观感，不设读者测试</li>
+  </ul>
+  <h3 id="PXtu0ATC">Q2 风格基准选哪一档？</h3>
+  <p id="6HUBIy_2"><b>问题：</b>现状（A）和廖雪峰节奏（B）之间选哪个作为全书基准？</p>
+  <p id="F1CpdEYz"><b>我的推荐：</b>B，但口语浓度取&quot;中档&quot;——问题先行和小失败保留，表情符号、网络梗、&quot;💀&quot;这类元素不用；第二人称&quot;你&quot;可以用，但不写成段子。</p>
+  <p id="70e6I6QE"><b>理由：</b>你点名参照的廖雪峰文章本身没有表情包，靠的是节奏而不是卖萌；dbwu/eddycjy 的口语度也在中档。artboard 上两块板子就是 A/B 的对照，请在那里选。如果&quot;中档&quot;不对，直接在评论里说&quot;再放一点&quot;或&quot;再收一点&quot;。</p>
+  <h3 id="Ap4i26rY">Q3 比喻和跨语言对照的密度？</h3>
+  <p id="7mcf2CnF"><b>问题：</b>Java/TS/Python 类比（如&quot;接口 = 带静态检查的鸭子类型&quot;）每节出现多少次合适？</p>
+  <p id="LPfzcgME"><b>我的推荐：</b>每个新概念第一次出现时给一次对照（单独小段落，说明类比边界），之后纯 Go 语境推进；每节类比总量 2-4 处。</p>
+  <p id="S_295WQK"><b>理由：</b>10-27 你特别肯定了&quot;从其他语言背景建立体系&quot;的价值；但 04 章现状已经示范了类比边界写法（&quot;这种说法是帮助理解的类比，不意味着……&quot;），逐条对照会淹没主线，回归 dbwu 式密集对照反而打断推导。</p>
+  <h4 id="5oWejn_9">Q4 先拿哪一节试产？</h4>
+  <p id="4CbblYFj"><b>问题：</b>全量重写前，先用哪一节跑通&quot;新风格 + 批审&quot;的完整闭环？</p>
+  <p id="Sapmcxxy"><b>我的推荐：</b>04-interfaces。它是你最初点名&quot;写的一塌糊涂&quot;的章节，已有 8 条已落盘条目可对照新旧效果，且 10-28 会话已有一份即兴重讲素材可参考。</p>
+  <p id="I7I0G_SY"><b>理由：</b>试产章选你最有意见的，校准成本最低；跑通后按它定 PROMPT 模板，再批量推其余章节。</p>
+  <h4 id="HwilnT3Y">Q5 已落盘的 263 条怎么处理？</h4>
+  <p id="70l376ch"><b>问题：</b>已经双审落盘的条目（多在 18/11/13/03 章），风格重写时要不要重过一遍？</p>
+  <p id="ucb8V0uS"><b>我的推荐：</b>重写触碰到的章节，把该章已落盘条目并入新一轮批次重走双审（处理状态记&quot;风格重写&quot;）；没触碰的章节不动。台账进度不回退，旧 runId 保留。</p>
+  <p id="m-FHfBun"><b>理由：</b>风格重写会改写这些条目的承载句，after 变了双审就失效，按 skill 的 before/after 哈希规则本来也过不了 apply；主动声明比事后被发现好。</p>
+  <h4 id="19pUnN1k">Q6 交付节奏？</h4>
+  <p id="HEOJE8GR"><b>问题：</b>试产章通过后，其余章节按什么节奏推进？</p>
+  <p id="G1LZFFUe"><b>我的推荐：</b>按 README 的篇分组推进：心智模型(01-03) → 核心范式(04-09) → 服务工程(10-16) → 规模与演进(17-21) → 交付与运行(22-23) → 项目线(24-25)。每完成一组提交并汇报，允许你随时插队调整优先级。</p>
+  <p id="j93fnXyH"><b>理由：</b>前置依赖顺着读者路径（26 节路线也是这个顺序）；按组提交让 docs 镜像和时长重算有稳定节奏。</p>
+  <details id="TAR0U5ah" summary="本轮不问的问题（依赖 Round 1 答案，已全部进入 Round 2）" open="false">
+    <p>试产章的新 PROMPT 模板怎么写、口语浓度如何在审稿 issue 里量化、docs 镜像同步时机、26/27 两节路线与速查是否豁免重写——已并入 Round 2 Q10 与收敛阶段。</p>
+  </details>
+  <h2 id="iNCptLAk">Round 2：风格定稿与机制讲解的落法</h2>
+  <h3 id="yFGkaHWs">先看两个重录样张（按 S3/S5 新基准）</h3>
+  <p id="IFEpgsgX">Round 1 的 B 样张被你否了两点：悬念修辞（&quot;撞墙&quot;）和缺机制分析。下面是修正后的同段内容——<b>先给提纲，再进细节</b>：</p>
+  <h4 id="v-oW3XKF">样张 C · 提纲挈领的开法（替换样张 B 的开头）</h4>
+  <p id="nOimLETZ">假如你是从 Java 过来的，这一节的地图先画给你：</p>
+  <table id="wzgQc8vx">
+    <tr>
+      <th>
+        <p>Java 里你熟的</p>
+      </th>
+      <th>
+        <p>Go 里对应什么</p>
+      </th>
+      <th>
+        <p>关键差异</p>
+      </th>
+    </tr>
+    <tr>
+      <td>
+        <p><code>interface</code> + <code>implements</code></p>
+      </td>
+      <td>
+        <p><code>type X interface{...}</code>，无需 implements</p>
+      </td>
+      <td>
+        <p>关系在使用点成立，方法集合决定</p>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <p>继承 + override 的动态绑定</p>
+      </td>
+      <td>
+        <p>接口变量 + 方法集合</p>
+      </td>
+      <td>
+        <p>没有继承树；嵌入不是继承（见样张 D 结论）</p>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <p>编译期 vtable + <code>invokeinterface</code></p>
+      </td>
+      <td>
+        <p>运行时 itab（接口×类型组合表）</p>
+      </td>
+      <td>
+        <p>同样是查表间接调用，成本同量级</p>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <p>多态 = 父类引用指向子类对象</p>
+      </td>
+      <td>
+        <p>多态 = 接口变量装住具体值</p>
+      </td>
+      <td>
+        <p>Go 只有多态这一半，没有&quot;层次&quot;那一半</p>
+      </td>
+    </tr>
+  </table>
+  <p id="ans_read"><b>你的评论（已采纳，样张 C 判不合格）：</b>&quot;这种表述和编排并不适合人类阅读理解和学习&quot;——同意，表格把连续的因果拆碎了。下面是同一信息的<b>叙事重写</b>，一行表格都不要：</p>
+  <h4 id="sampleC2h">样张 C2 · 同一内容的叙事重写（候选，请评论）</h4>
+  <p id="sampleC2p1">你已经会用 Java 的多态：声明一个 <code>Sender</code> 接口，让 SMS、Email 各自 <code>implements</code>，然后拿父类引用指向子类对象。现在把这套搬进 Go——你会发现 <code>implements</code> 这个关键字不存在了，但多态还在。这一节就讲两件事：<b>关系怎么建立</b>，和<b>调用怎么发生</b>。</p>
+  <p id="sampleC2p2">先看关系。Go 不要求类型声明&quot;我实现了谁&quot;；只要你的方法集合里凑齐了接口要求的方法，赋值的那一刻关系就成立了。这带来一个 Java 给不了的自由：你可以给标准库的类型配一个自己定义的接口——因为不需要改对方的源码。</p>
+  <p id="sampleC2p3">再看调用。写下一行 <code>sender.Send(&quot;hi&quot;)</code> 时，编译器不知道 <code>sender</code> 里装的是谁，它生成的指令是：查这个组合的 itab，取函数地址，间接跳转。Java 的 <code>invokeinterface</code> 做的也是这件事——所以性能不用担心，两者同量级。</p>
+  <p id="sampleC2p4">那 Java 的继承呢？Go 把这条路堵死了：没有 extends，嵌入只是编译期把内层方法&quot;抄写&quot;到外层——内层方法被调用时，接收者永远是内层自己，不存在虚方法。想要&quot;调用方不改一行代码、行为随实现变&quot;，Go 只剩接口这一条路。这也是为什么 Go 社区说：复用靠嵌入，多态靠接口。</p>
+  <p id="sampleC2note">（这就是&quot;提纲挈领&quot;的落法：第一段给全节地图——&quot;讲两件事&quot;，后文每段只展开一件。读完这段你已经知道整节要去哪。）</p>
+  <dynamic id="Z26UE1Ey" url="assets/java-go-polymorphism.html" initial-height="320" />
+  <p id="FraeeMfp">（可交互：上面的机制对照表就是正文中要落的形态之一——如果这类表比段落更适合你，正文的机制节会按&quot;表 + 逐行代码对照&quot;组织。）</p>
+  <h4 id="tth6Fy6P">样张 D · 机制讲透的样子（接口调用在运行时怎么发生）</h4>
+  <p id="DaRgk_O6">同一行 <code>sender.Send(&quot;欢迎注册&quot;)</code>，编译器生成的是间接调用：<code>sender</code> 不只是&quot;一个值&quot;，它是一个两字结构 <code>(类型信息, 数据指针)</code>。类型信息里存着这个&quot;接口 × 具体类型&quot;组合的方法地址表 itab；调用时取 <code>itab.fun[0]</code> 间接跳转。Java 的 <code>invokeinterface</code> 做的是同一类事——查 vtable 槽位再调用。所以两种多态的<b>运行时成本同量级</b>，真正的差异在<b>关系怎么建立</b>：</p>
+  <dynamic id="2iWGqp72" url="assets/vtable-itab.html" initial-height="300" />
+  <p id="mw_22075">推论（Java 视角）：Go 没有&quot;继承树上的多态&quot;，只有&quot;接口上的多态&quot;。嵌入（struct 嵌入）是编译期转发糖——<code>c.Hello()</code> 改写成 <code>c.Base.Hello()</code>，内层不知道外层存在，没有虚方法、没有 override。想要&quot;改一行代码，所有调用点行为变化&quot;，Go 里只有接口赋值这一条路。</p>
+  <p id="YqNZbmv6">〔TB29 p5-7〕〔TB28 p2-8〕</p>
+  <p id="ans_cite"><b>你的评论（引注保留但降权）：</b>&quot;我在想这个引注到底有用吗，我大概率是不会回到 TBXX 的相关文档去看的&quot;——查了它们的工作方式：引注主要不是给读者看的，是给<b>审稿 agent</b> 用的——双审时逐条回对原文防杜撰（skill 里 15% 的审稿 issue 是杜撰/归属错误；全书 2978 个标签可被 <code>scripts/check-cite-pages.py</code> 机器校验，当前全过）。所以结论：正文保留引注但降权——挪到行尾小灰字（如上行），读者扫不到就不打扰；绝不删，删了双审链条就断了。</p>
+  <h3 id="xUHbC3Qe">Q7 机制对照的深度基线？</h3>
+  <p id="BS1Gp-JU"><b>问题：</b>&quot;详细分析实现机制&quot;按哪个深度写进验收标准？</p>
+  <p id="IvHFkdYk"><b>我的推荐：</b>三档中的&quot;机制层&quot;——每个核心机制讲到&quot;运行时/编译器实际做什么&quot;（如 itab 结构、vtable 槽位、方法集合判定），配源码级引注；不展开到汇编/内存布局（那是 notes/ 和 TB29 深挖材料的职责，正文给链接）。</p>
+  <p id="LApmLHgK"><b>理由：</b>样张 D 就是机制层的密度——讲到 itab.fun 间接调用就停，不贴 runtime 汇编。04 章&quot;想深入&quot;里已有 TB29 装箱/itab 细节作为第二档，正文不必重复。提纲挈领≠讲到底层，而是&quot;地图 + 每站机制一句话 + 需要深入时的路标&quot;。</p>
+  <h3 id="KDQixfNL">Q8 修辞尺度怎么收？</h3>
+  <p id="WIrsAyv9"><b>问题：</b>样张 B 里被你点名的&quot;先让问题撞墙&quot;式悬念修辞，边界划在哪？</p>
+  <p id="3IDa_88V"><b>我的推荐：</b>禁三类——悬念标题（&quot;先撞墙再解释&quot;）、卖萌元素（💀/梗图/惊叹号轰炸）、故意隐瞒答案的倒计时式写法。保三类——问题先行的引入（&quot;如果要换成短信呢？&quot;）、每个例子马上给输出、失败案例直接展示并解释。标题用机制命名（如&quot;接口调用在运行时怎么发生&quot;），不用悬念。</p>
+  <p id="OSCc5Urn"><b>理由：</b>你反对的是&quot;制造紧张感&quot;而非&quot;制造问题意识&quot;——廖雪峰原文的问题感也来自业务推进而非标题党。样张 C/D 的标题就是按此收的。</p>
+  <h3 id="R7rhS6HX">Q9 提纲挈领怎么落成硬结构？</h3>
+  <p id="pIdknj_-"><b>问题：</b>&quot;没有提纲挈领&quot;怎么变成每节可检查的硬要求？</p>
+  <p id="5V75Lt5B"><b>我的推荐：</b>每节开头强制三件套：① 一张机制对照表（本节新概念 × 你已会的 Java/TS/Python 概念 × 差异，≤6 行）；② 本节问题清单（读完能答什么）；③ 与前后节的依赖一句话。审稿 issue 类别里加&quot;缺提纲/缺机制对照&quot;专项。</p>
+  <p id="6ZzrqU9c"><b>理由：</b>&quot;提纲挈领&quot;要能被 fidelity 审稿 agent 检查就必须落成清单项；三件套正好是 26 节路线图和 27 节决策表的节级版，全书结构不会碎。</p>
+  <p id="ans_Q9"><b>你的评论（已采纳）：</b>&quot;并不一定非要按照这个范式，还是得看具体场景&quot;——收到。三件套降级为<b>缺省模板</b>而非硬性范式：默认按三件套写；当某节是纯操作/速查型内容（如 26 节路线、27 节决策表）或机制简单到一眼见底时，审稿人可跳过对照表，但要在审稿记录里写一句跳过理由。这样既保留可检查性，又不逼着每节摆表格。</p>
+  <h3 id="Lz96yvzF">Q10 节奏与批审细节（Q5/Q6 的落地确认）</h3>
+  <p id="2-_LBx5H"><b>问题：</b>已落盘条目重走双审 + 按篇分组推进，两个细节确认：a) 重审批次的 before 取当前 handbook 文本（而非原始 digest），双审仍跑全量；b) 26/27（路线/决策）两节豁免重写，只随各节时长重算更新。</p>
+  <p id="T9TDrK6C"><b>我的推荐：</b>两者都按此执行。</p>
+  <p id="ans_Q10a"><b>你的评论（已采纳，改变了范围）：</b>&quot;范围涉及到仓库内的所有文档，记得要参考我之前下载过的别人的教程文档&quot;——两点都记入：</p>
+  <ul id="ans_Q10list">
+    <li><b>范围</b>：不止 <code>guide/handbook/</code>，仓库内所有面向读者的文档都在重写对象内（<code>notes/</code> 35 章也排进来；<code>docs/</code> 镜像与 README 类导航页按仓库规则同步）。推进顺序仍是 handbook 优先，notes 按章补入批次。</li>
+    <li><b>参照语料</b>：重写时参考 <code>downloads/</code> 里的已购教程——核实过的有两类：Tony Bai《Go语言第一课》讲义 PDF（10 讲起，变量声明/项目布局/构建模式等）与 krm-backend 周课文档（Gin/GORM/K8s/可观测性等 21+ 讲）。这些进 PROMPT 的风格参照列表，与廖雪峰、dbwu/eddycjy 并列；引用事实仍以本仓库 <code>work/text/</code> 原文为准。</li>
+  </ul>
+  <p id="4dJkHh-m2"><b>理由：</b>台账 3713 条本来就覆盖 W/TB/C/my 全部语料单元（W04 178 条、W10 136 条…），把 notes 排进范围与台账结构天然对齐；下载教程是成品书稿，比 raw 页面更能示范&quot;成体系的讲法&quot;。</p>
+  <details id="hnZsYAMg" summary="本轮不问的问题（依赖 Round 2 答案）" open="false">
+    <p>试产章 04 的新 PROMPT 模板、docs 镜像同步时机、台账&quot;风格重写&quot;状态的字段格式——等 Q7-Q10 定了直接执行，不再开新一轮问。</p>
+  </details>
+</doc>
+

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; }
+  body { font: 13.5px/1.7 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: #24292f; background: transparent; padding: 4px 2px; }
+  .cols { display: flex; gap: 14px; align-items: flex-start; }
+  .col { flex: 1; min-width: 0; border: 1px solid #e2e5ea; border-radius: 10px; overflow: hidden; }
+  .col h4 { margin: 0; padding: 8px 12px; font-size: 13px; background: #f3f5f8; border-bottom: 1px solid #e2e5ea; }
+  .col pre { margin: 0; padding: 10px 12px; background: #fbfcfd; font: 11.5px/1.6 "SF Mono", Menlo, Consolas, monospace; overflow-x: hidden; white-space: pre; color: #333; }
+  .tag { display: inline-block; margin: 8px 0 0; font-size: 11px; color: #58606a; background: #eef1f5; border-radius: 4px; padding: 1px 8px; }
+  .diff { margin: 12px 0 0; border-left: 3px solid #2f7d5d; padding: 6px 12px; background: #f2faf6; }
+  .diff b { color: #20614a; }
+</style>
+</head>
+<body>
+  <div class="cols">
+    <div class="col">
+      <h4>Java · 编译期生成虚方法表</h4>
+      <pre>class SMS implements Sender {
+    public void send(String m) { ... }
+}
+// javac 把类的方法指针写进
+// klass 的 vtable 槽位
+// invokeinterface → 运行时查槽</pre>
+      <span class="tag">关系写死在类定义里 · 继承树</span>
+    </div>
+    <div class="col">
+      <h4>Go · 运行时按需构建 itab</h4>
+      <pre>type SMS struct{}
+func (SMS) Send(m string) { ... }
+// 首次 Sender = SMS{} 时，runtime
+// 缓存 itab{inter, _type, fun[]}
+// 接口调用 → itab.fun[i] 间接调用</pre>
+      <span class="tag">关系在使用点成立 · 方法集合</span>
+    </div>
+  </div>
+  <div class="diff"><b>共同点：</b>都是"查方法地址表 → 间接调用"，动态分派成本同量级。<b>差异：</b>Java 的表是每个类的单一 vtable（单继承布局），Go 的 itab 是"接口 × 具体类型"的组合表——所以 Go 不需要 implements 声明，但每种组合要构建一次。</div>
+</body>
+</html>

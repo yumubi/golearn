@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "threads": [
+    {
+      "id": "PzFDCNFlX-",
+      "anchor": {
+        "blockId": "JKOwFiud",
+        "quote": "每节开头三件套："
+      },
+      "status": "resolved",
+      "statusAt": "2026-11-03T00:46:15.058Z",
+      "statusBy": "agent",
+      "messages": [
+        {
+          "id": "dRGPZyPcZy",
+          "author": "human",
+          "name": "zhaomengyu",
+          "avatar": "/api/avatar/gravatar/56d1dfb129914b536e08c889a51a81e244cddd71fea2e684ad6ee161236fa6c0",
+          "text": "并不一定非但按照这个范式，还是得看具体场景",
+          "at": "2026-11-03T00:36:09.594Z"
+        },
+        {
+          "id": "lZm6nT3GBo",
+          "author": "agent",
+          "name": "OMP",
+          "text": "采纳：三件套降级为缺省模板，不再硬性要求每节摆对照表——速查/索引型内容可跳过，审稿记录里写一句跳过理由即可。已写进 Q9 回应。",
+          "at": "2026-11-03T00:43:40.430Z"
+        }
+      ]
+    },
+    {
+      "id": "Hri6vdjGLb",
+      "anchor": {
+        "blockId": "JKOwFiud",
+        "quote": "before 取当前 handbook 文本；26/27 节豁免"
+      },
+      "status": "resolved",
+      "statusAt": "2026-11-03T00:46:15.171Z",
+      "statusBy": "agent",
+      "messages": [
+        {
+          "id": "V_5L-OFGkG",
+          "author": "human",
+          "name": "zhaomengyu",
+          "avatar": "/api/avatar/gravatar/56d1dfb129914b536e08c889a51a81e244cddd71fea2e684ad6ee161236fa6c0",
+          "text": "范围涉及到仓库内的所有文档，记得要参考我之前下载过的别人的教程文档",
+          "at": "2026-11-03T00:37:15.526Z"
+        },
+        {
+          "id": "5JGjfBibe4",
+          "author": "agent",
+          "name": "OMP",
+          "text": "采纳：范围扩到仓库内全部读者文档（notes/ 35 章排进批次，handbook 优先）；downloads/ 里的 Tony Bai《Go语言第一课》与 krm 周课文档核实过，进风格参照列表。详见 Q10 回应。",
+          "at": "2026-11-03T00:43:40.522Z"
+        }
+      ]
+    },
+    {
+      "id": "066eBchNrT",
+      "anchor": {
+        "blockId": "wzgQc8vx",
+        "quote": "没有继承树；嵌入不是继承（见样张 D 结论"
+      },
+      "status": "resolved",
+      "statusAt": "2026-11-03T00:46:15.279Z",
+      "statusBy": "agent",
+      "messages": [
+        {
+          "id": "4RLELjTzcf",
+          "author": "human",
+          "name": "zhaomengyu",
+          "avatar": "/api/avatar/gravatar/56d1dfb129914b536e08c889a51a81e244cddd71fea2e684ad6ee161236fa6c0",
+          "text": "这种表述和编排并不适合人类阅读理解和学习",
+          "at": "2026-11-03T00:38:45.831Z"
+        },
+        {
+          "id": "ZWQxSGGEGR",
+          "author": "agent",
+          "name": "OMP",
+          "text": "接受：表格样张判不合格。同一内容改写成叙事版（样张 C2），放在原表下方——四段，先地图后展开，无表格。请对比评论。",
+          "at": "2026-11-03T00:43:40.619Z"
+        }
+      ]
+    },
+    {
+      "id": "_y9eGZ2I5-",
+      "anchor": {
+        "blockId": "YqNZbmv6",
+        "quote": "〔TB29 p5-7〕〔TB28 p2-8〕 — 引注照旧"
+      },
+      "status": "resolved",
+      "statusAt": "2026-11-03T00:46:15.391Z",
+      "statusBy": "agent",
+      "messages": [
+        {
+          "id": "KWb9ONROlW",
+          "author": "human",
+          "name": "zhaomengyu",
+          "avatar": "/api/avatar/gravatar/56d1dfb129914b536e08c889a51a81e244cddd71fea2e684ad6ee161236fa6c0",
+          "text": "我在想这个引注到底有用吗，我大概率是不会回到TBXXx的相关文档去看的",
+          "at": "2026-11-03T00:40:13.146Z"
+        },
+        {
+          "id": "wVz6r19jMW",
+          "author": "agent",
+          "name": "OMP",
+          "text": "引注保留但降权：挪到行尾小灰字，正文不打扰读者；不删是因为双审靠它逐条回对原文防杜撰（可被 scripts/check-cite-pages.py 机器校验）。已在样张 D 下演示新摆法。",
+          "at": "2026-11-03T00:43:40.705Z"
+        }
+      ]
+    }
+  ]
+}
