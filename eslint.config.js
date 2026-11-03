@@ -10,6 +10,7 @@ export default antfu({
     '**/labs/**',
     'vendored/**',
     '**/*.css',
+    '.ryugi/**', // ryugi artifacts(澄清演示/画板/评论),非源码、机器生成与协作中间态
   ],
   rules: {
     'style/quotes': ['error', 'single'],
