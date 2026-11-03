@@ -59,7 +59,7 @@ const attempts = []
 let feedback = []
 for (let round = 1; round <= 3; round++) {
   phase('候选稿')
-  const proposal = await agent(`阅读目标手册，按原文事实提出一个连续区块的替换稿。完整覆盖 requiredIds，保留正确既有内容。仅提出修改，不写文件。${JSON.stringify({ ...base, sources, feedback })}`, {
+  const proposal = await agent(`阅读目标手册，按原文事实提出一个连续区块的替换稿。完整覆盖 requiredIds，保留正确既有内容。仅提出修改，不写文件。落盘门禁硬性要求：候选稿 after 不得含 U+2014 破折号（——、—），需要补充说明时用冒号、逗号或句号改写。${JSON.stringify({ ...base, sources, feedback })}`, {
     label: `writer-${round}`, agentType: 'handbook-writer', schema: proposalSchema,
   })
   if (!proposal || proposal.target !== target || !exactIds(proposal.coveredIds)
