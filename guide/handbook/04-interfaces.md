@@ -133,12 +133,12 @@ receiver 参数也有作用域，规则来自第 11 讲、本讲复习：receive
 ```go
 type T struct{}
 
-func (t T) M(t string) { // 编译器报错：duplicate argument t（重复声明参数 t）
+func (t T) M(t string) { // 编译器报错：duplicate argument t（重复声明参数 t；原课 Go 版本的报错，go1.26.4 实测为 `t redeclared in this block`，另起一行 `other declaration of t` 指向 receiver 声明处）
 	// ...
 }
 ```
 
-编译器在方法体的作用域里检查标识符唯一性：同一个作用域出现了两个 `t`，报 `duplicate argument t`。想编译通过，把 receiver 参数或形参改成不同的名字即可。规范原文是：非空 receiver 标识符在方法签名中必须唯一（`doc/go_spec.html:2998-3002`）。〔TB24 p4〕
+编译器在方法体的作用域里检查标识符唯一性：同一个作用域出现了两个 `t`。原课文案是报 `duplicate argument t`；现行 go1.26.4 编译器输出为 `t redeclared in this block`（t 在此代码块中重复声明），另起一行 `other declaration of t` 指向 receiver 声明处。想编译通过，把 receiver 参数或形参改成不同的名字即可。规范原文是：非空 receiver 标识符在方法签名中必须唯一（`doc/go_spec.html:2998-3002`）。〔TB24 p4〕
 
 如果方法体的实现不需要用到 receiver 参数，参数名可以整个省略：
 
