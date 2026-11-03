@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitepress'
 import { mermaidPlugin } from './theme/mermaid-plugin'
+import { citePlugin } from './theme/cite-plugin'
 
 // golearn 文档站。内容 = notes/*.md 原文，导航按"阶段"组织（编号是写作顺序）。
 // mermaid：markdown-it 插件把 ```mermaid fence 换成 <vitepress-mermaid> 组件
@@ -20,6 +21,7 @@ export default defineConfig({
     lineNumbers: false,
     config: (md) => {
       md.use(mermaidPlugin)
+      md.use(citePlugin) // 引注页码标签行内小灰字（重写方案 §5.9，标签语法不变）
     },
   },
   themeConfig: {

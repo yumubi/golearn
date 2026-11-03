@@ -54,3 +54,11 @@
 .VPDoc.has-sidebar.has-aside .content-container {
   max-width: 1100px;
 }
+
+/* 引注页码标签：行尾小灰字（重写方案 §5.9） */
+.cite-tag {
+  color: var(--vp-c-text-3);
+  font-size: 0.78em;
+  opacity: 0.75;
+  margin-left: 0.25em;
+}
