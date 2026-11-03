@@ -459,6 +459,8 @@ func main() {
 
 多核 macOS 上的输出是 one、two、three 后面跟着三个 six（行序可能因 goroutine 调度而异）。奇怪的地方在 `data2`：为什么不是 four、five、six？〔TB24 p9-10〕
 
+末尾的 `time.Sleep(3 * time.Second)` 不是可有可无的装饰。main goroutine 一退出，整个应用程序就跟着退出〔TB31 p8〕，不给这 3 秒的话，main 大概率等不到那 6 个子 goroutine 被调度执行；它给的是 6 个子 goroutine（data1 三个加 data2 三个）被调度执行的机会。
+
 按方法本质做等价变换，把 `go v.print()` 写成方法表达式形式，参数怎么绑的一目了然（变换前后输出一致）〔TB24 p10〕：
 
 ```go
@@ -478,9 +480,48 @@ for _, v := range data2 {
 
 **版本边界**：上面的分析出自原课程，按 Go 1.21 及更早的循环变量语义讲解〔TB24 p9-11〕。Go 1.22 起，采用相应语言版本的代码里，`for` 用 `:=` 声明的循环变量每轮迭代都新建一份，`&v` 各轮指向不同变量，同样的代码在延迟调度下会输出 four、five、six，而不是三个 six（这是语言规范的修正，原课文本未涉及；本书并发一章 `guide/handbook/06-concurrency-basics.md` 有同样的提醒）。读老资料里的"三个 six"分析时，先确认它写在哪个语义阶段。
 
+〔实测〕这套新语义的预言可以直接验证：在 go1.26.4 darwin/arm64 上运行上面的原始问题代码，输出是 six、one、four、five、three、two，六个值互不相同，没有出现三个 six，两个循环各打各的元素，这正是每轮新建循环变量的直接结果。
+
 ### 修法：换接收者类型
 
-课程给的修复方法只有一行：把 `print` 的 receiver 从 `*field` 改成 `field`，程序就输出 one 到 six。〔TB24 p11-12〕原因是：receiver 变成 `field` 后，方法表达式的第一个参数类型也是 `field`，两个循环传入的都是**元素的值拷贝**：`data1` 的循环是 `field.print(*v)`，`data2` 的循环是 `field.print(v)`，每个 goroutine 在 go 语句处就拿到了自己那一轮的值，不再依赖循环变量的地址〔TB24 p14〕；这正好绕开了旧语义的循环变量复用问题。原课程把这个修法的原理留作思考题，留言区给出了与分析一致的解释。
+课程给的修复方法只有一行：把 `print` 的 receiver 从 `*field` 改成 `field`，程序就输出 one 到 six。〔TB24 p11-12〕修后的完整代码只动 receiver 这一处，其余逐行不变：
+
+```go
+package main
+
+import (
+	"fmt"
+	"time"
+)
+
+type field struct {
+	name string
+}
+
+func (p field) print() {
+	fmt.Println(p.name)
+}
+
+func main() {
+	data1 := []*field{{"one"}, {"two"}, {"three"}}
+	for _, v := range data1 {
+		go v.print()
+	}
+
+	data2 := []field{{"four"}, {"five"}, {"six"}}
+	for _, v := range data2 {
+		go v.print()
+	}
+
+	time.Sleep(3 * time.Second)
+}
+```
+
+修改后程序的输出是 one、two、three、four、five、six（因 Goroutine 调度顺序不同，你机器上的输出顺序可能与这里不同）。〔TB24 p12〕
+
+原因是：receiver 变成 `field` 后，方法表达式的第一个参数类型也是 `field`，两个循环传入的都是**元素的值拷贝**：`data1` 的循环是 `field.print(*v)`，`data2` 的循环是 `field.print(v)`，每个 goroutine 在 go 语句处就拿到了自己那一轮的值，不再依赖循环变量的地址〔TB24 p14〕；这正好绕开了旧语义的循环变量复用问题。原课程把这个修法的原理留作思考题，留言区给出了与分析一致的解释。
+
+留言区还有另一种不改 receiver 的修法：让每个 goroutine 各拿一份循环变量。迭代 `data2` 时，在循环体开头加一行 `v := v`，用本轮新建的副本遮蔽外层的循环变量，`go v.print()` 捕获的就是这份各轮各自的副本。〔TB24 p15〕
 
 ### 方法集合：判断接口实现的唯一手段
 
