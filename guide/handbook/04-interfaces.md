@@ -1,6 +1,6 @@
 # 04 接口与组合：Go 用来代替继承的全套工具
 
-> 详细程度：深入 · 约 140 分钟
+> 详细程度：深入 · 约 190 分钟
 > 材料：TB24 到 TB30 · 旧长版：`notes/p2-lang-core.md`、`notes/p30-methods-interfaces.md`
 > 前置：你写过 Java/Kotlin/Rust/TS 中任意一门的面向对象或 trait 代码
 
@@ -295,13 +295,174 @@ func main() {
 
 如果以后增加一个站内信类型，只要它提供符合要求的 `Send(string)` 方法，就可以传给现有的 `Welcome`，不必修改 `Welcome` 本身。这就是接口在这里带来的好处：**调用方依赖需要的行为，而不是绑定某一种实现。**
 
+回看 `Sender` 的声明形式。接口类型由 `type` 和 `interface` 关键字定义的一组方法集合构成，方法集合唯一确定这个接口类型所表示的接口；集合里的每个方法，形式上是不带 `func` 关键字的“函数名 + 函数签名（参数列表 + 返回值列表）”的组合。之所以称它们为“方法”，是从接口实现者的角度说的。〔TB28 p3〕声明方法时，参数列表不需要写出形参名字，返回值列表同样如此：形参名字与返回值列表中的具名返回值，都不作为区分两个方法的凭据。对 `Sender` 来说，`Send(message string)`、`Send(s string)` 与 `Send(string)` 描述的是同一个方法。原课用一个含两个方法的接口演示了这条规则：
+
+```go
+type MyInterface interface {
+	M1(int) error
+	M2(io.Writer, ...string)
+}
+```
+
+`M1(int) error`、`M1(a int) error`、`M1(n int) error` 是同一个方法；`M2(io.Writer, ...string)`、`M2(w io.Writer, strs ...string)`、`M2(w io.Writer, args ...string)` 同理。这几种写法定义的接口彼此等价。〔TB28 p3〕
+
 ### 类型是什么时候实现接口的？
 
 再看一遍 `Email`：我们没有在定义它的时候写“实现 `Sender`”，甚至可以先写好 `Email`，后来才定义 `Sender`。为什么它仍然能传进去？
 
-因为 Go 检查的是方法。`Sender` 要求 `Send(string)`，而 `Email` 和 `SMS` 都有签名匹配的 `Send` 方法，所以它们满足 `Sender` 接口。这称为**隐式实现**。〔TB28 p2-8〕
+因为 Go 检查的是方法。`Sender` 要求 `Send(string)`，而 `Email` 和 `SMS` 都有签名匹配的 `Send` 方法，所以它们满足 `Sender` 接口。这称为**隐式实现**。〔TB28 p2-5〕
 
 签名必须匹配。例如，如果某个类型的方法是 `Send(message string) error`，它比接口要求多了一个返回值，就不能直接作为上面的 `Sender` 使用。编译器会在赋值或传参时检查，而不是等到调用时才发现。
+
+这个判定可以写得更精确。Go 规定：如果一个类型 `T` 的方法集合是某接口类型 `I` 方法集合的等价集合或超集，就说类型 `T` 实现了接口类型 `I`，`T` 的变量就可以作为合法右值赋给 `I` 的变量。〔TB28 p5〕方法集合怎么求，特别是 `T` 与 `*T` 的差别，是下一节的主题；在那里，这条规则会被用来解释为什么指针能实现接口而值不行。
+
+### 方法不能重名：判定依据是名字加签名
+
+接口方法还有两条硬性规则：方法必须具名，并且方法名在这个接口类型的方法集合中是唯一的。〔TB28 p3-4〕把 `M1(int) error` 和 `M1(a int) error` 同时写进一个接口，形参名不同也救不了它：对显式声明的重复方法，编译器直接报 `duplicate method`（$GOROOT/src/cmd/compile/internal/types2/typeset.go:227-230）。
+
+同名冲突更常见的触发场景是接口嵌入。Go 1.14 版本以后，允许嵌入的不同接口类型的方法集合存在交集，但前提是交集中的方法不仅名字要一样，函数签名部分也要保持一致，也就是参数列表与返回值列表都要相同，否则编译器照样报错。〔TB28 p3-4〕看一个会报错的例子（裸类型名是接口嵌入，语义是把被嵌接口的方法集合并入自己，第六节展开）：
+
+```go
+type Interface1 interface {
+	M1()
+}
+
+type Interface2 interface {
+	M1(string)
+	M2()
+}
+
+type Interface3 interface {
+	Interface1
+	Interface2 // 编译器报错：duplicate method M1
+	M3()
+}
+```
+
+Interface3 同时嵌入 Interface1 和 Interface2，并声明了自己的 M3()。报错由 Interface1 的 M1() 与 Interface2 的 M1(string) 冲突引发：两者名字相同，但参数列表不同（一个无参，一个接受 string），签名不一致。判定冲突的依据不是“名字重复”本身：名字相同、签名相同，交集合法；名字相同、签名不同，才报 duplicate method。Interface3 自己声明的 M3() 与这场冲突无关。现行编译器在类型集计算中做这项检查：Go 1.14 语义下，嵌入的方法签名不一致（不是 Identical）才报 duplicate method（$GOROOT/src/cmd/compile/internal/types2/typeset.go:240-242）。〔TB28 p3-4〕
+
+第六节还会出现一组同名的 Interface1 到 Interface4，那里的 Interface2 声明的是 M1() 而不是 M1(string)，与本例正好互补：签名相同的交集自 Go 1.14 起合法，签名不同的交集始终非法。
+
+上面例子里的方法都是首字母大写的导出方法。接口方法集合中放入首字母小写的非导出方法也是合法的，标准库里能找到这样的例子，比如 context 包的 canceler 接口，它是可以被直接取消的 context 类型，实现者是 `*cancelCtx` 与 `*timerCtx`：〔TB28 p4〕
+
+```go
+// $GOROOT/src/context/context.go
+// A canceler is a context type that can be canceled directly. The
+// implementations are *cancelCtx and *timerCtx.
+type canceler interface {
+	cancel(removeFromParent bool, err, cause error)
+	Done() <-chan struct{}
+}
+```
+
+原课引用的版本里 cancel 只有两个参数（cancel(removeFromParent bool, err error)），现行源码多了一个 cause 参数。〔TB28 p4〕〔$GOROOT/src/context/context.go:417-420〕这样的例子在标准库中并不多；从中可以总结：如果接口类型的方法集合包含非导出方法，该接口类型自身通常也是非导出的，应用范围局限于包内，日常实际编码中极少使用，了解即可。〔TB28 p4-5〕
+
+### 空接口：方法集合为空的接口
+
+把判定规则推到极端：如果一个接口类型一个方法都没有，它的方法集合就是空集合：
+
+```go
+type EmptyInterface interface {
+}
+```
+
+方法集合为空的接口类型被称为空接口类型。任何类型的方法集合都是空集合的超集，按判定规则，任何类型都实现了空接口。〔TB28 p5-6〕通常不需要显式定义空接口类型，直接使用 `interface{}` 这个类型字面值作为所有空接口类型的代表：
+
+```go
+var i interface{} = 15 // ok
+i = "hello, golang"    // ok
+
+type T struct{}
+var t T
+i = t  // ok，结构体值
+i = &t // ok，指针
+```
+
+同一个变量 `i` 先后接受了 int、字符串、结构体值和指针，全部合法。〔TB28 p6〕空接口可接受任意类型值作为右值，这使它成为 Go 加入泛型语法之前唯一一种具有“泛型”能力的语法元素：包括标准库在内的一些通用数据结构与算法，都用 `interface{}` 作为数据元素的类型，无需为每种元素类型单独复制一份代码。〔TB28 p6〕本章第八节还会回到它：`any` 就是 `interface{}` 的别名。
+
+### 接口类型变量：默认值 nil
+
+接口类型一旦定义，就和其他 Go 类型一样可以用于声明变量：
+
+```go
+var err error    // err 是一个 error 接口类型的实例变量
+var r io.Reader  // r 是一个 io.Reader 接口类型的实例变量
+```
+
+类型为接口类型的变量被称为接口类型变量；没有被显式赋予初值时，接口类型变量的默认值为 nil。〔TB28 p5〕要为接口类型变量显式赋予初值，就必须选择合法的右值：按实现判定规则，右值类型的方法集合必须是接口方法集合的等价集合或超集，即右值类型实现了该接口。〔TB28 p5-6〕`Email{}` 与 `SMS{}` 能传给 `Welcome`，而没有 `Send` 方法的类型不能，依据正是这条规则。
+
+### 类型断言：赋值的逆操作
+
+接口变量赋值有一个“逆操作”：通过接口类型变量还原它的右值的类型与值信息，这个过程称为类型断言（Type Assertion）。类型断言通常使用下面的语法形式，其中 `i` 是某个接口类型变量：〔TB28 p6〕
+
+```go
+v, ok := i.(T)
+```
+
+当 `T` 是非接口类型且 `T` 是想要还原的类型时，这句代码的含义是：断言存储在接口变量 `i` 中的值的类型为 `T`。〔TB28 p6-7〕这种写法通常叫 comma-ok 形式，结果有两种：如果 `i` 之前被赋予的值确为 `T` 类型，执行后 `ok` 为 `true`，`v` 的类型为 `T`，值是 `i` 之前的右值；如果不是 `T` 类型，`ok` 为 `false`，`v` 的类型仍然是要还原的 `T`，值则是 `T` 的零值。〔TB28 p7〕类型断言也支持单值形式 `v := i.(T)`：一旦 `i` 之前被赋予的值不是 `T` 类型，这条语句将抛出 panic；成功时与 comma-ok 形式一致。由于可能出现 panic，原课并不推荐这种形式。〔TB28 p7〕
+
+把 int64 的 13 装进空接口变量，四种写法的结局一目了然（片段放在 main 函数里、import "fmt" 后即可运行）：〔TB28 p7〕
+
+```go
+var a int64 = 13
+var i interface{} = a
+
+v1, ok := i.(int64)
+fmt.Printf("v1=%d, the type of v1 is %T, ok=%t\n", v1, v1, ok) // v1=13, the type of v1 is int64, ok=true
+v2, ok := i.(string)
+fmt.Printf("v2=%s, the type of v2 is %T, ok=%t\n", v2, v2, ok) // v2=, the type of v2 is string, ok=false
+v3 := i.(int64)
+fmt.Printf("v3=%d, the type of v3 is %T\n", v3, v3) // v3=13, the type of v3 is int64
+v4 := i.([]int) // panic: interface conversion: interface {} is int64, not []int
+fmt.Printf("the type of v4 is %T\n", v4)
+```
+
+`v2` 那行值得多看一眼：断言失败，`ok` 为 `false`，`v2` 的类型仍是 `string`，值是 string 的零值（空字符串），程序继续往下走；`v4` 用单值形式断言一个从未装入过的 `[]int`，直接 panic，最后的 `Printf` 不会执行。
+
+当 `T` 本身是接口类型时，断言语义随之改变：不再是“值的类型恰为 `T`”，而是断言 `i` 的值实现了接口类型 `T`。断言成功时，变量 `v` 的类型为 `i` 的值的类型（也就是第四节的动态类型），而并非接口类型 `T`：〔TB28 p7〕
+
+```go
+package main
+
+import "fmt"
+
+type MyInterface interface {
+	M1()
+}
+
+type T int
+
+func (T) M1() {
+	println("T's M1")
+}
+
+func main() {
+	var t T
+	var i interface{} = t
+
+	v1, ok := i.(MyInterface)
+	if !ok {
+		panic("the value of i is not MyInterface")
+	}
+	v1.M1()
+	fmt.Printf("the type of v1 is %T\n", v1) // the type of v1 is main.T
+}
+```
+
+程序先输出 T's M1（`v1.M1()` 的结果），再输出 the type of v1 is main.T：`%T` 打印的是 `main.T`，不是 `MyInterface`。断言成功只说明 `i` 中的值实现了 `MyInterface`，`v1` 拿到的是那个值本身，它的类型是装进去时的 `T`，所以还能直接调用 `v1.M1()`。〔TB28 p7-8〕
+
+断言失败又是另一番景象。在上面 `main` 的末尾接着写：
+
+```go
+i = int64(13)
+v2, ok := i.(MyInterface)
+fmt.Printf("the type of v2 is %T\n", v2) // the type of v2 is <nil>
+// v2 = 13 // 去掉注释后无法通过编译：cannot use ... as type MyInterface in assignment
+```
+
+失败时，`v2` 的类型信息为接口类型 `T`（这里是 `MyInterface`），值为 nil；但 `%T` 打印出来的是 `<nil>`，单看这行输出看不出 `v2` 的类型。把注释行 `v2 = 13` 打开，编译器的赋值检查会拒绝它，报错信息里带着 `v2` 的静态类型 `MyInterface`，类型信息由此暴露（引文出自原课文案，现行编译器的具体报错文字可能略有出入）。〔TB28 p8〕`%T` 帮不上忙的原因：它打印的是动态类型，断言失败的 `v2` 还没有动态类型，静态类型只存在于编译器的检查里。
+
+接口类型的类型断言还有一个变种 type switch，按动态类型分发，01 节“TB20 switch”小节已经讲过，可以回去复习。〔TB28 p8〕
 
 ### 这和鸭子类型有什么关系？
 
