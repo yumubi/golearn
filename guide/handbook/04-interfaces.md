@@ -1,6 +1,6 @@
 # 04 接口与组合：Go 用来代替继承的全套工具
 
-> 详细程度：深入 · 约 95 分钟
+> 详细程度：深入 · 约 140 分钟
 > 材料：TB24 到 TB30 · 旧长版：`notes/p2-lang-core.md`、`notes/p30-methods-interfaces.md`
 > 前置：你写过 Java/Kotlin/Rust/TS 中任意一门的面向对象或 trait 代码
 
@@ -866,6 +866,92 @@ true
 
 除了通过接口替换行为，程序还经常需要复用已有实现。Go 可以在结构体中**嵌入**另一个类型：写类型名而不另起字段名。被嵌入的值仍是一个字段；在没有名称冲突时，外层可以直接访问它的字段和方法。例如 `s.Read` 可以表示 `s.Reader.Read`。这种方法提升方便了访问，但不建立父子类型关系。〔TB26 p9-10〕
 
+### 接口嵌入：基于已有接口构建新接口
+
+原课把"在一个类型的定义中嵌入其他类型"统称为类型嵌入，并区分两种形式：接口类型的类型嵌入与结构体类型的类型嵌入。上一段说的是结构体一侧，这里先看两种里更简单的一种：接口嵌入接口；结构体一侧随后展开。〔TB26 p2〕
+
+先用一对接口直观感受。`E` 声明两个方法：
+
+```go
+type E interface {
+	M1()
+	M2()
+}
+```
+
+再定义一个方法集合为 M1、M2、M3 的接口 `I`。平铺的写法是逐个列出三个方法；由于其中的 M1、M2 与 `E` 的方法完全相同，也可以把这两个方法换成嵌入 `E`，写成 `type I interface { E; M3() }`。带嵌入的定义与平铺 M1、M2、M3 的定义等价：接口类型嵌入的语义，就是新接口把嵌入接口的方法集合并入自己的方法集合。〔TB26 p2-3〕
+
+那为什么不在接口里平铺方法列表？按 Go 惯例，接口只包含少量方法，常常只有一个。方法一多，平铺的定义既难读，也无法复用已有接口；嵌入让新接口站在已有接口之上组合而成。这是 Go 基于已有接口类型构建新接口类型的惯用法，也是组合设计哲学的体现。〔TB26 p3-4〕
+
+标准库里最典型的组合在 `io` 包。本章第二节已经用过 `io.Writer`，它就是只含一个方法的基本接口；`io` 包用 Reader、Writer、Closer 这三个单方法接口组合出一系列大接口：〔TB26 p4〕
+
+```go
+// $GOROOT/src/io/io.go
+
+type Reader interface {
+	Read(p []byte) (n int, err error)
+}
+
+type Writer interface {
+	Write(p []byte) (n int, err error)
+}
+
+type Closer interface {
+	Close() error
+}
+
+type ReadWriter interface {
+	Reader
+	Writer
+}
+
+type ReadCloser interface {
+	Reader
+	Closer
+}
+
+type WriteCloser interface {
+	Writer
+	Closer
+}
+
+type ReadWriteCloser interface {
+	Reader
+	Writer
+	Closer
+}
+```
+
+`io.ReadWriter` 由 Reader 和 Writer 嵌入而成，方法集合就是 Read 和 Write 两个方法；要一个同时支持读、写、关闭的接口，就照 `ReadWriteCloser` 的写法把三个基本接口都嵌入进去。
+
+这种组合方式有一段历史约束要交代。Go 1.14 之前，新接口嵌入多个接口类型时有两条限制：各嵌入接口的方法集合不能有交集；嵌入接口方法集合里的方法名，也不能与新接口中其他方法同名。违反任意一条，编译器都报 duplicate method：〔TB26 p5〕
+
+```go
+type Interface1 interface {
+	M1()
+}
+
+type Interface2 interface {
+	M1()
+	M2()
+}
+
+type Interface3 interface {
+	Interface1
+	Interface2 // Error: duplicate method M1
+}
+
+type Interface4 interface {
+	Interface2
+	M2() // Error: duplicate method M2
+}
+
+func main() {
+}
+```
+
+这段代码在 Go 1.12.7 下无法编译。两处报错的原因不同：Interface3 是因为嵌入的 Interface1 与 Interface2 方法集合有交集，交集是 M1；Interface4 是因为它自己的方法 M2，与嵌入接口 Interface2 里的方法 M2 重名。自 Go 1.14 起，这些约束被去除了：原作者用 Go 1.17 运行同一示例不再得到编译错误；本机 go1.26.4（darwin/arm64）也实测复核过，Interface1 与 Interface2 这两个都含 M1 的接口嵌入后编译通过，没有 duplicate method 报错。约束解除放松的是编译检查，"方法集合并入"的语义本身没有变化。原课收束说，接口类型的类型嵌入比较简单，把握好"方法集合并入"这个语义即可。〔TB26 p5〕
+
 关键差别要用代码看：
 
 ```go
@@ -900,6 +986,42 @@ hi child
 ```
 
 `c.Hello()` 实际调用 `Base.Hello`，接收者是 `c.Base`。因此，方法内部的 `b.Who()` 调用的是 `Base.Who`；外层定义的 `Child.Who` 不会改变它。相比之下，独立函数 `Hello` 接受 `Whoer` 接口，传入 `c` 后调用的是 `Child.Who`。接口调用可以实现多态，嵌入本身不提供继承式重写。
+
+方法调用的绑定不受嵌入影响，方法集合却会因嵌入而扩充。嵌入对类型的要求两边不一样：接口类型只能嵌入接口类型，结构体则既可以嵌入自定义类型，也可以嵌入接口类型。用本章第三节定义过的 `dumpMethodSet` 看看结构体嵌入接口类型后会发生什么，其中 `T` 自身只声明了方法 M3：〔TB26 p10-11〕
+
+```go
+type I interface {
+	M1()
+	M2()
+}
+
+type T struct {
+	I
+}
+
+func (T) M3() {}
+
+func main() {
+	var t T
+	var p *T
+	dumpMethodSet(t)
+	dumpMethodSet(p)
+}
+```
+
+```text
+main.T's method set:
+- M1
+- M2
+- M3
+
+*main.T's method set:
+- M1
+- M2
+- M3
+```
+
+`T` 原本只有 M3，嵌入 `I` 后，`I` 的方法集合并入了 `T` 的方法集合；又因为 `*T` 的方法集合包括 `T` 的方法集合（第三节刚得出的规则），所以 `T` 与 `*T` 的方法集合都包含 M1、M2、M3。结论：**结构体类型的方法集合，包含嵌入的接口类型的方法集合**。按第三节的判定条件，`T` 和 `*T` 便都实现了要求这三个方法的接口，尽管 `T` 对 M1、M2 一行实现代码都没写。本机 go1.26.4 实测输出与上面一致，两个类型各 3 个方法。〔TB26 p11〕那如果嵌入的多个接口方法集合出现交集、结构体自己又没实现交集里的方法，调用时会怎样？这个问题留到后面展开。
 
 方法提升也影响接口实现，但要注意遮蔽和同层名称冲突。在不存在冲突时，结构体 `S` 嵌入 `T`：`S` 提升 `T` 的值接收者方法，`*S` 还提升 `*T` 的指针接收者方法；如果嵌入的是 `*T`，两者都提升 `T` 和 `*T` 的方法。〔TB26 p15-20〕
 
