@@ -1,232 +1,2430 @@
 <doc>
-  <h1 id="ThEjgf5Q">澄清：用 Ryugi 风格重写 Go 手册的澄清文档</h1>
-  <p id="vJQOGP5v"><b>Round 2 已收口</b>——你的 4 条评论处理见 Round 2 一节的逐条回应；机器可验证的部分（机制深度、修辞尺度、引注保留、范围扩大到全部下载教程）已直接生效。</p>
+  <h1 id="ThEjgf5Q">04 章完整候选：方法、接口与组合</h1>
+  <p id="vJQOGP5v">设计已批准，完整章稿已准备好。请阅读下方候选、评论具体段落，并在“章级验收”提交；正式教程、站点镜像与台账尚未修改。已批准设计与此前样稿保留在页面后部的展开区。</p>
   <alert id="1B4n6imk" type="important">
-    <p>还差 2 件事：① 样张 C 的 Java↔Go 对照表被你判&quot;不适合人类阅读&quot;——我在下面给了一版重写的候选，请看 Round 2 的&quot;样张 C 重造&quot;；② 全部讨论收口后我把本文档收敛成正式设计方案。文档仍是讨论场所，继续用评论说话。</p>
+    <p>本轮需要你决定的是整章阅读体验是否通过，而不是再次选择风格方向。通过后才进入正式 handbook 批审；机器门禁未通过的提案仍不能落盘。</p>
   </alert>
-  <table id="JKOwFiud">
-    <tr>
-      <th>
-        <p>#</p>
-      </th>
-      <th>
-        <p>待你决定</p>
-      </th>
-      <th>
-        <p>我的推荐</p>
-      </th>
-    </tr>
-    <tr>
-      <td>
-        <p>Q7</p>
-      </td>
-      <td>
-        <p>机制对照讲多深</p>
-      </td>
-      <td>
-        <p>讲到运行时行为（itab/vtable/方法集合），汇编留链接</p>
-      </td>
-    </tr>
-    <tr>
-      <td>
-        <p>Q8</p>
-      </td>
-      <td>
-        <p>修辞尺度</p>
-      </td>
-      <td>
-        <p>禁悬念标题与卖萌；保问题先行、例子即跑、失败直讲</p>
-      </td>
-    </tr>
-    <tr>
-      <td>
-        <p>Q9</p>
-      </td>
-      <td>
-        <p>提纲挈领怎么落地</p>
-      </td>
-      <td>
-        <p>每节开头三件套：对照表+问题清单+节间依赖</p>
-      </td>
-    </tr>
-    <tr>
-      <td>
-        <p>Q10</p>
-      </td>
-      <td>
-        <p>重写批次细节</p>
-      </td>
-      <td>
-        <p>before 取当前 handbook 文本；26/27 节豁免</p>
-      </td>
-    </tr>
-  </table>
-  <p id="b4EuohJv">另外两件事请直接表态：样张 C（提纲开法）和样张 D（机制讲法）像不像你要的样子；artboard 的 <a href="http://localhost:27319/artboard/A6NDYNECx0qEqVgnLiFCD">B 档方向</a>已按你的两点修正更新。</p>
-  <h2 id="wnsfoCLh">我对需求的理解</h2>
-  <h3 id="z0F-Yt2O">已知事实（来自仓库与历史会话，已核实）</h3>
-  <ul id="HlnpNgIJ">
-    <li>仓库是 golearn Go 教程：主路径 <code>guide/handbook/</code> 27 节 + 细节库 <code>notes/</code> 35 章（约 1.3 万行），另有 <code>docs/</code> 站点镜像。</li>
-    <li>你 10-27 起对现状语言的判断：&quot;写的一塌糊涂、东一斧头西一榔头、蜻蜓点水、问题没说到点子上&quot;，并点名廖雪峰的 js/python/java 教程和 dbwu/eddycjy 的 Go 文章作为风格参照。</li>
-    <li>当时已形成共识的讲法要领（你在 10-27 会话里认可的）：从会的代码出发 → 一次引入一个新东西 → 每段代码立刻跑 → 用小失败制造&quot;为什么&quot; → 失败后才给术语和原则；对 Java/TS/Python 背景读者建立体系。</li>
-    <li>仓库有批审机器：条目级台账 <code>audit/entry-ledger.jsonl</code> 共 3713 条，当前 <b>已落盘(双审通过) 263</b>、待审 2677、待清点 591、有理由省略 182。改 <code>guide/handbook/</code> 默认走 handbook-batch 双审工作流；直改不允许在台账标&quot;已审&quot;。</li>
-    <li>10-28 你在&quot;方法本质&quot;会话里看过按廖雪峰套路即兴重讲的内容（三个 six、receiver 决策），反馈是&quot;大体满意、深入性认可&quot;；那份内容没落盘，只是会话演示。</li>
-  </ul>
-  <h3 id="v-YWJiWi">我的猜测（标了 ⚠ 的是我替你补的，需要你确认或纠正）</h3>
-  <ul id="cEi65Gyq">
-    <li>⚠ &quot;语言风格&quot;指叙事节奏与口语化程度（问题先行、小失败推进、比喻、第二人称&quot;你&quot;），不是指排版或术语翻译。<b>已被 Round 1 部分推翻：风格之外还必须包含&quot;提纲挈领的机制分析&quot;（见 Settled S5）。</b></li>
-    <li>⚠ 这次重写主要动 <code>guide/handbook/</code>；<code>notes/</code> 保持细节库定位，暂不在范围内。</li>
-    <li>⚠ 重写仍要走批审机器（双审 + 台账回填），你不会为了风格放弃质量门禁。</li>
-  </ul>
-  <h3 id="L9RABK97">待确认</h3>
-  <ul id="jGXw2oYw">
-    <li>重写对象、验收标准、批审机器是否保留、节奏与范围——见 Round 1。</li>
-  </ul>
-  <h2 id="tYu8usrP">已经确定的决定</h2>
-  <ul id="cZXFlIzs">
-    <li><b>theirs</b> 风格基准：廖雪峰式教学节奏（问题先行、逐步演进、小失败、术语后置），参照 dbwu/eddycjy 的语言口语度。→ 来自 10-27 会话。</li>
-    <li><b>theirs</b> 读者画像不变：有 Java/TS/Python 背景的后端工程师，要建立 Go 体系而非查规则。→ 来自 skill 定义与你 10-27 反馈。</li>
-    <li><b>theirs</b> 完成判定不变：只有双审落盘（runId + 回执）算改完。→ 来自 skill 与 CROSS-MACHINE 纪律。</li>
-    <li><b>mine</b> 本澄清过程用 document artifact 承载，视觉对比用 artboard 承载；本文档收敛后整理成完整设计方案。</li>
-    <li><b>theirs</b> S1 · 重写对象：go-tutorial-writing skill 管辖的教程与手册（handbook 全 27 节为主线，notes 不在本次范围；docs 镜像按仓库规则同步）。→ 你对 Q1 的回答。</li>
-    <li><b>theirs</b> S2 · 验收基准：完整设计方案以&quot;目录/索引能一眼看出体系&quot; + &quot;机制讲解到实现层&quot;为双重标准，读者测试按 skill 的完整性规则执行。→ 你对 Q1 的回答。</li>
-    <li><b>theirs</b> S3 · 风格档位：B 档（廖雪峰节奏）但修两处——不讲&quot;先让问题撞墙&quot;式的悬念修辞；机制对照要提纲挈领、成体系，不做零碎点缀。→ 你对 Q2/Q3 的回答。</li>
-    <li><b>theirs</b> S4 · 试产章：04-interfaces（Q4 无人反对，按推荐）。→ 推荐生效。</li>
-    <li><b>theirs</b> S5 · 新增硬要求：面向 Java 背景，接口与多态一节必须详细对比 Java 与 Go 的多态实现机制（显式 implements + 单一 vtable vs 隐式方法集合 + itab），从 Java 工程师视角组织。→ 你 Round 1 反馈原文。</li>
-    <li><b>mine</b> S6 · Q5（已落盘条目重走双审）与 Q6（按篇分组推进）按推荐视为接受，细节在 Round 2 Q10 确认。→ 无人反对。</li>
-  </ul>
-  <h2 id="RBvO1aJZ">Round 1：影响整体方向的问题</h2>
-  <h3 id="bu_DT-BP">Q1（分叉点）重写对象和验收基准是什么？</h3>
-  <p id="JRqQdECT"><b>问题：</b>&quot;用 Ryugi 风格重写澄清文档&quot;的对象和&quot;改好了&quot;的标准是什么？</p>
-  <p id="iBbrjq7b"><b>我的推荐：</b>对象 = <code>guide/handbook/</code> 全部 27 节（notes/ 不动）；验收 = 读者测试（只读新文能答出：为什么需要此机制、例子发生了什么、何时用、边界在哪），批审机器照旧作为落盘门禁。</p>
-  <p id="a8CecEhZ"><b>理由：</b>27 节是读者主路径；notes 是回查库，风格改造收益低、破坏&quot;可引用细节&quot;的风险高。验收若只看&quot;读起来像不像廖雪峰&quot;，审稿 agent 无法执行；读者测试可进 handbook-learner 审稿角色，机器能跑。台账 263/3713 已落盘，风格重写和已落盘条目如何兼容（重写=新一轮批次）是本问题的直接推论，等你答复后进 Round 2。</p>
-  <ul id="BBr--PQA" type="check">
-    <li checked="true">对象含 notes/</li>
-    <li checked="false">验收只看风格观感，不设读者测试</li>
-  </ul>
-  <h3 id="PXtu0ATC">Q2 风格基准选哪一档？</h3>
-  <p id="6HUBIy_2"><b>问题：</b>现状（A）和廖雪峰节奏（B）之间选哪个作为全书基准？</p>
-  <p id="F1CpdEYz"><b>我的推荐：</b>B，但口语浓度取&quot;中档&quot;——问题先行和小失败保留，表情符号、网络梗、&quot;💀&quot;这类元素不用；第二人称&quot;你&quot;可以用，但不写成段子。</p>
-  <p id="70e6I6QE"><b>理由：</b>你点名参照的廖雪峰文章本身没有表情包，靠的是节奏而不是卖萌；dbwu/eddycjy 的口语度也在中档。artboard 上两块板子就是 A/B 的对照，请在那里选。如果&quot;中档&quot;不对，直接在评论里说&quot;再放一点&quot;或&quot;再收一点&quot;。</p>
-  <h3 id="Ap4i26rY">Q3 比喻和跨语言对照的密度？</h3>
-  <p id="7mcf2CnF"><b>问题：</b>Java/TS/Python 类比（如&quot;接口 = 带静态检查的鸭子类型&quot;）每节出现多少次合适？</p>
-  <p id="LPfzcgME"><b>我的推荐：</b>每个新概念第一次出现时给一次对照（单独小段落，说明类比边界），之后纯 Go 语境推进；每节类比总量 2-4 处。</p>
-  <p id="S_295WQK"><b>理由：</b>10-27 你特别肯定了&quot;从其他语言背景建立体系&quot;的价值；但 04 章现状已经示范了类比边界写法（&quot;这种说法是帮助理解的类比，不意味着……&quot;），逐条对照会淹没主线，回归 dbwu 式密集对照反而打断推导。</p>
-  <h4 id="5oWejn_9">Q4 先拿哪一节试产？</h4>
-  <p id="4CbblYFj"><b>问题：</b>全量重写前，先用哪一节跑通&quot;新风格 + 批审&quot;的完整闭环？</p>
-  <p id="Sapmcxxy"><b>我的推荐：</b>04-interfaces。它是你最初点名&quot;写的一塌糊涂&quot;的章节，已有 8 条已落盘条目可对照新旧效果，且 10-28 会话已有一份即兴重讲素材可参考。</p>
-  <p id="I7I0G_SY"><b>理由：</b>试产章选你最有意见的，校准成本最低；跑通后按它定 PROMPT 模板，再批量推其余章节。</p>
-  <h4 id="HwilnT3Y">Q5 已落盘的 263 条怎么处理？</h4>
-  <p id="70l376ch"><b>问题：</b>已经双审落盘的条目（多在 18/11/13/03 章），风格重写时要不要重过一遍？</p>
-  <p id="ucb8V0uS"><b>我的推荐：</b>重写触碰到的章节，把该章已落盘条目并入新一轮批次重走双审（处理状态记&quot;风格重写&quot;）；没触碰的章节不动。台账进度不回退，旧 runId 保留。</p>
-  <p id="m-FHfBun"><b>理由：</b>风格重写会改写这些条目的承载句，after 变了双审就失效，按 skill 的 before/after 哈希规则本来也过不了 apply；主动声明比事后被发现好。</p>
-  <h4 id="19pUnN1k">Q6 交付节奏？</h4>
-  <p id="HEOJE8GR"><b>问题：</b>试产章通过后，其余章节按什么节奏推进？</p>
-  <p id="G1LZFFUe"><b>我的推荐：</b>按 README 的篇分组推进：心智模型(01-03) → 核心范式(04-09) → 服务工程(10-16) → 规模与演进(17-21) → 交付与运行(22-23) → 项目线(24-25)。每完成一组提交并汇报，允许你随时插队调整优先级。</p>
-  <p id="j93fnXyH"><b>理由：</b>前置依赖顺着读者路径（26 节路线也是这个顺序）；按组提交让 docs 镜像和时长重算有稳定节奏。</p>
-  <details id="TAR0U5ah" summary="本轮不问的问题（依赖 Round 1 答案，已全部进入 Round 2）" open="false">
-    <p>试产章的新 PROMPT 模板怎么写、口语浓度如何在审稿 issue 里量化、docs 镜像同步时机、26/27 两节路线与速查是否豁免重写——已并入 Round 2 Q10 与收敛阶段。</p>
+  <h2 id="P4ZFSLw5">完整章级候选 · 请直接评论正文</h2>
+  <p id="qE2tS-lS">这次不再只看短样张：下面是完整 04 章候选。先检查它是否是一条可跟随的讲解，再评论具体跳步、重复或机制不清之处。原稿的知识与边界按覆盖记录核对；不要把候选准备完成当成正式正文已经落盘。</p>
+  <h2 id="yqhXjJXG">04 方法、接口与组合：从调用行为到运行机制</h2>
+  <p id="btHHufUR">阅读前提：写过一种语言的函数、结构体或类，了解基本指针与接口概念即可；本章在具体调用中补齐 Go 的规则。程序示例按独立文件或文中指明的替换片段使用，不把全文同名类型放进一个包。现代实现观察使用 Go 1.26.4 darwin/arm64，Java 对照使用 OpenJDK 17.0.19；历史代码会另行标注。</p>
+  <h2 id="Q8fEbh63">从类型的方法，走到可组合的能力</h2>
+  <p id="rVBf66hy">给用户发欢迎通知，最初可以直接调用邮件发送代码；需要短信时，我们希望保留欢迎流程，只替换发送方式。写出一段数据也有相似的需求：文件、网络连接和内存缓冲区不是同一种类型，但调用者可能只关心它能不能写入字节。本章用通知串起接口的使用，再用写入场景看清真实的接口边界。不是所有差异都该抽象成接口；这里要解决的是调用者确实需要在不同实现之间保持同一套调用方式的问题。</p>
+  <p id="3tvQSSge">Go 没有 Java 那样的类声明和类继承树。它把数据放在类型里，把操作通过方法绑定到类型上，再用接口表达调用方需要的能力。结构体嵌入承担一部分纵向组合，接受接口参数的函数承担横向组合；这两者不等于继承。方法因此不只是面向对象语法的缩写，它也是组合设计在类型系统中的支点。〔TB24 p2〕</p>
+  <p id="a_PoCOvA">接下来的路径是连续的：先声明并调用方法，再让 Email 和 SMS 共同参与 Welcome 流程；随后把方法调用还原成参数传递，解释值、指针和方法集合；最后检查接口值与 nil、嵌入、包装器和中间件。方法承载的执行逻辑仍可按函数调用理解，不需要另造一套参数传递规则。反射在本章只用作观察方法的工具，完整反射与 trace 工具留在后续专题。</p>
+  <h2 id="6nXzjS6h">一、先给类型添加方法</h2>
+  <h3 id="SdxYvbT9">读取一个值，与改变原来的值</h3>
+  <p id="n_2-Nbcx">发送通知之前，先用一个计数器观察方法的基本行为。它只有一个整数字段，读它和改它的区别不会被网络调用掩盖。这是一个可以独立运行的程序：</p>
+  <codeblock id="Mhn4bIIr" lang="go">package main
+
+import &quot;fmt&quot;
+
+type Counter struct {
+    value int
+}
+
+func (c Counter) Value() int {
+    return c.value
+}
+
+func (c *Counter) Add(n int) {
+    c.value += n
+}
+
+func main() {
+    var c Counter
+    c.Add(3)
+    fmt.Println(c.Value()) // 3
+}
+</codeblock>
+  <p id="98g0kw6P">func 与方法名之间多出的括号是接收者段，其中的 c 是接收者参数，英文叫 receiver。Value 的接收者类型是 Counter，Add 的接收者类型是 *Counter。调用时，接收者写在点号左边：c.Value()、c.Add(3)。方法不是写在结构体声明内部的成员，而是在同一个包中单独声明，再通过接收者与类型关联。〔TB24 p2-3〕</p>
+  <p id="S26Vu1F2">Go 的参数按值传递，接收者也一样。调用 Value 时传入 Counter 的副本；调用 Add 时传入指针的副本，这个指针仍指向原计数器，所以 c.value += n 改的是原值。如果把 Add 的接收者改成 Counter，增加的就只是方法里的副本。这里的“副本”不是深拷贝：结构体中若含有 slice、map 或指针，复制这些字段后仍可能访问同一份底层数据。因此值接收者不等于不可变或线程安全。〔TB25 p2-4〕</p>
+  <p id="5bQijkTJ">调用也能写成 Counter.Value(c) 和 (*Counter).Add(&amp;c, 3)。此时接收者显式排到第一个参数的位置。第三节会用这套写法分析 goroutine 接收到的究竟是值还是地址，现在先把它当作同一个调用的另一种表示。〔TB24 p6-8〕</p>
+  <h3 id="nMQ1x3rW">一个方法声明里，哪些部分与函数相同</h3>
+  <p id="2vRM1H2I">标准库 net/http 的 TLS 服务启动方法使用同样的结构。下面摘出声明签名，并非一个可单独编译的完整实现：</p>
+  <codeblock id="clHwHIcv" lang="go">func (s *Server) ListenAndServeTLS(certFile, keyFile string) error
+</codeblock>
+  <p id="-WUtZl6p">普通函数的 func、名字、参数列表、返回值列表、函数体五个部分仍然存在，只在名字之前增加了接收者段，成为六个部分。除接收者之外，其他部分的形式与语义与函数一致：方法名以大写字母开头时可导出，参数列表可以有变长参数，返回值也可以具名。这里 receiver 参数 s 的类型是 *Server，因此这项声明使用的是指针接收者，不能据此说 Server 值的方法集合已经包含 ListenAndServeTLS。〔TB24 p2-3〕</p>
+  <p id="TB6EWraq">接收者写成 T 或 *T 时，其中的 T 都叫接收者基类型。Counter.Value 的基类型是 Counter，(*Counter).Add 的基类型也仍是 Counter。一个方法只能声明一个接收者参数，而且它不能是变长参数；普通参数列表可以变长，不代表接收者段也可以。〔TB24 p3〕</p>
+  <h3 id="RvD6r2d3">基类型的限制，不是禁止指针接收者</h3>
+  <p id="XhOMU8Om">接收者必须基于本包定义的类型 T，写成 T 或 *T；T 本身不能是指针类型或接口类型。这条限制检查的是基类型，而不是看到接收者段中有星号就拒绝。Counter 是结构体，所以 *Counter 完全合法。下面两个类型定义各自合法，但接在后面的两项方法声明都有意违反接收者限制；放进 main 包核对错误时，需要导入 fmt 和 io。〔TB24 p4〕</p>
+  <codeblock id="paBE8vCY" lang="go">type MyInt *int
+
+func (r MyInt) String() string { // 有意错误：基类型的底层类型是指针
+    return fmt.Sprintf(&quot;%d&quot;, *(*int)(r))
+}
+
+type MyReader io.Reader
+
+func (r MyReader) Read(p []byte) (int, error) { // 有意错误：基类型是接口类型
+    return r.Read(p)
+}
+</codeblock>
+  <p id="6kVvoQ9x">MyInt 不是“指向一个合法基类型的接收者”，而是自己定义成了指针类型；MyReader 则定义成接口类型。两者都不能绑定这样的新方法。go1.26.4 编译器先从接收者类型剥掉外围指针，再检查得到的基类型及其底层类型；对应错误包含 invalid receiver type 和 pointer or interface type。MyReader 的方法体也不是一个可用的转发包装器：它在这里根本无法通过接收者检查，不能靠重复调用同名方法实现接口委托。〔TB24 p4〕</p>
+  <h3 id="Ad7ZpyiM">只能在定义类型的包里添加方法</h3>
+  <p id="X4ZRQYtE">基类型和方法声明必须位于同一个包，不要求同一个文件。于是既不能直接给预声明的 int、float64 等类型加方法，也不能到自己的包中给 http.Server 加方法。map 等未命名类型也不能直接拿来作为接收者基类型。下面分别是有意不能编译的声明；第二个片段依赖 net/http 导入：〔TB24 p5〕</p>
+  <codeblock id="jwleSd5y" lang="go">func (i int) Foo() string { // 有意错误：int 不是本包定义的类型
+    return fmt.Sprintf(&quot;%d&quot;, i)
+}
+</codeblock>
+  <codeblock id="pSmLXix-" lang="go">func (s http.Server) Foo() {} // 有意错误：Server 定义在 net/http 包
+</codeblock>
+  <p id="UMMSMn1v">这两处错误的关键措辞是 cannot define new methods on non-local type。它约束方法的归属：第三方不能通过另一个包，悄悄给既有类型追加方法。需要扩展时，可以定义本包的新类型，或把现有值放进本包的包装结构体，再为这个新类型声明方法。比如下面的定义基于 int，却获得了本包自己的类型名：〔TB24 p5〕</p>
+  <codeblock id="fXuAEmKb" lang="go">type Count int
+
+func (c Count) IsZero() bool { return c == 0 }
+</codeblock>
+  <p id="fn71S3SP">这里必须区分类型定义与别名。type Count int 定义了新类型；type Count = int 只是为 int 起另一个名字，并不能绕过非本包类型的限制。新定义类型也不会自动继承来源类型的方法，第三节会给出验证。封闭的是可直接声明的方法归属；嵌入还能使既有方法被提升，但那是组合规则，不是跨包添加声明。</p>
+  <h3 id="iYgWlzUD">接收者名字与参数共享方法体作用域</h3>
+  <p id="e7UjAIpy">接收者参数、普通参数和具名返回值变量的作用域都覆盖方法体。它们不是各占一个独立命名空间，因此非空白的名字不能在方法签名里重复。下面的 t 同时作为接收者名和普通参数名，有意不能编译：〔TB24 p3-4〕</p>
+  <codeblock id="_Pb9XahV" lang="go">type T struct{}
+
+func (t T) M(t string) {} // 有意错误：t 重复声明
+</codeblock>
+  <p id="bX2Tk6e7">把任意一处改成不同的名字就能消除冲突。旧课程把错误写作 duplicate argument t，当前编译器的诊断可能写作 t redeclared in this block，并指向另一个声明；需要理解的是同一签名里的名字冲突，而不是背某个版本的报错句子。具名返回值也不能再取同一个 t。</p>
+  <p id="c6wOsewJ">方法体完全不使用接收者时，可以只保留类型，省略参数名。以下是前一段声明的替代写法，不要与它同时声明同名 M：〔TB24 p4〕</p>
+  <codeblock id="R9MN5Ewd" lang="go">type T struct{}
+
+func (T) M(t string) {}
+</codeblock>
+  <p id="MLlFCp-t">省略名字不代表取消了接收者，也没有把方法变成普通函数；它仍属于 T，只是方法体不需要引用接收者的值。日常方法多数要访问实例状态，所以通常仍保留一个简短名字。对于同一个基类型，非空白方法名还必须唯一；结构体的非空白字段名与方法名也不能相同。这些命名限制与接收者参数是否省略是两回事。</p>
+  <h3 id="Iy8rsr08">同一个值方法，可以从值或指针调用</h3>
+  <p id="4lQmPwuV">下面是独立的调用示例。M 使用值接收者，既可以从 T 变量调用，也可以从 *T 变量调用：〔TB24 p5-6〕</p>
+  <codeblock id="28j6M9Im" lang="go">package main
+
+type T struct{}
+
+func (t T) M(n int) {}
+
+func main() {
+    var t T
+    t.M(1)
+    p := &amp;T{}
+    p.M(2)
+}
+</codeblock>
+  <p id="3NKU4o_C">第二次调用不会把值接收者改成指针接收者。p 指向一个 T，调用 M 时取出该 T 的值，传入的仍是副本。后面会看到，*T 的方法集合本来就包含值接收者方法；而反方向调用指针方法，需要额外检查值是否可寻址。这使我们能先按方法是否需要修改实例来设计接收者，而不把“点号左边碰巧写了什么类型”当成方法归属的判断依据。</p>
+  <h2 id="M3-zYFhn">二、接口：让同一段欢迎逻辑使用不同的发送方式</h2>
+  <p id="oLsHpbDI">注册成功后，我们要给用户发送一条欢迎消息。先只有邮件，可以直接让函数接收 Email。下面的 Send 只打印消息，帮助观察调用过程，不连接邮件服务器，也没有实现真实发送和发送失败处理。</p>
+  <codeblock id="cmgF6o-I" lang="go">type Email struct{}
+
+func (Email) Send(message string) {
+    fmt.Println(&quot;发送邮件：&quot;, message)
+}
+
+func Welcome(sender Email) {
+    sender.Send(&quot;欢迎注册&quot;)
+}</codeblock>
+  <p id="bU12gOTu">这个片段需要导入 fmt。调用 Welcome(Email{})，会打印“发送邮件： 欢迎注册”。后来我们增加短信：</p>
+  <codeblock id="q8lQpJ3z" lang="go">type SMS struct{}
+
+func (SMS) Send(message string) {
+    fmt.Println(&quot;发送短信：&quot;, message)
+}</codeblock>
+  <p id="vbU-oKhv">SMS 同样提供 Send(string)，但此时写 Welcome(SMS{}) 仍然不能编译。Welcome 要求的是 Email，SMS 和 Email 是两个不同的具体类型；同名、同签名的方法不会把两个具体类型变成同一个类型。再写 WelcomeSMS 可以解决这一次调用，却复制了并未改变的欢迎逻辑，以后增加站内信还要继续复制。</p>
+  <p id="u1t9y_nf">观察 Welcome 的函数体：它不读取邮件地址，不连接邮件服务器，只调用一次 Send。它真正需要的不是“一个 Email”，而是“一个支持 Send(string) 的值”。把这个要求写成接口，就能让参数表达业务真正依赖的能力。</p>
+  <codeblock id="aYfRDDtI" lang="go">type Sender interface {
+    Send(message string)
+}</codeblock>
+  <p id="AEVMdy0x">Sender 是一个接口类型。声明里不写 func，也不写方法体，只写方法名、参数列表和返回值列表。这里约定的方法名为 Send，接收一个 string，没有返回值。接口描述怎样调用，不负责实现发送过程。〔TB28 p3〕将 Welcome 的参数改成 Sender，函数体保持不变。下面是这一阶段的完整程序：</p>
+  <codeblock id="p6b7lTr1" lang="go">package main
+
+import &quot;fmt&quot;
+
+type Sender interface {
+    Send(message string)
+}
+
+type Email struct{}
+
+func (Email) Send(message string) {
+    fmt.Println(&quot;发送邮件：&quot;, message)
+}
+
+type SMS struct{}
+
+func (SMS) Send(message string) {
+    fmt.Println(&quot;发送短信：&quot;, message)
+}
+
+func Welcome(sender Sender) {
+    sender.Send(&quot;欢迎注册&quot;)
+}
+
+func main() {
+    var sender Sender = Email{}
+    Welcome(sender)
+
+    sender = SMS{}
+    Welcome(sender)
+}</codeblock>
+  <p id="DVNyBrNz">这段程序的预期输出是：</p>
+  <codeblock id="O9EWAscQ" lang="text">发送邮件： 欢迎注册
+发送短信： 欢迎注册</codeblock>
+  <p id="Gf7EcTxW">main 里只有一个 sender 变量，它声明时的类型一直是 Sender。第一次赋值保存 Email 值，第二次改为 SMS 值。两次都进入同一个 Welcome；执行 sender.Send 时，前一次调用 Email.Send，后一次调用 SMS.Send。Welcome 决定“发什么”，具体实现决定“怎么发”。这就是这里的多态：同一段业务代码通过接口使用不同实现。增加站内信时，只要新类型满足 Sender，Welcome 本身不必修改。</p>
+  <h3 id="Vc7p0fds">实现关系由方法集合决定，不靠 implements 声明</h3>
+  <p id="JERmPNJd">Email 和 SMS 都没有写“实现 Sender”，甚至可以先定义它们，再由使用方定义 Sender。Go 检查的是方法集合：对这里仅包含方法要求的普通接口，如果类型 T 的方法集合包含接口 I 要求的全部方法，也就是等于或大于这个方法集合，T 就实现了 I，T 的值可以赋给 I 的变量，也可以传给接收 I 的函数。这个关系称为隐式实现。〔TB28 p5,8〕T 和 *T 的方法集合可能不同，下一部分再具体求它们的集合；现在先把实现条件和调用语法分开。</p>
+  <p id="kALRcHtT">“隐式”不等于“运行时试试看”。给 Sender 赋值或给 Welcome 传参时，编译器已经检查实现关系；不满足就不能编译。只匹配方法名还不够。例如保持 Sender 不变，把 Email.Send 改为下列版本，再传入 Email{} 就会失败：</p>
+  <codeblock id="XeDzU2Td" lang="go">// 用来替换前面的 Email.Send；这是有意制造的签名不匹配。
+func (Email) Send(message string) error {
+    return nil
+}</codeblock>
+  <p id="iNfz0Ip3">新方法的签名是 Send(string) error，接口要求的是 Send(string)。多出一个返回值，即使调用方愿意忽略它，也不算满足接口。反过来，Email 额外提供 Close() 不会妨碍它实现 Sender，因为接口要求的 Send 仍然存在；但 Welcome 中的 sender 静态类型是 Sender，不能仅因某次保存 Email 就直接调用 sender.Close()。调用方能直接使用的能力，以接口声明为准。</p>
+  <p id="ge4176a_">签名里的参数名只是给人看的。Send(message string)、Send(s string) 和 Send(string) 表达相同要求，具名返回值的名字也不参与匹配。将同一规则用于多个方法，可以写成下列声明；此片段需要导入 io：</p>
+  <codeblock id="z1vmMejd" lang="go">type MyInterface interface {
+    M1(int) error
+    M2(io.Writer, ...string)
+}</codeblock>
+  <p id="5ljhExCj">M1(a int) error、M1(n int) error 都与 M1(int) error 相同；M2(w io.Writer, strs ...string)、M2(w io.Writer, args ...string) 都与 M2(io.Writer, ...string) 相同。参数和返回值的类型、顺序以及是否为可变参数才影响签名；参数名和返回值名不影响。一个类型必须满足这里的两个方法，才能作为 MyInterface 使用。〔TB28 p3〕</p>
+  <h3 id="3rVKfqP_">同名方法：显式重复与嵌入交集不是同一条规则</h3>
+  <p id="O0OrZNAr">接口中的方法必须有名字。直接在同一接口中声明两个 M1，即使参数名不同，甚至想用不同参数类型来“重载”，也会触发 duplicate method。Go 不提供这种按参数列表区分同名方法的重载。下面是独立的、故意不能编译的声明：</p>
+  <codeblock id="6tt7I8tv" lang="go">type Duplicate interface {
+    M1(int) error
+    M1(a int) error
+}</codeblock>
+  <p id="G-k30Tff">接口还可以嵌入其他接口：裸写接口名，把它的方法要求合并进来。Go 1.14 起允许被嵌入接口的方法集合相交，但交集中的同名方法必须有相同签名。下面也是故意不能编译的例子：</p>
+  <codeblock id="AK5Cy1zr" lang="go">type Interface1 interface {
+    M1()
+}
+
+type Interface2 interface {
+    M1(string)
+    M2()
+}
+
+type Interface3 interface {
+    Interface1
+    Interface2
+    M3()
+}</codeblock>
+  <p id="becJe2F9">冲突来自 Interface1.M1() 与 Interface2.M1(string)：名字相同，参数列表不同。M3 与冲突无关。把 Interface2 中的方法改成 M1() 后，两份相同要求可以合并，Interface3 的方法集合是 M1、M2、M3；不是见到重复的名字就报错。这个放宽从 Go 1.14 开始，早于它的版本不允许这类嵌入交集。显式写两次 M1 仍然不合法，不要用嵌入规则解释直接重复声明。〔TB28 p3–4〕</p>
+  <h3 id="pR4bsBOv">接口也能包含非导出方法</h3>
+  <p id="WCNRGGL-">Send 首字母大写，因此包外也能使用。接口中的方法不必全部导出。标准库 context 用下面这个接口描述能够被直接取消的 context；它的实现包括 *cancelCtx 和 *timerCtx：</p>
+  <codeblock id="iFI3vaa6" lang="go">// Go 1.26.4，src/context/context.go；这是源码片段，不是独立程序。
+type canceler interface {
+    cancel(removeFromParent bool, err, cause error)
+    Done() &lt;-chan struct{}
+}</codeblock>
+  <p id="UqrJ0TaZ">Done 是导出方法，cancel 是非导出方法，放在同一个接口中完全合法。这样的接口通常连自身也不导出，服务于包内协作，而不是给包外实现者提供公共扩展点。非导出方法的身份包含所属包：另一个包自行声明一个同拼写的 cancel，并不等于 context 包的 cancel。这里的“通常包内使用”是使用惯例，不是“接口只要含小写方法就不能导出”的语法限制。〔TB28 p4–5〕</p>
+  <details id="Oydia8Vu" summary="源码版本说明：cancel 为什么比旧资料多一个参数？" open="false">
+    <p>TB28 p4 展示的是 cancel(removeFromParent bool, err error)。Go 1.26.4 的 context/context.go:417–420 中加入了 cause，因此本章按现行签名展示。旧签名用于理解非导出方法仍然合适，但不能当作现行源码逐字复制。方法签名变化也再次说明：签名匹配看完整的参数与返回值，不只看名字。</p>
   </details>
-  <h2 id="iNCptLAk">Round 2：风格定稿与机制讲解的落法</h2>
-  <h3 id="yFGkaHWs">先看两个重录样张（按 S3/S5 新基准）</h3>
-  <p id="IFEpgsgX">Round 1 的 B 样张被你否了两点：悬念修辞（&quot;撞墙&quot;）和缺机制分析。下面是修正后的同段内容——<b>先给提纲，再进细节</b>：</p>
-  <h4 id="v-oW3XKF">样张 C · 提纲挈领的开法（替换样张 B 的开头）</h4>
-  <p id="nOimLETZ">假如你是从 Java 过来的，这一节的地图先画给你：</p>
-  <table id="wzgQc8vx">
-    <tr>
-      <th>
-        <p>Java 里你熟的</p>
-      </th>
-      <th>
-        <p>Go 里对应什么</p>
-      </th>
-      <th>
-        <p>关键差异</p>
-      </th>
-    </tr>
-    <tr>
-      <td>
-        <p><code>interface</code> + <code>implements</code></p>
-      </td>
-      <td>
-        <p><code>type X interface{...}</code>，无需 implements</p>
-      </td>
-      <td>
-        <p>关系在使用点成立，方法集合决定</p>
-      </td>
-    </tr>
-    <tr>
-      <td>
-        <p>继承 + override 的动态绑定</p>
-      </td>
-      <td>
-        <p>接口变量 + 方法集合</p>
-      </td>
-      <td>
-        <p>没有继承树；嵌入不是继承（见样张 D 结论）</p>
-      </td>
-    </tr>
-    <tr>
-      <td>
-        <p>编译期 vtable + <code>invokeinterface</code></p>
-      </td>
-      <td>
-        <p>运行时 itab（接口×类型组合表）</p>
-      </td>
-      <td>
-        <p>同样是查表间接调用，成本同量级</p>
-      </td>
-    </tr>
-    <tr>
-      <td>
-        <p>多态 = 父类引用指向子类对象</p>
-      </td>
-      <td>
-        <p>多态 = 接口变量装住具体值</p>
-      </td>
-      <td>
-        <p>Go 只有多态这一半，没有&quot;层次&quot;那一半</p>
-      </td>
-    </tr>
-  </table>
-  <p id="ans_read"><b>你的评论（已采纳，样张 C 判不合格）：</b>&quot;这种表述和编排并不适合人类阅读理解和学习&quot;——同意，表格把连续的因果拆碎了。下面是同一信息的<b>叙事重写</b>，一行表格都不要：</p>
-  <h4 id="sampleC2h">样张 C2 · 同一内容的叙事重写（候选，请评论）</h4>
-  <p id="sampleC2p1">你已经会用 Java 的多态：声明一个 <code>Sender</code> 接口，让 SMS、Email 各自 <code>implements</code>，然后拿父类引用指向子类对象。现在把这套搬进 Go——你会发现 <code>implements</code> 这个关键字不存在了，但多态还在。这一节就讲两件事：<b>关系怎么建立</b>，和<b>调用怎么发生</b>。</p>
-  <p id="sampleC2p2">先看关系。Go 不要求类型声明&quot;我实现了谁&quot;；只要你的方法集合里凑齐了接口要求的方法，赋值的那一刻关系就成立了。这带来一个 Java 给不了的自由：你可以给标准库的类型配一个自己定义的接口——因为不需要改对方的源码。</p>
-  <p id="sampleC2p3">再看调用。写下一行 <code>sender.Send(&quot;hi&quot;)</code> 时，编译器不知道 <code>sender</code> 里装的是谁，它生成的指令是：查这个组合的 itab，取函数地址，间接跳转。Java 的 <code>invokeinterface</code> 做的也是这件事——所以性能不用担心，两者同量级。</p>
-  <p id="sampleC2p4">那 Java 的继承呢？Go 把这条路堵死了：没有 extends，嵌入只是编译期把内层方法&quot;抄写&quot;到外层——内层方法被调用时，接收者永远是内层自己，不存在虚方法。想要&quot;调用方不改一行代码、行为随实现变&quot;，Go 只剩接口这一条路。这也是为什么 Go 社区说：复用靠嵌入，多态靠接口。</p>
-  <p id="sampleC2note">（这就是&quot;提纲挈领&quot;的落法：第一段给全节地图——&quot;讲两件事&quot;，后文每段只展开一件。读完这段你已经知道整节要去哪。）</p>
-  <dynamic id="Z26UE1Ey" url="assets/java-go-polymorphism.html" initial-height="320" />
-  <p id="FraeeMfp">（可交互：上面的机制对照表就是正文中要落的形态之一——如果这类表比段落更适合你，正文的机制节会按&quot;表 + 逐行代码对照&quot;组织。）</p>
-  <h4 id="tth6Fy6P">样张 D · 机制讲透的样子（接口调用在运行时怎么发生）</h4>
-  <p id="DaRgk_O6">同一行 <code>sender.Send(&quot;欢迎注册&quot;)</code>，编译器生成的是间接调用：<code>sender</code> 不只是&quot;一个值&quot;，它是一个两字结构 <code>(类型信息, 数据指针)</code>。类型信息里存着这个&quot;接口 × 具体类型&quot;组合的方法地址表 itab；调用时取 <code>itab.fun[0]</code> 间接跳转。Java 的 <code>invokeinterface</code> 做的是同一类事——查 vtable 槽位再调用。所以两种多态的<b>运行时成本同量级</b>，真正的差异在<b>关系怎么建立</b>：</p>
-  <dynamic id="2iWGqp72" url="assets/vtable-itab.html" initial-height="300" />
-  <p id="mw_22075">推论（Java 视角）：Go 没有&quot;继承树上的多态&quot;，只有&quot;接口上的多态&quot;。嵌入（struct 嵌入）是编译期转发糖——<code>c.Hello()</code> 改写成 <code>c.Base.Hello()</code>，内层不知道外层存在，没有虚方法、没有 override。想要&quot;改一行代码，所有调用点行为变化&quot;，Go 里只有接口赋值这一条路。</p>
-  <p id="YqNZbmv6">〔TB29 p5-7〕〔TB28 p2-8〕</p>
-  <p id="ans_cite"><b>你的评论（引注保留但降权）：</b>&quot;我在想这个引注到底有用吗，我大概率是不会回到 TBXX 的相关文档去看的&quot;——查了它们的工作方式：引注主要不是给读者看的，是给<b>审稿 agent</b> 用的——双审时逐条回对原文防杜撰（skill 里 15% 的审稿 issue 是杜撰/归属错误；全书 2978 个标签可被 <code>scripts/check-cite-pages.py</code> 机器校验，当前全过）。所以结论：正文保留引注但降权——挪到行尾小灰字（如上行），读者扫不到就不打扰；绝不删，删了双审链条就断了。</p>
-  <h3 id="xUHbC3Qe">Q7 机制对照的深度基线？</h3>
-  <p id="BS1Gp-JU"><b>问题：</b>&quot;详细分析实现机制&quot;按哪个深度写进验收标准？</p>
-  <p id="IvHFkdYk"><b>我的推荐：</b>三档中的&quot;机制层&quot;——每个核心机制讲到&quot;运行时/编译器实际做什么&quot;（如 itab 结构、vtable 槽位、方法集合判定），配源码级引注；不展开到汇编/内存布局（那是 notes/ 和 TB29 深挖材料的职责，正文给链接）。</p>
-  <p id="LApmLHgK"><b>理由：</b>样张 D 就是机制层的密度——讲到 itab.fun 间接调用就停，不贴 runtime 汇编。04 章&quot;想深入&quot;里已有 TB29 装箱/itab 细节作为第二档，正文不必重复。提纲挈领≠讲到底层，而是&quot;地图 + 每站机制一句话 + 需要深入时的路标&quot;。</p>
-  <h3 id="KDQixfNL">Q8 修辞尺度怎么收？</h3>
-  <p id="WIrsAyv9"><b>问题：</b>样张 B 里被你点名的&quot;先让问题撞墙&quot;式悬念修辞，边界划在哪？</p>
-  <p id="3IDa_88V"><b>我的推荐：</b>禁三类——悬念标题（&quot;先撞墙再解释&quot;）、卖萌元素（💀/梗图/惊叹号轰炸）、故意隐瞒答案的倒计时式写法。保三类——问题先行的引入（&quot;如果要换成短信呢？&quot;）、每个例子马上给输出、失败案例直接展示并解释。标题用机制命名（如&quot;接口调用在运行时怎么发生&quot;），不用悬念。</p>
-  <p id="OSCc5Urn"><b>理由：</b>你反对的是&quot;制造紧张感&quot;而非&quot;制造问题意识&quot;——廖雪峰原文的问题感也来自业务推进而非标题党。样张 C/D 的标题就是按此收的。</p>
-  <h3 id="R7rhS6HX">Q9 提纲挈领怎么落成硬结构？</h3>
-  <p id="pIdknj_-"><b>问题：</b>&quot;没有提纲挈领&quot;怎么变成每节可检查的硬要求？</p>
-  <p id="5V75Lt5B"><b>我的推荐：</b>每节开头强制三件套：① 一张机制对照表（本节新概念 × 你已会的 Java/TS/Python 概念 × 差异，≤6 行）；② 本节问题清单（读完能答什么）；③ 与前后节的依赖一句话。审稿 issue 类别里加&quot;缺提纲/缺机制对照&quot;专项。</p>
-  <p id="6ZzrqU9c"><b>理由：</b>&quot;提纲挈领&quot;要能被 fidelity 审稿 agent 检查就必须落成清单项；三件套正好是 26 节路线图和 27 节决策表的节级版，全书结构不会碎。</p>
-  <p id="ans_Q9"><b>你的评论（已采纳）：</b>&quot;并不一定非要按照这个范式，还是得看具体场景&quot;——收到。三件套降级为<b>缺省模板</b>而非硬性范式：默认按三件套写；当某节是纯操作/速查型内容（如 26 节路线、27 节决策表）或机制简单到一眼见底时，审稿人可跳过对照表，但要在审稿记录里写一句跳过理由。这样既保留可检查性，又不逼着每节摆表格。</p>
-  <h3 id="Lz96yvzF">Q10 节奏与批审细节（Q5/Q6 的落地确认）</h3>
-  <p id="2-_LBx5H"><b>问题：</b>已落盘条目重走双审 + 按篇分组推进，两个细节确认：a) 重审批次的 before 取当前 handbook 文本（而非原始 digest），双审仍跑全量；b) 26/27（路线/决策）两节豁免重写，只随各节时长重算更新。</p>
-  <p id="T9TDrK6C"><b>我的推荐：</b>两者都按此执行。</p>
-  <p id="ans_Q10a"><b>你的评论（已采纳，改变了范围）：</b>&quot;范围涉及到仓库内的所有文档，记得要参考我之前下载过的别人的教程文档&quot;——两点都记入：</p>
-  <ul id="ans_Q10list">
-    <li><b>范围</b>：不止 <code>guide/handbook/</code>，仓库内所有面向读者的文档都在重写对象内（<code>notes/</code> 35 章也排进来；<code>docs/</code> 镜像与 README 类导航页按仓库规则同步）。推进顺序仍是 handbook 优先，notes 按章补入批次。</li>
-    <li><b>参照语料</b>：重写时参考 <code>downloads/</code> 里的已购教程——核实过的有两类：Tony Bai《Go语言第一课》讲义 PDF（10 讲起，变量声明/项目布局/构建模式等）与 krm-backend 周课文档（Gin/GORM/K8s/可观测性等 21+ 讲）。这些进 PROMPT 的风格参照列表，与廖雪峰、dbwu/eddycjy 并列；引用事实仍以本仓库 <code>work/text/</code> 原文为准。</li>
-  </ul>
-  <p id="4dJkHh-m2"><b>理由：</b>台账 3713 条本来就覆盖 W/TB/C/my 全部语料单元（W04 178 条、W10 136 条…），把 notes 排进范围与台账结构天然对齐；下载教程是成品书稿，比 raw 页面更能示范&quot;成体系的讲法&quot;。</p>
-  <details id="hnZsYAMg" summary="本轮不问的问题（依赖 Round 2 答案）" open="false">
-    <p>试产章 04 的新 PROMPT 模板、docs 镜像同步时机、台账&quot;风格重写&quot;状态的字段格式——等 Q7-Q10 定了直接执行，不再开新一轮问。</p>
+  <h3 id="5u9bo6u8">没有方法要求时，任何类型都能放进去</h3>
+  <p id="3xUBG-r6">再把方法集合的规则推到零个方法：</p>
+  <codeblock id="-nbqoUD0" lang="go">type EmptyInterface interface{}</codeblock>
+  <p id="ximvBlRC">这个接口的方法集合是空集合，因此任何类型都满足它。不必专门声明 EmptyInterface，通常直接使用 interface{}。Go 1.18 起还可以使用 any，它是 interface{} 的预声明别名，不是另一种新接口类型，也不是关键字。〔TB28 p5–6,18〕下面的连续赋值都合法：</p>
+  <codeblock id="IGP-Ixlu" lang="go">// 放入 main 中即可观察；最后的 _ = i 只是让片段可以独立放进函数。
+var i interface{} = 15
+i = &quot;hello, golang&quot;
+
+type T struct{}
+var t T
+i = t
+i = &amp;t
+_ = i
+
+var a any = i
+_ = a</codeblock>
+  <p id="capLEfv3">同一个 i 可以保存整数、字符串、结构体值和指针；变化的是它保存的具体值，不是 i 的静态类型。泛型语法加入之前，interface{} 常被用来保存通用数据结构里的不同类型元素，避免为每种元素复制一套容器代码。这个历史作用不等于现代泛型：空接口不承诺元素有哪些操作，读取后往往需要断言；类型参数则能让同一算法保留元素类型之间的约束。能明确需要 Send 时应接收 Sender，而不是先接收 any 再运行时寻找 Send。</p>
+  <p id="HedmLbja">接口类型和其他类型一样可以声明变量。例如 var err error、var r io.Reader，尚未显式初始化时都为 nil。要赋予非 nil 值，右侧类型仍须实现接口：任何类型可以赋给 any，不代表任何类型都能赋给 error 或 io.Reader。〔TB28 p5〕</p>
+  <h3 id="IK4vp01q">类型断言：取回具体值，或者检查另一种能力</h3>
+  <p id="-1krP6ZE">把 Email 放进 Sender，是让调用方只依赖 Send。有时拿到一个接口值后，还需要知道里面实际保存的是什么。类型断言写成 i.(T)，其中 i 必须是接口类型的表达式。它并不是把任意值转换成 T；它检查接口里已有的动态类型和值。以下先用空接口装入 int64(13)，方便把成功和失败分开看。代码放在 main 中，需要导入 fmt：</p>
+  <codeblock id="IP5cFJkw" lang="go">var a int64 = 13
+var i any = a
+
+v1, ok := i.(int64)
+fmt.Printf(&quot;v1=%d, the type of v1 is %T, ok=%t\n&quot;, v1, v1, ok)
+
+v2, ok := i.(string)
+fmt.Printf(&quot;v2=%s, the type of v2 is %T, ok=%t\n&quot;, v2, v2, ok)
+
+v3 := i.(int64)
+fmt.Printf(&quot;v3=%d, the type of v3 is %T\n&quot;, v3, v3)</codeblock>
+  <p id="A9qDaOPu">按语言规则，三行输出分别为：</p>
+  <codeblock id="oHgO_ycx" lang="text">v1=13, the type of v1 is int64, ok=true
+v2=, the type of v2 is string, ok=false
+v3=13, the type of v3 is int64</codeblock>
+  <p id="KfKUJWD4">目标 T 是具体类型时，断言要求 i 的动态类型恰好是 T，不是“数值能转换成 T”就算成功。成功时 v 的静态类型是 T，值为原来保存的值；失败时 comma-ok 形式返回 ok=false，v 仍是 T 类型，值为 T 的零值。所以 v2 是空字符串，不会由于失败变成 any，也不会由于 i 曾保存 int64 而变成整数。即使改成 i.(int)，这里也会失败：int64 和 int 不是同一个类型。〔TB28 p6–7〕</p>
+  <p id="uY9enr1w">单值形式 v := i.(T) 没有失败结果可供处理，失败就 panic。将下一段接到前面的代码后，程序会在第一句中止，后面的 Printf 不执行：</p>
+  <codeblock id="S7KfkyQM" lang="go">// 故意触发运行时错误，单独验证这一段。
+v4 := i.([]int)
+fmt.Printf(&quot;the type of v4 is %T\n&quot;, v4)</codeblock>
+  <p id="A7f8Et_k">这里装的是 int64，而不是 []int，会产生 interface conversion 一类的 panic。对于不受控制的输入，应使用 comma-ok 分支；只有程序本身能保证成功、失败确实代表程序约束被破坏时，才考虑单值形式。nil 接口没有动态类型，断言也不会成功：comma-ok 返回目标零值与 false，单值形式 panic。〔TB28 p6–7〕</p>
+  <p id="0nc1urij">断言目标也可以是接口，这时问题从“是不是这个具体类型”变成“保存的具体类型是否还满足这份接口要求”。回到通知程序，若 var i any = Email{}，那么 sender, ok := i.(Sender) 成功，sender 的静态类型是 Sender，动态类型是 Email，可以通过 Sender 调用 Send。下面保留一个独立的多方法命名练习，完整展示成功、失败以及两种类型信息的差别：</p>
+  <codeblock id="38fbQSkT" lang="go">package main
+
+import &quot;fmt&quot;
+
+type MyInterface interface {
+    M1()
+}
+
+type T int
+
+func (T) M1() {
+    fmt.Println(&quot;T&apos;s M1&quot;)
+}
+
+func main() {
+    var t T
+    var i any = t
+
+    v1, ok := i.(MyInterface)
+    if !ok {
+        panic(&quot;the value of i is not MyInterface&quot;)
+    }
+    v1.M1()
+    fmt.Printf(&quot;the type of v1 is %T\n&quot;, v1)
+
+    i = int64(13)
+    v2, ok := i.(MyInterface)
+    fmt.Printf(&quot;ok=%t, the type of v2 is %T, nil=%t\n&quot;, ok, v2, v2 == nil)
+    // v2 = 13 // 故意取消注释会编译失败：int 不实现 MyInterface。
+}</codeblock>
+  <p id="lrGDIeSb">预期先打印 T&apos;s M1，然后打印 the type of v1 is main.T，最后一行是 ok=false, the type of v2 is &lt;nil&gt;, nil=true。v1 和 v2 的静态类型从声明起都确定为 MyInterface，并不随断言成功或失败而改变。成功时 v1 这个接口值保存的动态类型是 main.T；失败时 v2 是 MyInterface 的零值，也就是没有动态类型的 nil 接口。fmt 的 %T 对接口参数报告动态类型，因此成功时显示 main.T，失败时显示 &lt;nil&gt;，它并不能用来证明变量的静态类型。〔TB28 p7–8〕</p>
+  <p id="PIHaAGy6">可以用编译器看到另一面：不论 v1 还是 v2，都不能写成 v1 = 13 或 v2 = 13，因为 int 没有 M1，不能赋给 MyInterface。并且断言成功并不会把 MyInterface 中没有的方法开放给 v1。断言表达式 i.(MyInterface) 的静态类型就是 MyInterface；这条规则成功与失败一致。这里必须区分“断言表达式的类型”和“接口内保存的动态类型”，不能把 %T 的显示结果当成前者。</p>
+  <p id="Hpd_ZyVc">还有一个编译期边界：若 i 的静态类型是 Sender，写 i.(int) 本身就不合法，因为 int 不实现 Sender，不可能被存进这个接口；不是所有错误都能留给 comma-ok。若断言另一接口，则运行时保存的具体类型必须同时满足来源接口和目标接口。需要按多个动态类型分支时，可以使用 type switch；第 01 章 switch 部分已经解释了它的分支语法。〔TB28 p8〕</p>
+  <details id="sQmzpTYP" summary="类型断言的来源辨析" open="false">
+    <p>TB28 p7 对成功的接口目标断言用了“变量 v 的类型为 i 的值的类型”的表述；若把这里的“类型”理解为静态类型，会与 Go 规范冲突。这里保留原例的行为，并按规范 Type assertions 的明确规定区分：x.(T) 表达式的类型是 T，接口内部的动态类型另算。可查 https://go.dev/ref/spec#Type_assertions；Go 1.26.4 随附 doc/go_spec.html:4131–4146、4173–4177 也写明成功类型与失败零值规则。</p>
+  </details>
+  <h3 id="DcK9xVCw">行为相同，不表示需要共同父类</h3>
+  <p id="JJg_ACIG">Python 的鸭子类型也关心“能做什么”：执行 sender.send 时再查找方法，没有就报错。Email 和 SMS 没有共同父类，却都能用于 Welcome，目的相近；区别是 Go 用 Sender 明确写下要求，赋值和传参时就由编译器检查方法集合和签名，因此可以称作带静态检查的鸭子类型。这只是类比，不代表 Go 采用动态语言的查找规则；T 与 *T 的方法集合差别也必须按 Go 的规则判断。〔TB29 p2–4〕</p>
+  <p id="1m0Mke34">Java 的实现关系通常需要类声明 implements，或者通过继承已有的实现关系获得；仅有同名方法不自动建立它与某接口的关系。Go 不需要这一步。TypeScript 通常按结构检查类型，一个对象即使不写 implements，只要成员满足要求也能赋给接口；这一点更接近 Go，但 TypeScript 接口还可以描述属性，这里讨论的 Go 普通接口描述方法，不能把两者全部结构兼容规则视为相同。</p>
+  <p id="5n7Cz3Fg">这让使用方能够自己定义接口：Email 的作者不必预先知道所有调用者；通知业务可以定义 Sender，另一个包也可以定义只要求 Send(string) 的接口，Email 无需为了它们修改定义或导入使用方包。这降低了实现方和使用方之间的依赖，方便通过替换传入值来组合程序，而不必先建立继承树。接口组合各部分之间的协作，结构体嵌入复用实现，是两种不同机制。</p>
+  <p id="bJjuR_MB">方法满足，只能保证调用形式合法，不能保证业务做对。例如一个什么都不做的 Send 仍满足 Sender，却没有发送任何通知。行为约定、错误处理与测试需要另外设计。真实发送通常还应返回错误；那时要一起调整接口及所有实现，而不是把本节这个只打印的示例当成可直接投入生产的通知服务。</p>
+  <details id="9DWLOmre" summary="同一条规则用于 Duck、Dog、Bird" open="false">
+    <p>如果希望将通知例子和鸭子类型这个名字对应起来，下面是另一份独立程序。三种动物无需共同父类型，只要都提供 Quack，就能放入同一个接口切片；循环每次传入的动态类型不同，调用的实现也不同。把 int 放进切片则在编译期失败。这个例子只模拟输出，不模拟动物行为。〔TB29 p3–4〕</p>
+    <codeblock lang="go">package main
+
+type QuackableAnimal interface {
+    Quack()
+}
+
+type Duck struct{}
+func (Duck) Quack() { println(&quot;duck quack!&quot;) }
+
+type Dog struct{}
+func (Dog) Quack() { println(&quot;dog quack!&quot;) }
+
+type Bird struct{}
+func (Bird) Quack() { println(&quot;bird quack!&quot;) }
+
+func AnimalQuackInForest(a QuackableAnimal) {
+    a.Quack()
+}
+
+func main() {
+    animals := []QuackableAnimal{new(Duck), new(Dog), new(Bird)}
+    for _, animal := range animals {
+        AnimalQuackInForest(animal)
+    }
+}</codeblock>
+    <p>预期依次打印 duck quack!、dog quack!、bird quack!。这里使用指针值；值接收者的方法同时存在于相应指针的方法集合中，因此三个指针都满足接口。</p>
+  </details>
+  <h3 id="kIzxCrnr">从 Sender 到 io.Writer：使用现成的小契约</h3>
+  <p id="m33kfIa6">Sender 是业务自己发现的能力，标准库也提供了许多这样的小接口。比如 io.Writer：</p>
+  <codeblock id="pccwlz9z" lang="go">type Writer interface {
+    Write(p []byte) (n int, err error)
+}</codeblock>
+  <p id="7LwS0bsg">它要求写入一段字节，并报告写入数量和错误。一个保存函数如果原来只接受 *os.File，就绑定到文件类型；虽然文件还提供 Chdir、Chmod、Chown，保存函数并不需要它们，而且测试要创建、读取并清理真实文件。改接收 io.Writer 后，写入目的地可以是文件、缓冲区，或者实现相同契约的网络存储，不必为了目的地变化修改保存函数签名。〔TB30 p6–8〕下面的独立程序补足了错误与短写入处理：</p>
+  <codeblock id="XjZcz5I8" lang="go">package main
+
+import (
+    &quot;bytes&quot;
+    &quot;fmt&quot;
+    &quot;io&quot;
+    &quot;os&quot;
+)
+
+func Save(w io.Writer, data []byte) error {
+    n, err := w.Write(data)
+    if err == nil &amp;&amp; n != len(data) {
+        return io.ErrShortWrite
+    }
+    return err
+}
+
+func main() {
+    if err := Save(os.Stdout, []byte(&quot;to stdout\n&quot;)); err != nil {
+        panic(err)
+    }
+
+    var buf bytes.Buffer
+    if err := Save(&amp;buf, []byte(&quot;to buffer&quot;)); err != nil {
+        panic(err)
+    }
+    fmt.Printf(&quot;%q\n&quot;, buf.String())
+}</codeblock>
+  <p id="-2pLzgsY">预期输出第一行 to stdout，第二行带双引号的 &quot;to buffer&quot;。Save 只调用 Write：有错误就返回原错误；没有错误但数量不完整，就返回 io.ErrShortWrite，避免把短写入当成功；数量完整且无错误才返回 nil。它只尝试一次，不自动重试，也不承诺刷盘。缓冲区例子可以在内存中核对写入数据，不需要磁盘文件或网络连接。〔TB30 p8〕这里传 &amp;buf 而非 buf，因为 bytes.Buffer 的 Write 使用指针接收者，下一部分会解释这种区别。</p>
+  <h3 id="Qs9LpRwf">为什么小接口更容易组合</h3>
+  <p id="r-JCdoFr">Sender 只有 Send，Writer 只有 Write，它们各自表达一份小契约。契约的方法越多，实现者就越需要承担额外职责。Go 社区偏好一到三个方法的小接口，Rob Pike 用“接口越大，抽象程度越弱”表达同一取向；这不是语言规定的大小上限，也不是说任意一个单方法接口都比任意一个三方法接口设计得更好。〔TB28 p8〕</p>
+  <p id="7xWpRrxu">看一个有包含关系的例子，而不只数方法。会飞、会游泳、同时会飞会游泳，可以分别写成：</p>
+  <codeblock id="_CQH1Kzf" lang="go">type Flyable interface {
+    Fly()
+}
+
+type Swimable interface {
+    Swim()
+}
+
+type FlySwimable interface {
+    Flyable
+    Swimable
+}</codeblock>
+  <p id="hkjiYU2F">FlySwimable 没有直接声明方法，却嵌入了两份要求，方法集合包含 Fly 和 Swim。满足它的类型必定满足 Flyable；反过来，只有 Fly 的类型未必有 Swim。这种删去额外要求的抽象，会让可用类型的范围扩大或保持不变。用一组生活化示意对象观察：会飞的包括蝴蝶、蜜蜂、麻雀、天鹅、鸳鸯、海鸥、信天翁共七种；会游泳的包括鸭子、海豚、人类、天鹅、鸳鸯、海鸥、信天翁共七种；两者交集只有天鹅、鸳鸯、海鸥、信天翁四种。这是理解集合关系的示意，不是完整生物分类。〔TB28 p10–12〕</p>
+  <p id="o065XVpf">接口更小而范围更广，准确前提是减少已有要求；两个互不包含的接口不能仅凭方法个数比较谁的实现范围更大。极端情况下移除全部方法，得到接受所有类型的空接口，但它也不再提供任何可直接调用的行为，所以不能为了“抽象程度高”把 Sender 改成 any。</p>
+  <p id="DQubzub-">少量要求还有两项实际收益。第一，更容易实现和测试：测试 Welcome 的替身只要提供 Send，不必为了测试一条欢迎消息实现许多无关方法。后面的 Stmt 例子包含 Close、NumInput、Exec、Query，展示嵌入接口并覆盖 Exec 的取巧方式，也会暴露未覆盖方法的风险；第 14 章的 Store 只要求 Get，手写 fakeStore 就更直接。第二，单一职责更容易复用：组合读写能力时，嵌入 Reader 与 Writer 就能得到 ReadWriter，不会顺带引入保存函数不需要的目录修改等职责。大接口若包含许多无关职责，反而不容易成为另一份契约的组成部分。〔TB28 p12–13〕</p>
+  <details id="4NqKO38z" summary="标准库定义与历史统计" open="false">
+    <p>下面按各自所在包展示四份接口声明，是阅读源码的摘录，不应整块粘贴到同一包编译。error 是预声明接口；Reader 位于 io；Handler 与 ResponseWriter 位于 net/http。前三个只有一个方法，ResponseWriter 有三个。〔TB28 p9〕</p>
+    <codeblock lang="go">// builtin
+type error interface {
+    Error() string
+}
+
+// io
+type Reader interface {
+    Read(p []byte) (n int, err error)
+}
+
+// net/http
+type Handler interface {
+    ServeHTTP(ResponseWriter, *Request)
+}
+
+type ResponseWriter interface {
+    Header() Header
+    Write([]byte) (int, error)
+    WriteHeader(int)
+}</codeblock>
+    <p>对 Go 1.13 标准库、Docker 19.03、Kubernetes 1.17 的历史统计中，一到三个方法的接口占绝大多数。这个观察支持小契约是一种广泛使用的实践，但统计对象是旧版本，不能据此报告现行项目的比例，更不能把一到三个方法当成正确性的判据。原统计图的具体百分比不在这里重新推算。〔TB28 p9–10〕</p>
+  </details>
+  <h3 id="DopEo_qb">从实际用法里逐步拆出接口</h3>
+  <p id="4iJB5-EB">不必为每个类型预先建立一份接口，也不必第一版就把所有契约拆到一个方法。先理解问题领域，识别对象有哪些行为、哪些协作需要替换，再抽出接口。Reader、Writer 也是在网络、文件等字节处理实现中发现共性后形成的抽象，不是只凭“接口越小越好”这句话凭空设计出来的；越接近复杂业务，这个发现过程通常越难。〔TB28 p13–14〕</p>
+  <p id="vZw_c1ht">接口使用一段时间后，再看各调用方实际用了哪些方法。假设一个大接口有六个方法，场合一只用方法一、二，场合二只用三、四，场合三只用五、六，就可以按这三组真实协作分别提取接口 A、B、C。〔TB28 p14–15〕原来实现大接口的类型必然也满足这些子集，场合一又从未使用其他四个方法，因此把它的参数换成 A 后，原实现依然能传入，现有调用仍然合法。这就是按使用场合缩小依赖时能够平滑替换的原因。</p>
+  <p id="SQi6wxXd">拆完后还要不要继续拆，依据仍是契约职责。若两个方法共同完成一份不可分割的协作，可以保留在一起；若不同使用方只需要其中一个，再考虑细分。能用标准库接口时直接复用；定义自己的接口时从使用方所需行为出发。方法少是结果，完整、恰当地表达需要才是目标。〔TB28 p15〕</p>
+  <details id="GoAcV2Dc" summary="接口为什么影响应用的骨架" open="false">
+    <p>去掉业务处理、算法细节和具体错误处理后，剩下的是程序由哪些部分组成、这些部分怎样连接。这个结构可以称为应用骨架，像从 X 光片里看到骨骼：从静态视角看组成与连接，关注耦合；从动态视角看可独立推进的机构，关注并发。接口主要参与耦合设计，Goroutine、channel、select 主要参与并发设计。这些选择会影响程序的健壮性、灵活性、扩展性，甚至运行效率。〔TB28 p1–2〕</p>
+    <p>本章依次展开接口声明与小接口、内部表示、应用模式，正是从“怎样表达协作”走到“协作怎样执行”和“怎样组合应用”。不需要先懂全部运行时细节才能使用 Sender，但理解后面的动态类型、方法入口与装箱，能避免把接口当成没有代价、没有边界的万能抽象。</p>
+  </details>
+  <p id="w9yqUEzt">可以带着两道问题检验这份设计：如果 Go 没有接口，Welcome 怎样同时接收 Email 和 SMS，测试怎样替换发送过程，哪些场景可以改用函数参数而不是接口？再找一份自己熟悉的大接口，按真实使用场合划分方法，说明哪些职责应该保留在一起，哪些可以独立。它们分别对应“没有接口会影响什么”和“怎样定义小接口”这两道思考题；没有唯一标准答案，关键是给出具体依赖与取舍。〔TB28 p16〕</p>
+  <h2 id="qM7fIbyR">三、从参数传递理解方法集合</h2>
+  <p id="ZwF-cq1Q">Welcome 可以接受 Email 和 SMS，是因为它们的方法满足 Sender。写入示例中 Save 接受 &amp;buf 而不是 buf，则提醒我们：同一个基类型的值与指针，不一定满足同一个接口。先拆开一次方法调用，就能把“调用方便”与“实现接口”分清。</p>
+  <h3 id="_Ik6WwOO">把接收者放回第一个参数</h3>
+  <p id="If_SCs7V">第一节的 Counter.Value 可以按下面的普通函数理解，Add 也一样。这里沿用 Counter 的定义，两个函数用于展示等价的参数传递关系：</p>
+  <codeblock id="yERsQdof" lang="go">func Value(c Counter) int { return c.value }
+func Add(c *Counter, n int) { c.value += n }
+</codeblock>
+  <p id="rd3489FT">原来在点号左边的接收者，现在显式排在普通参数之前。c.Value() 对应 Value(c)，c.Add(3) 在 c 可寻址时对应 Add(&amp;c, 3)。这与 C++ 非静态成员调用带有隐含 this 的思路有相似之处，但 Go 的接收者明确写在声明上，既可以是值，也可以是指针，不能一概当成 this 指针。方法仍然绑定到类型，不会因为这种等价分析就失去类型归属。〔TB24 p6-7〕</p>
+  <p id="nNjLcLL_">沿着这个模型，Get 与 Set 的原始例子也能完整保留。下面是一个独立程序，它同时声明方法与等价函数，再把方法表达式赋给变量：</p>
+  <codeblock id="y9Yti1u6" lang="go">package main
+
+import &quot;fmt&quot;
+
+type T struct { a int }
+
+func (t T) Get() int { return t.a }
+func (t *T) Set(a int) int { t.a = a; return t.a }
+
+func Get(t T) int { return t.a }
+func Set(t *T, a int) int { t.a = a; return t.a }
+
+func main() {
+    var t T
+    t.Set(1)
+    fmt.Println(t.Get())
+    fmt.Println(T.Get(t))
+    fmt.Println((*T).Set(&amp;t, 2))
+    f1 := (*T).Set
+    f2 := T.Get
+    fmt.Printf(&quot;%T\n&quot;, f1)
+    fmt.Printf(&quot;%T\n&quot;, f2)
+    f1(&amp;t, 3)
+    fmt.Println(f2(t))
+}
+</codeblock>
+  <p id="sxDubF50">按这些调用推导，三个数值行先是 1、1、2，接着两个函数类型是 func(*main.T, int) int 和 func(main.T) int，最后的数值是 3。T.Get 与 (*T).Set 叫方法表达式，得到普通函数值，调用时必须显式提供第一个接收者实参。f1、f2 能作为右值赋给变量，也能继续作为回调参数传递。〔TB24 p7-8〕</p>
+  <p id="xZkDtMfh">Counter 版本完全遵守同样的规则：(*Counter).Add 的类型是 func(*Counter, int)，Counter.Value 的类型是 func(Counter) int。Add 没有返回值，所以它的方法表达式也没有返回值；不能把原来 Set 的 int 返回值照抄过来。这种分析说明的是可观察语义与函数签名，不要求优化后的机器码仍保留某个独立调用，编译器还可能内联。</p>
+  <p id="HftUIGhR">方法表达式不是 C++ 的静态成员方法，也不要求该类型有静态成员。它选择的是某个类型方法集合中已有的方法。(*T).Get 也合法，类型为 func(*T) int：它取出指针所指的 T 值，再按值传入 Get。T.Set 则有意不能编译，因为 T 的方法集合没有指针接收者方法 Set。普通调用 t.Set(1) 可以自动取地址，不代表类型名 T 也能在方法表达式中自动变成 *T。〔TB24 p7-8〕</p>
+  <h3 id="fImumHNF">三个 six：先分清传入的是谁的地址</h3>
+  <p id="4X1xbWxt">下面保留一个历史问题的完整程序。print 使用指针接收者，两个切片分别保存指针和值。它不仅用于讲 goroutine，也用于观察接收者在启动 goroutine 时怎样变成实参。〔TB24 p9-10〕</p>
+  <codeblock id="iqLT-L-t" lang="go">package main
+
+import (
+    &quot;fmt&quot;
+    &quot;time&quot;
+)
+
+type field struct { name string }
+
+func (p *field) print() { fmt.Println(p.name) }
+
+func main() {
+    data1 := []*field{{&quot;one&quot;}, {&quot;two&quot;}, {&quot;three&quot;}}
+    for _, v := range data1 {
+        go v.print()
+    }
+    data2 := []field{{&quot;four&quot;}, {&quot;five&quot;}, {&quot;six&quot;}}
+    for _, v := range data2 {
+        go v.print()
+    }
+    time.Sleep(3 * time.Second)
+}
+</codeblock>
+  <p id="xk_WxIfY">末尾的 Sleep 给六个子 goroutine 留出运行时间：main 返回时程序会结束，不会自动等待它们。不过睡三秒不等于等待它们完成，没有完成同步，也不保证输出次序，后面会把它换成明确的等待。课程在旧循环语义下观察到 one、two、three 加三个 six，具体行序依调度变化。这不是当前语言版本下上面这段 := 循环必然具有的结果。〔TB24 p9-11〕</p>
+  <p id="sL124kLu">先不考虑版本，分别把两个循环改写成方法表达式；下列代码替换原程序中的循环部分，依赖原来的类型和切片变量：</p>
+  <codeblock id="VGfgXCTX" lang="go">for _, v := range data1 {
+    go (*field).print(v)
+}
+for _, v := range data2 {
+    go (*field).print(&amp;v)
+}
+</codeblock>
+  <p id="SJGZJbty">data1 的 v 已经是 *field，传入的是各元素保存的指针值。data2 的 v 是 field，调用指针方法需要 &amp;v；这个地址属于循环变量，不是 data2 元素的地址。range 把元素复制给 v 后，&amp;v 指向的始终是那份迭代变量。这一差别不随 Go 1.22 改变。go 语句的函数值与实参在启动方求值，接收者也在此时确定；这不是一个“闭包稍后才求值 v”的例子，而是把某个已经算出的指针传给稍后运行的方法。〔TB24 p10-11〕</p>
+  <p id="-id1Lgoj">旧语言语义下，:= 声明的 v 在整个循环中复用，第二个循环于是反复传入同一个地址。如果三个 print 都等到循环结束才读它，就会读到最后复制进去的 six。但调度可能让读取更早发生；原程序既没有固定这个时机，也没有同步循环写入与 goroutine 读取，旧语义的第二个循环还存在数据竞争，不能把“三个 six”当成规范保证的唯一输出。〔TB24 p11〕</p>
+  <p id="rAow69-H">Go 1.22 引入的规则是：采用 Go 1.22 或更新语言版本时，range 子句用 := 声明的迭代变量每轮新建。因此上面 data2 每轮的 &amp;v 指向不同的 field 副本；若六个 goroutine 都完成，应各打印 one 到 six 一次，行序不保证。不能只看安装的工具链版本：模块的 go.mod 中 go 指令等语言版本设置也参与决定采用哪套语义。当前工具链编译旧语言版本的包，不应被描述成“一律已经修好”。依据是现行规范 For statements 与 Go 官方文章 https://go.dev/blog/loopvar-preview，而不是 2021 年课程已经包含了这项变化。</p>
+  <p id="uvBOZHYF">如果提前声明 v，再写 for _, v = range data2，即使使用新语言版本，仍然是反复赋值给同一个已有变量，不会因 Go 1.22 自动变成各轮新变量。若目标是修改切片里的原元素，&amp;v 在新旧语义下都不是正确地址；应该按下标取 &amp;data2[i]。这与是否避免重复输出是两个不同要求。</p>
+  <h3 id="oYVxUJZ4">改成值接收者，为什么能避开历史问题</h3>
+  <p id="bE_fwI-7">这里 print 只读取 name，不需要修改原 field，可以改成值接收者。课程的修法只改这一行，其余保持前一个完整程序的样子；两个循环的等价调用分别变成 field.print(*v) 与 field.print(v)。go 语句求值时已经复制出本轮的 field，方法稍后运行不再通过 &amp;v 读取那个被复用的变量，因而在旧循环语义下也避开了这个共享地址问题。值接收者的复制是启动时发生，不是“编译时就把运行时数据初始化好”。〔TB24 p11-12〕〔TB24 p14〕</p>
+  <p id="EcboJcTg">下面给出完整的值接收者版本，同时把等待改成 channel 完成通知。与原版只改接收者的修法相比，这里额外改的是等待方式：每个工作 goroutine 打印后发送一次通知，main 收满六次才结束；输出行序仍不作保证。</p>
+  <codeblock id="6lw8WbXL" lang="go">package main
+
+import &quot;fmt&quot;
+
+type field struct { name string }
+
+func (p field) print() { fmt.Println(p.name) }
+
+func main() {
+    done := make(chan struct{}, 6)
+    data1 := []*field{{&quot;one&quot;}, {&quot;two&quot;}, {&quot;three&quot;}}
+    for _, v := range data1 {
+        // 先复制值，再交给 goroutine；等价于本轮的 field.print(*v)。
+        go func(p field) { p.print(); done &lt;- struct{}{} }(*v)
+    }
+    data2 := []field{{&quot;four&quot;}, {&quot;five&quot;}, {&quot;six&quot;}}
+    for _, v := range data2 {
+        go func(p field) { p.print(); done &lt;- struct{}{} }(v)
+    }
+    for i := 0; i &lt; 6; i++ { &lt;-done }
+}
+</codeblock>
+  <p id="YuMaz-IU">另一个历史修法是保留 *field 接收者，只在 data2 循环体内先写 v := v，再 go v.print()。内层声明用本轮值初始化新副本并遮蔽外层变量，传入的是各自副本的地址。这个办法对旧语义或使用 = 赋值的共享循环变量有效；新语义下直接用 := 声明的循环通常无需再加一次遮蔽。〔TB24 p15〕</p>
+  <p id="UjNWYR-T">可以做两个观察练习：先把两种循环写法中的 &amp;v 和 &amp;data2[i] 打印出来，解释地址代表哪个对象；再用方法表达式写出两种接收者下 data1 与 data2 的实参。若要稳定重现“共享变量最后都是 six”，先把每轮得到的 &amp;v 保存到指针切片，循环结束后再打印，而不要依赖 Sleep 猜调度时机。这样还能独立比较 := 的新旧语义以及 = 复用变量的情况。</p>
+  <h3 id="9zSJ4-r-">方法集合记录的是类型的能力，不是某一行能否调用</h3>
+  <p id="1HSFqxpY">现在用一个同时要求 M1 和 M2 的接口检查值与指针。下面是独立的预期失败程序：i = pt 合法，i = t 有意触发编译错误。删掉失败行后，程序不调用方法，只展示赋值检查；pt 的 nil 状态不影响这个静态结论。〔TB25 p6-7〕</p>
+  <codeblock id="Y9qInmcA" lang="go">package main
+
+type Interface interface { M1(); M2() }
+type T struct{}
+func (t T) M1() {}
+func (t *T) M2() {}
+
+func main() {
+    var t T
+    var pt *T
+    var i Interface
+    i = pt
+    i = t // 有意错误：T 缺少接口要求的 M2
+    _ = i
+}
+</codeblock>
+  <p id="-hZqkpTW">T 声明了值方法 M1，*T 声明了指针方法 M2。语言规则规定，定义类型 T 的方法集合包含接收者为 T 的方法；指向它的 *T 的方法集合同时包含接收者为 T 和 *T 的方法，前提是 T 不是指针或接口类型。于是 T 的集合只有 M1，*T 的集合有 M1 与 M2。*T 并不是“只有自己声明的 M2”，所以它可以满足接口。〔TB25 p7-10〕</p>
+  <p id="z6ppo_tv">方法集合是类型的属性，每个类型都有，没有方法的 int、*int 就拥有空集合。对这里仅由方法组成的普通接口，实现条件是具体类型的方法集合覆盖接口要求，方法名与签名均须匹配；可以有额外方法，不要求恰好一样。接口嵌入所要求的方法也要计入。泛型约束还可包含类型项，不能把所有约束的满足条件都简化为只看方法名。这个“能力覆盖”的规则把自定义类型与接口隐式连接起来，后面判断嵌入类型能用哪些方法还要继续使用。〔TB25 p7〕〔TB25 p10-12〕</p>
+  <h3 id="GOZRH24J">用反射观察值与指针的差别</h3>
+  <p id="nJHngP6c">下面完整程序保留 dumpMethodSet 的三条路径：没有动态类型时返回，有类型但没有可见方法时返回，否则遍历输出。方法全用大写名字，方便通过反射观察。〔TB25 p7-9〕</p>
+  <codeblock id="yfySPl5q" lang="go">package main
+
+import (
+    &quot;fmt&quot;
+    &quot;reflect&quot;
+)
+
+func dumpMethodSet(i interface{}) {
+    dynTyp := reflect.TypeOf(i)
+    if dynTyp == nil {
+        fmt.Println(&quot;there is no dynamic type&quot;)
+        return
+    }
+    n := dynTyp.NumMethod()
+    if n == 0 {
+        fmt.Printf(&quot;%s&apos;s method set is empty!\n&quot;, dynTyp)
+        return
+    }
+    fmt.Printf(&quot;%s&apos;s method set:\n&quot;, dynTyp)
+    for j := 0; j &lt; n; j++ {
+        fmt.Println(&quot;-&quot;, dynTyp.Method(j).Name)
+    }
+}
+
+type T struct{}
+func (T) M1() {}
+func (T) M2() {}
+func (*T) M3() {}
+func (*T) M4() {}
+
+func main() {
+    dumpMethodSet(nil)
+    var n int
+    dumpMethodSet(n)
+    dumpMethodSet(&amp;n)
+    var t T
+    dumpMethodSet(t)
+    dumpMethodSet(&amp;t)
+}
+</codeblock>
+  <p id="m-956jft">按 reflect API 的语义，nil 实参先打印 there is no dynamic type，int 和 *int 分别打印空集合提示；main.T 的列表为 M1、M2，*main.T 的列表为 M1、M2、M3、M4。这里的观察有一个重要边界：对非接口类型，reflect.Type.NumMethod 与 Method 只列出导出方法，且按字典序排列。因此这个工具不是任意类型完整方法集合的证明；如果把 M1 改成小写 m1，它仍可能是语言层面的方法，却不会被这里列出。依据为当前工具链 reflect/type.go 的 Type.Method 与 NumMethod 文档。</p>
+  <p id="M4R4FA5R">若把这套工具放进前一个混合接收者程序，并删去失败赋值，dumpMethodSet(t) 会列出 M1，dumpMethodSet(pt) 会列出 M1、M2。即使 pt 是 nil，reflect.TypeOf 仍能取得 *T 动态类型，不会进入“没有动态类型”分支。这正好把接口赋值检查的静态原因显示出来，而不必先创建一个非 nil 实例。〔TB25 p9-10〕</p>
+  <h3 id="3YeH_exg">接收者怎样改变副本与原值</h3>
+  <p id="P-xJQUIj">现在将接口要求暂时放在一旁，单独观察修改行为。下面沿用课程的 a 字段例子；它是独立程序，不与前面的同名 T 同时编译。〔TB25 p2-4〕</p>
+  <codeblock id="khb4McX4" lang="go">package main
+
+import &quot;fmt&quot;
+
+type T struct { a int }
+func (t T) M1() { t.a = 10 }
+func (t *T) M2() { t.a = 11 }
+
+func main() {
+    var t T
+    fmt.Println(t.a)
+    t.M1()
+    fmt.Println(t.a)
+    p := &amp;t
+    p.M2()
+    fmt.Println(t.a)
+}
+</codeblock>
+  <p id="lmGE5gTG">推导出的三次输出是 0、0、11。M1 对应 F1(t T)，只把副本的 a 改为 10，原实例没变。M2 对应 F2(t *T)，拿到的也是值拷贝，但拷贝的是地址；经地址写入字段 a，改到原实例。不能说“对指针参数的任何修改都反映到原值”：如果只是把方法内的 t 改指向另一个对象，变的是本地指针副本，不会替调用者重绑指针。这里改变原值的是 t.a = 11 这次间接写入。〔TB25 p2-4〕</p>
+  <p id="Dtx_MLok">不改方法，只把 main 替换成下面两组调用。t1 是可寻址的 T 变量，t2 是非 nil 的 *T，观察它们各调用两个方法的效果：</p>
+  <codeblock id="QuRTUSns" lang="go">func main() {
+    var t1 T
+    fmt.Println(t1.a) // 0
+    t1.M1()
+    fmt.Println(t1.a) // 0
+    t1.M2()
+    fmt.Println(t1.a) // 11
+
+    t2 := &amp;T{}
+    fmt.Println(t2.a) // 0
+    t2.M1()
+    fmt.Println(t2.a) // 0
+    t2.M2()
+    fmt.Println(t2.a) // 11
+}
+</codeblock>
+  <p id="DL03j7OT">t1.M2() 可写成 (&amp;t1).M2()，t2.M1() 可按 (*t2).M1() 理解。两组都是 0、0、11。指针调用值方法时仍然先形成值副本，所以 t2.M1() 不会把 10 写回原实例；自动调整调用形式没有改变参数按值传递的语义。这里特意使用非 nil 指针，nil 指针调用值接收者方法需要取出值，不能由这段示例推导为安全。〔TB25 p4-5〕</p>
+  <h3 id="DXZbLHVE">调用能自动取地址，接口赋值不会</h3>
+  <p id="XhHrt_RH">自动取地址有明确条件：调用现场的 x 必须可寻址，而且 &amp;x 的方法集合包含所调用的方法。map 元素、函数返回的普通结构体值、接口内保存的普通值都不能靠这种写法临时变成可供指针方法修改的原对象。下面的完整程序把调用和接口赋值放在一起：</p>
+  <codeblock id="YokHrDaL" lang="go">package main
+
+import &quot;fmt&quot;
+
+type Incrementer interface { Add(int) }
+type Counter struct { value int }
+func (c *Counter) Add(n int) { c.value += n }
+
+func main() {
+    var c Counter
+    c.Add(3) // 可寻址，等价于 (&amp;c).Add(3)
+    var inc Incrementer = &amp;c
+    inc.Add(2)
+    fmt.Println(c.value) // 5
+    // var bad Incrementer = c // 有意错误：Counter 缺少 Add
+}
+
+var _ Incrementer = (*Counter)(nil)
+</codeblock>
+  <p id="GS-jZfDS">c.Add(3) 检查的是这次方法调用，编译器可以借助 c 的地址。var inc Incrementer = &amp;c 检查的是赋入类型 *Counter 的方法集合；如果把最后一项注释里的 c 作为接口值赋入，检查的就是 Counter，缺少 Add，所以拒绝。赋值不会自动把 c 改成 &amp;c，Counter 的方法集合也没有因调用糖而增长。Save(&amp;buf, ...) 同样需要传入实际满足 Writer 的指针类型，不能指望赋值时补上地址。〔TB25 p4-5〕〔TB25 p9-10〕</p>
+  <p id="LBoNu6w8">可以在 main 里追加 m := map[string]Counter{&quot;a&quot;: {}}，然后尝试 m[&quot;a&quot;].Add(1)：这是预期失败的调用，因为 map 元素不可寻址。若把 map 改存 *Counter，就能调用所存指针的 Add，因为这时已经有 *Counter，不需要给 map 元素取地址。把值交给 any 后，也不能说它因此获得指针方法：方法资格仍由动态具体类型及它的方法集合决定。</p>
+  <p id="0JBxZ1ZX">末尾的 var _ Incrementer = (*Counter)(nil) 是编译期断言。它不创建 Counter 实例，不执行 Add，也不测试 nil 接收者是否安全；只是让编译器确认 *Counter 能赋给 Incrementer。练习包 exercises/p30/iface.go 对 Iface 与 *Impl 使用同样的写法，TestMethodSetMatrix 则核对值和指针的方法列表。</p>
+  <h3 id="Mzoo_emo">先决定值还是指针参与接口，再选择每个接收者</h3>
+  <p id="I7HJcpLa">现在可以把三条选型原则放在同一个决策里。先问调用方究竟要把 T 值还是 *T 指针交给接口。若明确要求 T 值本身实现普通方法接口，接口所需的方法必须存在于 T 的方法集合；对直接声明的方法，就要使用值接收者。若只要求 *T 实现接口，可以同时使用值接收者与指针接收者，因为 *T 包含两类方法。这个问题站在类型与调用方的关系上，比单个方法内部怎样写更先发生。〔TB25 p10-11〕</p>
+  <p id="a3SkLxb0">然后检查修改需求：像 Counter.Add 那样要改变原结构体字段，就应使用 *T；不能为了让 Counter 值也满足接口而把 Add 改成值接收者，导致原本需要的更新丢失。此时应让调用方传 *Counter。Email.Send 如果不需要修改 Email 自身，而且希望 Welcome 接受 Email 值与 *Email，可以使用值接收者；但“未来会放进 Sender”本身并不强制值接收者，指针实现 Sender 也是有效设计。接口使用方式与修改语义必须一起决定。〔TB25 p4〕〔TB25 p10-11〕</p>
+  <p id="fAgDLEMA">没有修改实例需求时，小而可复制的值常适合值接收者：方法对直接字段的修改不会回写，减少了这类修改原状态的渠道。若结构体很大，复制接收者会有成本，指针接收者可能更合适；是否形成值得优化的开销仍要结合实际调用和测量，不能把“指针一定更快”当作语言规则。值接收者也不能承诺深层不可变，含有 slice、map、指针时仍可能修改共享对象。〔TB25 p5-6〕</p>
+  <p id="qKmsp6Es">还要检查复制是否合法。含有 sync.Mutex 等使用后不能复制字段的类型，不应在使用后通过值接收者复制整个实例；这是比“结构体大小”更强的约束。sync.Mutex 的 API 明确要求首次使用后不得复制，即便某个方法只读取旁边的字段，值接收者也会把锁一起复制。可使用指针接收者维持对象身份，但指针本身不提供并发同步，真正访问共享状态时仍须遵守锁的使用规则。不要只按“需要接口”“没有修改”或“对象很小”中的某一条机械决定。</p>
+  <h3 id="8IV0gzq_">新类型与别名，不是继承关系</h3>
+  <p id="lZ_-p-w-">最后用一道方法集合练习为后面的嵌入做准备。下列程序可以独立运行：先判断 S、*S、Alias 与 *Alias 各有哪些方法，再看赋值检查。〔TB25 p12-13〕</p>
+  <codeblock id="mdYxGGs9" lang="go">package main
+
+type T struct{}
+func (T) M1() {}
+func (T) M2() {}
+
+type S T
+type Alias = T
+
+type Both interface { M1(); M2() }
+
+var _ Both = Alias{}
+var _ Both = (*Alias)(nil)
+// var _ Both = S{}     // 有意错误：S 没有 M1、M2
+// var _ Both = (*S)(nil) // 有意错误：*S 也没有 M1、M2
+
+func main() {
+    var s S
+    T(s).M1() // 显式转成 T，调用的是 T 的方法
+}
+</codeblock>
+  <p id="2JlQhiKc">type S T 创建了新定义类型，不继承直接绑定到 T 的 M1、M2；本例 S 和 *S 的方法集合都为空。type Alias = T 没有创建新类型，它与 T 是同一类型，所以值与指针都保留这两个值方法。可以把上面的 dumpMethodSet 函数加进程序，分别观察四种形式；注意不要把两个示例的 main 和 T 重复放进同一个包。〔TB25 p12-13〕</p>
+  <p id="sf2NZQxm">“新类型不继承原类型的方法”指的是原类型直接绑定的方法，并不抹掉底层结构里的字段类型。如果原来的结构体含有嵌入字段，新类型保留这些字段，其方法仍可能按嵌入规则被提升。因而不能把本例的“集合为空”推广到所有 type S T。下一部分会从嵌入字段继续推导这个边界，而不是把它叫作类继承。</p>
+  <h2 id="D2FawZzA">四、接口值：编译期保证什么，运行时又保存什么</h2>
+  <p id="J4xQqtEJ">前面已经解决“Email 能不能作为 Sender 使用”：编译器用方法集合检查实现关系。现在沿同一个 Welcome 往下走，解释另一件事：Welcome 的参数明明一直是 Sender，为什么先执行 Email.Send，后来又执行 SMS.Send？这要区分变量的静态类型与接口值保存的动态类型。〔TB29 p1–4〕</p>
+  <codeblock id="abCdS2ze" lang="go">// 沿用前面的 Sender、Email、SMS 和 Welcome。
+var sender Sender = Email{}
+Welcome(sender)
+sender = SMS{}
+Welcome(sender)</codeblock>
+  <p id="cJ7wzVRy">sender 的静态类型是声明写下的 Sender，不会在第二次赋值后变成 SMS。编译器据此决定哪些赋值合法、能调用哪些方法，以及 Send 的参数和返回值怎样检查。动态类型则随当前保存的值变化：先是 Email，后是 SMS；动态值分别是相应的具体值。接口赋值并没有把具体类型改名为 Sender，而是保留了具体类型的信息。〔TB29 p2〕</p>
+  <p id="_CgyItvv">error 也一样。以下片段放进 main 并导入 errors、fmt，%T 预期打印 *errors.errorString，但 err 的静态类型始终是 error：</p>
+  <codeblock id="5NFpMfzw" lang="go">var err error
+err = errors.New(&quot;error1&quot;)
+fmt.Printf(&quot;%T\n&quot;, err) // 当前标准库实现：*errors.errorString</codeblock>
+  <p id="SBHWK-bi">*errors.errorString 是 errors 包当前实现选择的具体类型，不是 error 接口要求使用的唯一类型。反过来，var err error = 1 会在编译期失败，int 没有 Error() string。接口让运行时可以替换不同实现，同时用静态类型检查拦截这类不合法赋值；它并没有取消 Go 的静态类型系统。〔TB29 p2–4〕</p>
+  <h3 id="7p6as47_">保留接口分派时，Send 是怎样被找到的</h3>
+  <p id="DAGPzybb">一个普通的带方法接口值，可以先按两部分理解：一部分记录“当前是哪一种类型，怎样满足这份接口”，另一部分保存具体值所需的数据表示。这里先看 Sender，不把没有方法的 any 混进来。现行 Go 运行时用 iface 表示这样的接口值：</p>
+  <codeblock id="7ZVvYnoJ" lang="go">// Go 1.26.4，src/runtime/runtime2.go 的内部定义。
+type iface struct {
+    tab  *itab
+    data unsafe.Pointer
+}</codeblock>
+  <p id="4zFvfsRa">tab 指向一份 itab。它不是 Email 单独的一张通用表，而是“接口类型与具体类型这一对”的实现记录：Sender × Email 与 Sender × SMS 是不同的配对。记录中同时包含 Sender 的类型信息、当前具体类型的信息，以及按接口方法顺序安排的调用入口。data 则承载这次传入的具体值。〔TB29 p5–7〕Email 这里恰好是零大小结构体，不能用它来推断所有 data 都另有一份堆内存；后面会分开解释数据表示与分配。</p>
+  <mermaid id="sDyKroNb">flowchart LR
+    W[&quot;Welcome(sender Sender)&quot;] --&gt; I[&quot;接口值 sender&quot;]
+    I --&gt; TAB[&quot;tab：Sender × Email 的 itab&quot;]
+    I --&gt; DATA[&quot;data：当前具体值的数据表示&quot;]
+    TAB --&gt; IT[&quot;Inter：Sender 的类型与方法要求&quot;]
+    TAB --&gt; CT[&quot;Type：Email 的类型信息&quot;]
+    TAB --&gt; FUN[&quot;Fun：Send 对应的调用入口&quot;]
+    FUN --&gt; SEND[&quot;Email.Send 或衔接它的包装函数&quot;]
+    DATA --&gt; SEND
+</mermaid>
+  <p id="tI0s7tMf">编译器看到 sender.Send，已经知道这是 Sender 中的哪一个方法，因此知道使用表里的哪个位置。在仍然保留接口分派的机器代码里，调用方从 tab 取出那个位置的入口，准备接收者所需的数据及 message 参数，再通过入口调用。入口可能是编译器生成的包装函数，由它衔接到具体方法，不必假定它总是源码方法直接编译后的入口。传入 Sender × Email 这份表时最终执行 Email.Send，换成 Sender × SMS 时最终执行 SMS.Send；Welcome 的函数体不需要改变。</p>
+  <p id="vEwH8teR">所以，这条调用路径不是每次拿字符串 &quot;Send&quot; 遍历全部方法，也不是每调用一次就重新验证“Email 是否实现 Sender”。实现关系已经在编译期得到保证，运行时按已确定的位置使用入口。itab 的创建、查找或缓存可能发生在建立某些接口值、转换接口或类型断言时，不能把“调用不按方法名搜索”扩张成“运行时任何阶段都不查表”。〔TB29 p7〕</p>
+  <p id="Db7b07ay">也不能反过来断言，源码里每次接口调用最终都保留间接调用。如果编译器能确定某个调用点的具体类型，它可能去虚拟化，直接调用 Email.Send，甚至继续内联方法体。编译期保证“可以调用”和机器代码选择“如何调用”是两层问题；内联、去虚拟化改变实现路径，不改变接口语义。</p>
+  <details id="tLlG91qt" summary="选读：在汇编中识别这条分派路径" open="false">
+    <p>为了观察独立的 Welcome，可以暂时在其声明前加 //go:noinline，使用本章的完整通知程序构建。这个指令只用于观察，不是业务代码应该禁用优化的建议。</p>
+    <codeblock lang="go">//go:noinline
+func Welcome(sender Sender) {
+    sender.Send(&quot;欢迎注册&quot;)
+}</codeblock>
+    <p>Go 1.26.4、darwin/arm64 下，已批准样稿的观察记录中，Welcome 从表中取入口的关键指令为 MOVD 24(R0), R3，随后 CALL (R3)。R0 当时保存 tab，R1 保存 data；main 中能识别 Sender 与 Email、SMS 配对的 itab 符号。24 这个偏移来自该工具链与架构的布局，不是 Go 语言保证的常量。本候选不把历史观察写成新的实测，复核时应以当前构建输出为准。</p>
+    <p>现行编译器 src/cmd/compile/internal/devirtualize/devirtualize.go 明确区分静态去虚拟化与基于 profile 的条件直接调用优化。是否保留间接调用要看具体调用点与构建条件，不由“用了 interface”四个字决定；本章也不据一段汇编推断性能快慢。</p>
+  </details>
+  <h3 id="GQ7f12gk">nil 指针装入接口，为什么不等于 nil</h3>
+  <p id="FRKr4jjQ">接口保存了具体类型信息，这正是 nil 陷阱的关键。下面是一份改编自 Go FAQ 的完整程序。MyError 嵌入 error，借此拥有 Error 方法；ErrBad 内部保存一个实际错误。bad 固定返回 false，方便只观察“没有出错”的路径。〔TB29 p4–5〕</p>
+  <codeblock id="0pLgKvGZ" lang="go">package main
+
+import (
+    &quot;errors&quot;
+    &quot;fmt&quot;
+)
+
+type MyError struct {
+    error
+}
+
+var ErrBad = MyError{
+    error: errors.New(&quot;bad things happened&quot;),
+}
+
+func bad() bool {
+    return false
+}
+
+func returnsError() error {
+    var p *MyError = nil
+    if bad() {
+        p = &amp;ErrBad
+    }
+    return p
+}
+
+func main() {
+    if err := returnsError(); err != nil {
+        fmt.Printf(&quot;error occur: %+v\n&quot;, err)
+        return
+    }
+    fmt.Println(&quot;ok&quot;)
+}</codeblock>
+  <p id="FSHjcCwQ">p 的值确实为 nil，但函数的返回类型是 error，因此 return p 还要把 *MyError 指针放进 error 接口。返回后的接口保存了“具体类型是 *MyError，具体指针值是 nil”两份信息。它不是“没有保存任何具体类型和值”的 nil 接口，所以 err != nil 成立，进入错误分支。这个程序的来源输出是 error occur: &lt;nil&gt;，而不是 ok；格式化时看到 &lt;nil&gt; 不代表接口自身等于 nil。〔TB29 p5,14〕</p>
+  <mermaid id="458XJqcj">flowchart TB
+    P[&quot;p：*MyError，指针值 nil&quot;] --&gt; R[&quot;return p：转换为 error 接口&quot;]
+    R --&gt; E[&quot;err：iface&quot;]
+    E --&gt; T[&quot;tab 非 nil：error × *MyError&quot;]
+    E --&gt; D[&quot;data = nil：保存的具体指针为空&quot;]
+    N[&quot;nil 接口：没有动态类型，也没有动态值&quot;] --&gt; NT[&quot;tab = nil&quot;]
+    N --&gt; ND[&quot;data = nil&quot;]
+    T --&gt; C[&quot;类型信息不同，所以 err != nil&quot;]
+    NT --&gt; C
+</mermaid>
+  <p id="i852tMjz">这还不能推出“nil 指针的方法总能安全调用”。接口中保存 nil 指针时，是否可以调用具体方法，取决于方法和包装过程是否解引用它。这里的 MyError.Error 来自嵌入字段，不能把这个格式化现象当成通用的 nil 安全约定。真正应该修的是返回路径，让“没有错误”返回 nil 接口。</p>
+  <p id="8280u7Qm">最直接的写法是删掉中间的具体指针变量，按分支返回。替换原函数，其余代码不变：</p>
+  <codeblock id="v_pNSiQW" lang="go">func returnsError() error {
+    if bad() {
+        return &amp;ErrBad
+    }
+    return nil
+}</codeblock>
+  <p id="r3tzUigl">bad 为 false 时，return nil 直接产生 error 的零值，调用方走到 ok；bad 为 true 时返回实际的 *MyError，接口非 nil，调用方仍能处理“bad things happened”。另一种修法是保留局部变量，但把它声明成 error：</p>
+  <codeblock id="sLFnWmid" lang="go">// 这是另一种替换方案，不和上一个同名函数同时声明。
+func returnsError() error {
+    var p error
+    if bad() {
+        p = &amp;ErrBad
+    }
+    return p
+}</codeblock>
+  <p id="nL9yk85K">未进入分支时，p 从始至终是 nil 接口，返回时不会凭空带上 *MyError 类型信息。这里的修复点不是“函数签名改成 error”——原函数签名本来就是 error——而是不要让无错误路径返回一个带具体类型的 nil 指针。这两种修法来自读者讨论，保留了异常路径，不是把函数无条件改成 return nil。〔TB29 p24–25〕</p>
+  <h3 id="Uj8_H7HP">空接口为什么使用另一种表示</h3>
+  <p id="hv2x5MBP">Sender 需要方法入口，any 没有任何方法要求，因此不需要“某具体类型如何实现这份方法列表”的记录。Go 运行时用 eface 表示空接口：</p>
+  <codeblock id="XZyQgqBE" lang="go">// Go 1.26.4，src/runtime/runtime2.go 的内部定义。
+type eface struct {
+    _type *_type
+    data  unsafe.Pointer
+}</codeblock>
+  <p id="w2Hq9PX-">两个表示都是两字结构。eface 的第一字直接指向具体类型信息 _type；iface 的第一字指向同时记录接口类型、具体类型和方法入口的 itab。第二字都用于具体值的数据表示，不能把它一概理解为“指向新分配堆对象的指针”：具体指针等直接表示的类型可以直接放入 data，其他值可能引用栈上的副本、只读静态数据或堆上的副本。nil 接口则是两字都为空。〔TB29 p5–9〕</p>
+  <p id="WdwjP-ps">用带整数与字符串字段的结构体来画图更直观。下面声明供接下来的两幅图和装箱例子使用，不是之前断言例子中的 type T int：</p>
+  <codeblock id="vYKNpUFU" lang="go">type T struct {
+    n int
+    s string
+}
+
+func (T) M1() {}
+func (T) M2() {}
+
+type NonEmptyInterface interface {
+    M1()
+    M2()
+}</codeblock>
+  <p id="hemB-4Zo">若 t := T{n: 17, s: &quot;hello, interface&quot;}，再令 var ei any = t，ei 的类型字指向 T 的类型信息，数据字指向保存这份 T 值的存储。〔TB29 p7–8〕</p>
+  <mermaid id="2m7XyOOv">flowchart LR
+    EI[&quot;ei：eface&quot;] --&gt; ET[&quot;_type → T 的类型信息&quot;]
+    EI --&gt; ED[&quot;data → T 值的存储&quot;]
+    ED --&gt; EV[&quot;n = 17，s = hello, interface&quot;]
+</mermaid>
+  <p id="hVT2QHJa">如果另取 t := T{n: 18, s: &quot;hello, interface&quot;}，令 var i NonEmptyInterface = t，数据部分仍承载 T 值，但第一字换成这一接口与 T 的 itab。表中列出 M1、M2 的入口，以及接口本身的方法要求。〔TB29 p8–9〕</p>
+  <mermaid id="ZRb5cw4d">flowchart LR
+    I[&quot;i：iface&quot;] --&gt; TAB[&quot;tab → NonEmptyInterface × T&quot;]
+    I --&gt; ID[&quot;data → T 值的存储：n = 18&quot;]
+    TAB --&gt; INTER[&quot;Inter：接口类型、包路径、M1/M2&quot;]
+    TAB --&gt; TYPE[&quot;Type：T 的类型信息&quot;]
+    TAB --&gt; HASH[&quot;Hash：具体类型哈希副本&quot;]
+    TAB --&gt; FUN[&quot;Fun：M1、M2 的调用入口&quot;]
+</mermaid>
+  <p id="fToE13Mr">类型信息是可以共享的元数据，不为每个接口值重新完整复制一份 T 的描述。对于同一动态类型，可以复用其类型信息；对于相同的接口与动态类型配对，可以复用相应 itab。这里“相同动态类型”不能扩大成“任何接口里的 tab 都相同”：同一个 T 分别作为两个不同接口使用时，接口要求和方法槽位可能不同，itab 也对应不同配对。〔TB29 p9〕</p>
+  <h3 id="qITtRuRQ">类型档案与实现档案分别装了什么</h3>
+  <p id="Yi7e7cYi">_type 用来描述一种具体类型，itab 用来描述具体类型实现某个接口的那份关系。Go 1.26.4 中 runtime._type 是 internal/abi.Type 的别名，runtime.itab 是 internal/abi.ITab 的别名，runtime.interfacetype 是 internal/abi.InterfaceType 的别名。理解下面这些职责，比背旧字段名更重要。</p>
+  <p id="KI2KxB-x">类型档案记录值大小、含指针内存前缀、类型哈希、额外标志、值与字段的对齐、类型种类，还保存比较函数、GC 数据、类型名字与指向该类型的指针类型的偏移信息。比较函数的两个参数是对象地址，函数按该类型的规则比较对象的值；不是简单比较这两个地址是否相同。类型不可比较时，这个比较函数可以为空，稍后接口比较就用它识别非法情况。〔TB29 p6〕</p>
+  <p id="aWHuLnMG">实现档案里的 Inter 指向接口自身的信息，Type 指向动态类型信息，Hash 是 Type.Hash 的副本，服务于 type switch，Fun 保存动态类型对接口方法的调用入口。Fun 在源码里声明为 [1]uintptr，是变长尾部的表示方式，不意味着任何接口都只有一个入口。有效实现的各方法入口按接口方法位置安排；Fun[0]==0 在运行时内部表示该类型不实现该接口的记录，不是可以拿来正常调用的实现。〔TB29 p7〕</p>
+  <details id="TditIY3U" summary="选读：Go 1.26.4 的字段与历史字段怎样对照" open="false">
+    <p>以下是 internal/abi 中的源码声明片段，依赖同包定义，不是可以从应用中直接导入 internal/abi 的代码。运行时内部结构不是稳定公共 API。</p>
+    <codeblock lang="go">type Type struct {
+    Size_       uintptr
+    PtrBytes    uintptr
+    Hash        uint32
+    TFlag       TFlag
+    Align_      uint8
+    FieldAlign_ uint8
+    Kind_       Kind
+    Equal       func(unsafe.Pointer, unsafe.Pointer) bool
+    GCData      *byte
+    Str         NameOff
+    PtrToThis   TypeOff
+}
+
+type ITab struct {
+    Inter *InterfaceType
+    Type  *Type
+    Hash  uint32
+    Fun   [1]uintptr
+}
+
+type InterfaceType struct {
+    Type
+    PkgPath Name
+    Methods []Imethod
+}</codeblock>
+    <p>旧资料中的 size、ptrdata、hash、tflag、align、fieldAlign、kind、equal、gcdata、str、ptrToThis，分别对应上面的 Size_、PtrBytes、Hash、TFlag、Align_、FieldAlign_、Kind_、Equal、GCData、Str、PtrToThis。PtrBytes 表示类型中可能包含指针的内存前缀字节数；Align_ 是值的对齐，FieldAlign_ 是作为结构体字段时的对齐；Kind_ 表示 string、int 等种类；Str 与 PtrToThis 是元数据偏移，后者允许为零。</p>
+    <p>历史 GCData 说明中，kind 的 KindGCProg 位区分 GC program 和指针位图；不能把这段历史规则原样解释成现行实现。Go 1.26.4 的 GCData 通常指向描述指针布局的位图；若设置 TFlagGCMaskOnDemand，则将这一字段按 **byte 解释，位图可按需构建。应按当前字段注释与 runtime/type.go 的实现阅读，而不是只因字段还是一个指针就假定语义未变。</p>
+    <p>旧 itab 的 inter、_type、hash、fun 对应 Inter、Type、Hash、Fun；旧定义里显式写出的四字节填充，在当前 darwin/arm64 上由 Fun 的对齐要求形成隐式填充，不能把“四字节”当作所有架构的固定规则。旧 interfacetype 的 typ、pkgpath、mhdr 对应嵌入的 Type、PkgPath、Methods。定义位置分别为 runtime/runtime2.go:184–192、1129，runtime/type.go:25、403，internal/abi/type.go:20–45、447–451，以及 internal/abi/iface.go:14–18。</p>
+  </details>
+  <h2 id="VQuoKylK">Java 与 Go：相同的多态目标，不同的实现关系与调用路径</h2>
+  <p id="kEyAL9xj">如果你已经用 Java 的接口写过业务代码，Welcome 的目标并不陌生：调用方声明自己需要发送消息，Email 和 SMS 提供两种实现。先用同一个例子把两边对齐，再看实现关系和调用过程各自在哪里确定，避免把“都能多态”误解成“底层完全一样”。</p>
+  <h3 id="GBFbIMrW">Java：方法写对了，还要有类型关系</h3>
+  <p id="InyhSlod">下面是可以独立运行的 Java 版本，保存为 DispatchDemo.java。与 Go 示例一样，这里只打印消息，不真正发送邮件或短信。</p>
+  <codeblock id="nPKX3eTM" lang="java">public class DispatchDemo {
+    interface Sender { void send(String message); }
+
+    static final class Email implements Sender {
+        public void send(String message) {
+            System.out.println(&quot;发送邮件： &quot; + message);
+        }
+    }
+
+    static final class SMS implements Sender {
+        public void send(String message) {
+            System.out.println(&quot;发送短信： &quot; + message);
+        }
+    }
+
+    static void welcome(Sender sender) {
+        sender.send(&quot;欢迎注册&quot;);
+    }
+
+    public static void main(String[] args) {
+        Sender sender = new Email();
+        welcome(sender);
+        sender = new SMS();
+        welcome(sender);
+    }
+}</codeblock>
+  <p id="RYm6n2qB">运行 javac DispatchDemo.java，再运行 java DispatchDemo，输出仍是先邮件、后短信。Email 和 SMS 显式声明了 implements Sender，所以它们的对象都能赋给 Sender 引用；如果一个父类已经实现 Sender，子类也可以继承这层关系，并不需要每个子类重复写 implements。</p>
+  <p id="dWEEnhxZ">仅把 Email 的 implements Sender 删掉，保留同名、同参数的 public void send(String)，并不会让它自动成为 Sender。这一点与 Go 不同：Go 直接检查方法集合是否满足接口，不需要实现方事先写出接口名字。因此，Go 的使用方可以后来再定义自己需要的接口，而不修改 Email；Java 则不能仅因为方法形状相同，就把一个未建立相应类型关系的对象当作 Sender。</p>
+  <h3 id="xUwQYKCS">字节码确定要调哪个接口方法，不确定当前对象是哪一种实现</h3>
+  <p id="iEsh3RAq">用 javap -c -p DispatchDemo 看 welcome。下面是本机 Corretto OpenJDK 17.0.19 实际生成的关键部分：</p>
+  <codeblock id="6n1Pr4_S" lang="text">static void welcome(DispatchDemo$Sender);
+  Code:
+     0: aload_0
+     1: ldc           #7   // String 欢迎注册
+     3: invokeinterface #9, 2
+     8: return</codeblock>
+  <p id="9Goh178d">aload_0 把 sender 引用放到操作数栈上，ldc 放入消息，invokeinterface 表示调用接口实例方法。这里的 #9 是当前类常量池中的符号引用，不是对象地址，也不是某个 Email.send 的机器码地址。这个引用描述 Sender.send 以及参数、返回值的描述符；消息和接收者引用则是在运行时通过操作数栈传入的。</p>
+  <p id="ZIZs6RYK">JVM 在解析这个接口方法引用后，还要根据当前接收者对象的实际类选择实现。第一次对象是 Email，第二次是 SMS，因此同一条字节码指令会执行不同实现。这是规范要求的选择语义；规范并没有要求所有 JVM 都用相同的 vtable 布局，或每次执行都按同一个机器级算法查找。</p>
+  <p id="Of90AinG">这也解释了两个容易混在一起的问题：常量池解析负责把符号引用关联到相应的方法信息；动态方法选择负责针对这一次实际接收者决定执行哪个实现。不能把前者说成“编译时已经选定永远调用 Email.send”，也不能把后者描述成每次都按字符串重新搜索所有类。</p>
+  <h3 id="MzxXL2pW">HotSpot 的 vtable 与 itable，不是一张固定表包办所有调用</h3>
+  <p id="1Y2sjo9Y">把观察范围明确到 OpenJDK 17.0.19 的 HotSpot 实现，才能继续讨论它用了哪些数据结构。这个版本的源码同时定义 klassVtable 与 klassItable。前者组织类的虚方法；后者组织接口实现相关的方法信息。它们属于类元数据，不是 Java 语言要求程序员维护的字段。</p>
+  <p id="jIiLd9d_">以 itable 的结构为例，可以分成接口偏移条目和方法条目两部分：偏移条目记录某个接口以及它对应的方法区位置；方法条目保存相应 Method 信息。这样，接收者的实际类既能关联到它实现的接口，也能关联到该接口方法的具体实现。这个结构服务于接口分派，但不能据此断言每次 invokeinterface 都逐项走完相同查找过程。</p>
+  <mermaid id="j9UMqiks">flowchart LR
+    R[&quot;Java Sender 引用&quot;] --&gt; O[&quot;当前接收者对象&quot;]
+    O --&gt; K[&quot;实际类的元数据&quot;]
+    K --&gt; T[&quot;HotSpot 接口分派相关信息：itable&quot;]
+    T --&gt; M[&quot;对应的具体方法&quot;]
+    B[&quot;invokeinterface 的符号引用&quot;] --&gt; S[&quot;接口与方法要求&quot;]
+    S -.&quot;与实际接收者共同确定目标&quot;.-&gt; T</mermaid>
+  <p id="pOW6Fuon">图画的是理解分派所需的信息关系，不是 Java 对象头的逐字段布局，也不是所有优化后机器码必经的完整路径。Java 的引用本身不携带 Go 那样的 (tab, data) 接口值表示；HotSpot 可以从对象关联到实际类的元数据。Go 的非空接口值则把对应接口与动态类型组合的 itab 指针和数据表示放在接口值中，保留接口分派时从该表的已知入口位置取调用地址。</p>
+  <h3 id="hIszDLwT">两边都要分清语言语义与优化后的机器码</h3>
+  <p id="QkzG04CG">Go 编译器能够确定具体类型时，可以去虚拟化并继续内联；HotSpot 的 JIT 也可能利用类层次信息或调用点收集到的接收者类型信息，把接口调用优化成带检查的直接调用，甚至内联方法体。条件不再满足时，JVM 还可能退回较通用的调用路径或进行去优化。</p>
+  <p id="h9E_2NYY">因此，看到 Go 的接口声明，不能断言一定发生堆分配；看到 Java 的 invokeinterface，也不能断言每次都进行完整的 itable 查找。更不能仅凭两边都有方法表，就推出性能相同。要比较具体成本，需要指定程序、工具链、优化条件和测量方法；本章解释分派机制，不给未经测量的性能排名。</p>
+  <p id="_rDAnHbj">回到写代码时最重要的判断：两门语言都允许调用方通过接口依赖行为。Java 的类型关系通常要显式建立或继承而来；Go 的实现关系由方法集合满足而成立。建立关系以后，两边都必须根据当前具体实现执行正确方法，但运行时怎样保存信息、编译器怎样优化，不应当被一句“都是查 vtable”抹平。</p>
+  <details id="Di7AYiyD" summary="对照依据与版本边界" open="false">
+    <p>本节 Java 程序和 javap 输出已在 Corretto OpenJDK 17.0.19（HotSpot Server VM）运行核对。接口调用语义依据 <a href="https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-6.html#jvms-6.5.invokeinterface">JVMS §6.5 invokeinterface</a>：常量池接口方法符号引用、接收者与参数，以及根据实际类进行方法选择。引用的是 Java SE 21 版本规范中这段通用语义，不把它说成本机使用了 Java 21。</p>
+    <p>HotSpot 结构依据固定标签 <a href="https://github.com/openjdk/jdk17u/blob/jdk-17.0.19%2B10/src/hotspot/share/oops/klassVtable.hpp">OpenJDK jdk-17.0.19+10 的 klassVtable.hpp</a> 中 klassVtable、klassItable、itableOffsetEntry、itableMethodEntry 的定义。优化能力参考 <a href="https://wiki.openjdk.org/spaces/HotSpot/pages/11829300/PerformanceTechniques">OpenJDK HotSpot PerformanceTechniques 的 Methods 段</a>；这是优化技术说明，不是本程序已经触发特定 JIT 优化的实测证据。本次没有做 JIT 汇编或跨语言基准测试。</p>
+  </details>
+  <h2 id="WHS9LWxV">五、接口值的比较与装箱：值相等，不等于地址相同</h2>
+  <p id="N9Vkl_Rd">接口比较首先是语言规则：两个接口值都为 nil 时相等；否则动态类型必须相同，动态值也必须按该类型的相等规则相等。比较操作本身还须满足静态类型的可比较与赋值关系要求。下面按四个具体场景观察，不直接拿内部两个机器字逐位判等。〔TB29 p10–15〕</p>
+  <h3 id="mrEOOoZY">先用 println 看两个字，再解释比较结果</h3>
+  <p id="laNP2Ogu">在这里选用的 Go 实现中，预定义 println 会显示接口值内部的两个字段，空接口是 (_type,data)，非空接口是 (tab,data)。编译器按参数类型选择 runtime/print.go 的 printeface 或 printiface。它是临时理解实现的辅助，不是稳定的序列化格式；地址随版本、构建和运行变化，重点看哪些信息为空、哪些类型或值相同。fmt 的 %T 则显示动态类型，和这种内部打印承担不同工作。〔TB29 p10〕</p>
+  <p id="P69WKe2T">下面是一份完整程序，保留四种情形的先后关系。这里的 T 是 type T int，提供 Error 方法；它和上一部分带 n、s 字段的结构体 T 是两个不同示例，不能粘在同一个包里重复声明。</p>
+  <codeblock id="S4nFZ3Eh" lang="go">package main
+
+import &quot;fmt&quot;
+
+type T int
+
+func (T) Error() string {
+    return &quot;bad error&quot;
+}
+
+func printNilInterface() {
+    var i any
+    var err error
+    println(i)
+    println(err)
+    println(&quot;i = nil:&quot;, i == nil)
+    println(&quot;err = nil:&quot;, err == nil)
+    println(&quot;i = err:&quot;, i == err)
+}
+
+func printEmptyInterface() {
+    var eif1 any
+    var eif2 any
+    var n, m int = 17, 18
+    eif1 = n
+    eif2 = m
+    println(&quot;eif1:&quot;, eif1)
+    println(&quot;eif2:&quot;, eif2)
+    println(&quot;eif1 = eif2:&quot;, eif1 == eif2) // false
+
+    eif2 = 17
+    println(&quot;eif1:&quot;, eif1)
+    println(&quot;eif2:&quot;, eif2)
+    println(&quot;eif1 = eif2:&quot;, eif1 == eif2) // true
+
+    eif2 = int64(17)
+    println(&quot;eif1:&quot;, eif1)
+    println(&quot;eif2:&quot;, eif2)
+    println(&quot;eif1 = eif2:&quot;, eif1 == eif2) // false
+}
+
+func printNonEmptyInterface() {
+    var err1 error
+    var err2 error
+    err1 = (*T)(nil)
+    println(&quot;err1:&quot;, err1)
+    println(&quot;err1 = nil:&quot;, err1 == nil) // false
+
+    err1 = T(5)
+    err2 = T(6)
+    println(&quot;err1:&quot;, err1)
+    println(&quot;err2:&quot;, err2)
+    println(&quot;err1 = err2:&quot;, err1 == err2) // false
+
+    err2 = fmt.Errorf(&quot;%d\n&quot;, 5)
+    println(&quot;err1:&quot;, err1)
+    println(&quot;err2:&quot;, err2)
+    println(&quot;err1 = err2:&quot;, err1 == err2) // false
+}
+
+func printEmptyInterfaceAndNonEmptyInterface() {
+    var eif any = T(5)
+    var err error = T(5)
+    println(&quot;eif:&quot;, eif)
+    println(&quot;err:&quot;, err)
+    println(&quot;eif = err:&quot;, eif == err) // true
+
+    err = T(6)
+    println(&quot;eif:&quot;, eif)
+    println(&quot;err:&quot;, err)
+    println(&quot;eif = err:&quot;, eif == err) // false
+}
+
+func main() {
+    printNilInterface()
+    printEmptyInterface()
+    printNonEmptyInterface()
+    printEmptyInterfaceAndNonEmptyInterface()
+}</codeblock>
+  <p id="bCb7Z2Mx">第一种是 nil 接口。未初始化的 any 与 error 都没有动态类型，也没有动态值，内部打印都是 (0x0,0x0)。因此 i == nil、err == nil、i == err 都为 true。虽然变量的静态接口类型不同，但比较的是当前接口值，两者都为 nil。〔TB29 p10–11〕</p>
+  <p id="XbkGoUtk">第二种是两个空接口。先保存 int 的 17 和 18，类型相同、值不同，得到 false；再都保存 int(17)，得到 true；最后把 eif2 改成 int64(17)，即使数值写作同一个 17，动态类型不同，仍为 false。〔TB29 p11–12〕第二轮 data 地址可以不同而结果仍为 true：例如来源输出分别是 0xc00007ef48 和 0x10eb3d0，关键是它们代表的 int 值都为 17。不能比较地址文本来代替语言的值比较，也不保证不同赋值必定产生不同地址。</p>
+  <p id="nqI9JNkC">第三种是两个非空接口。(*T)(nil) 放进 error 后是 (非空 tab,0x0)，因此不等于 nil；这里只比较它，没有调用其 Error 方法。接着 T(5) 与 T(6) 的接口类型及动态类型都相同，但值不同，结果 false。再把 err2 换成 fmt.Errorf 构造的错误，动态类型已经不是 T，所以仍然 false；格式化后看起来“都在说错误”不会建立值相等关系。〔TB29 p13–14〕</p>
+  <p id="fsSANl89">第四种是空接口与非空接口。eif 保存 T(5)，err 也保存 T(5)，第一个字段一个直接是 T 的类型信息，另一个是 itab 地址，二者地址当然不需要相同。跨接口表示进行转换后，判断的具体类型信息对应 eface._type 与 iface.tab.Type（历史字段名 tab._type），都是 T，动态值也都是 T(5)，所以结果 true；err 改成 T(6) 后才变 false。〔TB29 p14–15〕非空接口转成 any 时，编译器取得 itab 中的具体类型信息并沿用数据字，不会把原接口类型 error 当成新的动态类型再套一层。</p>
+  <p id="_sZfItU-">若具体值本身是指针，比较要按指针相等规则，而不是深入比较它指向的对象内容。例如两个分别分配、都保存 17 的 *int 通常不相等，放进 any 后也不会自动获得深度相等。类型档案里的 Equal 会依据类型选相等算法；对直接表示的可比较指针、channel 等，运行时可以直接比较数据字，对间接表示的值才调用相应值比较函数。</p>
+  <h3 id="yvMhiDgg">动态类型相同，也可能在比较时 panic</h3>
+  <p id="tYhRvnjd">“动态类型相同、值相同”还隐含一项前提：这个动态类型必须可以比较。接口自身可以参与 ==，不保证任意装进去的值都能比较。将下面的片段放在一个单独 main 中，并导入 fmt，最后一行是故意触发的运行时错误：</p>
+  <codeblock id="MQeaqD9m" lang="go">var a any = []int{1}
+var b any = []int{1}
+fmt.Println(a == nil)       // false：与 nil 比较不需要比较 slice 内容。
+fmt.Println(a == any(1))    // false：动态类型不同。
+fmt.Println(a == b)         // panic：相同动态类型 []int 不可比较。</codeblock>
+  <p id="qd__HRkZ">slice、map、函数都不是可比较类型，即使接口里保存的是 nil slice，与另一个同类型接口值比较也不能借“两个都是 nil”绕过限制；它们不是 nil 接口。数组或结构体字段里含有接口时，比较也可能在遇到这样的动态值时 panic。现行 runtime/alg.go 的 efaceeq、ifaceeq 会检查动态类型的 Equal；为空时触发 comparing uncomparable type 一类的 panic。规范依据见 https://go.dev/ref/spec#Comparison_operators。</p>
+  <details id="g8pZrVIL" summary="选读：把 dump 工具的每一层信息展开" open="false">
+    <p>只看 eface 的第一字和 iface 的第一字，并不能直接看出它们是否保存同一个具体类型。为了进一步观察，可以复制所用工具链的内部布局，再借 unsafe 读取。这个做法刻意突破了正常类型边界，不是业务接口的用法，也没有跨版本兼容保证。TB29 的工具基于 Go 1.17，并明确提示可能只适用该版本。〔TB29 p15–19〕下面给出按 Go 1.26.4 darwin/arm64 当前布局写出的独立观察程序；它仍需在这个指定环境单独复核，不能把“成功编译”当成所有字段都解释正确的证明。</p>
+    <codeblock lang="go">package main
+
+import (
+    &quot;fmt&quot;
+    &quot;unsafe&quot;
+)
+
+// 仅映射 Go 1.26.4 内部布局；这些名字不是 runtime 的公共类型。
+type typeInfo struct {
+    Size_       uintptr
+    PtrBytes    uintptr
+    Hash        uint32
+    TFlag       uint8
+    Align_      uint8
+    FieldAlign_ uint8
+    Kind_       uint8
+    Equal       func(unsafe.Pointer, unsafe.Pointer) bool
+    GCData      *byte
+    Str         int32
+    PtrToThis   int32
+}
+
+type nameInfo struct {
+    Bytes *byte
+}
+
+type methodInfo struct {
+    Name int32
+    Typ  int32
+}
+
+type interfaceInfo struct {
+    typeInfo
+    PkgPath nameInfo
+    Methods []methodInfo
+}
+
+type itabInfo struct {
+    Inter *interfaceInfo
+    Type  *typeInfo
+    Hash  uint32
+    Fun   [1]uintptr
+}
+
+type efaceInfo struct {
+    Type *typeInfo
+    Data unsafe.Pointer
+}
+
+type ifaceInfo struct {
+    Tab  *itabInfo
+    Data unsafe.Pointer
+}
+
+type T int
+
+func (T) Error() string { return &quot;bad error&quot; }
+
+func dumpData(i any, data unsafe.Pointer) {
+    if data == nil {
+        fmt.Println(&quot;\t data: nil&quot;)
+        return
+    }
+    switch i.(type) {
+    case int:
+        fmt.Printf(&quot;\t data: %d\n&quot;, *(*int)(data))
+    case float64:
+        fmt.Printf(&quot;\t data: %g\n&quot;, *(*float64)(data))
+    case T:
+        // %+v 会调用 Error，显示的是格式化结果，不是 T 的底层整数。
+        fmt.Printf(&quot;\t data: %+v; underlying=%d\n&quot;, *(*T)(data), int(*(*T)(data)))
+    default:
+        fmt.Println(&quot;\t unsupported data type&quot;)
+    }
+}
+
+func dumpEface(i any) {
+    p := (*efaceInfo)(unsafe.Pointer(&amp;i))
+    fmt.Printf(&quot;eface: %+v\n&quot;, *p)
+    if p.Type != nil {
+        fmt.Printf(&quot;\t type: %+v\n&quot;, *p.Type)
+    }
+    dumpData(i, p.Data)
+}
+
+func dumpItabOfIface(ptr unsafe.Pointer) {
+    p := (*ifaceInfo)(ptr)
+    fmt.Printf(&quot;iface: %+v\n&quot;, *p)
+    if p.Tab == nil {
+        return
+    }
+    tab := p.Tab
+    fmt.Printf(&quot;\t itab: %+v\n&quot;, *tab)
+    fmt.Printf(&quot;\t inter: %+v\n&quot;, *tab.Inter)
+    fmt.Printf(&quot;\t type: %+v\n&quot;, *tab.Type)
+    fmt.Printf(&quot;\t fun: [&quot;)
+    base := unsafe.Pointer(&amp;tab.Fun[0])
+    for n := 0; n &lt; len(tab.Inter.Methods); n++ {
+        entry := *(*uintptr)(unsafe.Add(base, uintptr(n)*unsafe.Sizeof(uintptr(0))))
+        fmt.Printf(&quot;%#x &quot;, entry)
+    }
+    fmt.Println(&quot;]&quot;)
+}
+
+func dumpDataOfIface(i any) {
+    // error 传给 any 后是 eface；转换沿用了原具体值的数据字。
+    p := (*efaceInfo)(unsafe.Pointer(&amp;i))
+    dumpData(i, p.Data)
+}
+
+func main() {
+    var eif any = T(5)
+    var err error = T(5)
+    println(&quot;eif:&quot;, eif)
+    println(&quot;err:&quot;, err)
+    println(&quot;eif = err:&quot;, eif == err)
+    dumpEface(eif)
+    dumpItabOfIface(unsafe.Pointer(&amp;err))
+    dumpDataOfIface(err)
+}</codeblock>
+    <p>dumpEface 读取两个字，展开具体类型档案，再按 type switch 读取数据；dumpItabOfIface 接收非空接口变量本身的地址，先读 iface，再展开 itab、接口信息、具体类型信息，并按接口方法数量读取变长的 Fun；dumpDataOfIface 则利用非空接口转换到 any 时沿用数据字这一点，统一按空接口读数据。这三个职责对应来源工具的三个主要函数。〔TB29 p16–18〕</p>
+    <p>这个数据读取器有意只支持 int、float64 和这里的 T；其他类型明确输出 unsupported data type，而不假装已经实现任意类型解码。它不能仅靠拿到一个 data 就推断任意内存是什么，更不应解引用未识别的指针。Fun 中也可能出现包装入口，不能仅打印一个地址就宣称已经验证方法体。</p>
+    <p>来源程序中 eif 的 _type 和 err 的 tab._type 都是 0x10b38c0，帮助解释跨接口相等；它将 T(5) 格式化为 bad error，是 Error 方法的显示结果，不表示底层数据从整数 5 变成了字符串。当前示例额外打印 underlying=5，避免把格式化行为当成存储布局。地址和 Hash 数字随构建、版本变化；比较应关注两份类型信息是否指向同一具体类型，而不是照抄历史哈希 1156555957。〔TB29 p18–19〕</p>
+    <p>本章这份镜像程序已在 Go 1.26.4 darwin/arm64 运行核对：空接口与非空接口指向同一份 T 类型信息，类型 Hash 与 itab 中的副本一致，方法入口非零，数据读取显示 underlying=5。这只验证了该程序在指定环境中的观察，不构成跨版本兼容性保证。升级 Go、改变架构或改用其他编译实现时，都应重新检查字段顺序、宽度、对齐、标志语义与直接表示规则；没有这一核对，不应该运行复制来的 unsafe 工具。</p>
+  </details>
+  <h3 id="J3khlH4x">装箱保存的是值，但不是深拷贝</h3>
+  <p id="R3ZnusKh">具体值放入接口时，需要准备类型信息和数据表示，这个过程常被称为装箱。可以借 Java 把 int 转成 Integer 来理解“从直接的具体值转成可通过统一抽象使用的值”这个方向，但 Go 并没有因此构造一个 Java Integer 对象；不能把 Java 对象头、身份语义或缓存范围直接搬进 Go。Go 这里讨论的是怎样形成 eface 或 iface。〔TB29 p20〕</p>
+  <p id="G7xh3iCy">先看赋值语义，不猜测它落在堆还是栈。下面片段放在 main 并导入 fmt：</p>
+  <codeblock id="dHXp5Rpg" lang="go">var n int = 61
+var ei any = n
+n = 62
+fmt.Println(&quot;data in box:&quot;, ei) // 预期 data in box: 61</codeblock>
+  <p id="JCJ3L8-V">ei 保存的是装入时的整数值 61，后来改 n 不会回头修改它。这是值复制语义，不以“每次必然分配堆内存”为前提；61 还可能走静态小值数据路径。〔TB29 p22〕</p>
+  <p id="K0qDcteY">复制也不是深拷贝。若装入的是指针，复制的是指针值，两个地方仍可指向同一对象；若装入的是 slice，复制的是切片描述符，底层数组仍可能共享；map 也不会因此复制整张映射。以下片段把这种边界接着展示出来：</p>
+  <codeblock id="b9Ya8Poi" lang="go">n = 61
+var pointerBox any = &amp;n
+n = 62
+fmt.Println(*pointerBox.(*int)) // 62
+
+s := []int{1}
+var sliceBox any = s
+s[0] = 2
+fmt.Println(sliceBox.([]int)[0]) // 2
+
+m := map[string]int{&quot;x&quot;: 1}
+var mapBox any = m
+m[&quot;x&quot;] = 2
+fmt.Println(mapBox.(map[string]int)[&quot;x&quot;]) // 2</codeblock>
+  <p id="bnSHEDFY">sliceBox 的接口值没有被重新赋值，但它保存的切片描述符仍引用原数组；mapBox 也仍访问同一映射。装入包含这些字段的结构体同样如此。应把“原整数变量修改不影响整数副本”和“副本内部的引用仍共享对象”同时记住，不能把“装箱后与原变量无瓜葛”理解为递归复制所有可达数据。</p>
+  <h3 id="0j1DXhvV">编译器准备类型字，运行时按需准备数据</h3>
+  <p id="dd7lahiv">回到带 n、s 字段的 T。下面是一份独立的装箱观察程序，它和前面 type T int 的比较程序分别保存：</p>
+  <codeblock id="ewmmWoGs" lang="go">package main
+
+import &quot;fmt&quot;
+
+type T struct {
+    n int
+    s string
+}
+
+func (T) M1() {}
+func (T) M2() {}
+
+type NonEmptyInterface interface {
+    M1()
+    M2()
+}
+
+func main() {
+    t := T{n: 17, s: &quot;hello, interface&quot;}
+    var ei any
+    ei = t
+    var i NonEmptyInterface
+    i = t
+    fmt.Println(ei)
+    fmt.Println(i)
+}</codeblock>
+  <p id="-FALg_tn">ei = t 需要形成空接口，类型字是 T 的类型信息；i = t 需要形成非空接口，类型字是 NonEmptyInterface × T 的 itab。两者都保存 T 的值；预期两行都打印 {17 hello, interface}。编译器已知源类型 fromType 与目标接口 toType，能够准备相应元数据，并选择数据部分的实现路径。这里 T 含有字符串字段，所以数据复制既要保留字段值，又要让 GC 正确知道哪些部分可能含指针。〔TB29 p20–23〕</p>
+  <p id="li8T_zUm">在现行 Go 编译器中，构造类型字与准备数据字是分开的。直接表示的类型可以把自身表示放入 data；零大小值、某些零值、布尔与单字节整数、只读全局数据可以使用静态存储；适合且未逃逸的值可以放在栈临时变量；需要运行时帮助时，再选择转换函数。因此从“源码发生接口赋值”不能推导出“必定调用一个完整转换函数、必定堆分配”。相应实现可读 Go 1.26.4 的 cmd/compile/internal/walk/convert.go 的 walkConvInterface、dataWord 与 dataWordFuncName。</p>
+  <p id="RzUNWzlD">确实选择通用分配路径时，runtime.convT 根据类型大小分配存储，用 typedmemmove 按类型复制值，返回可作为接口数据字的指针；不含指针的类型可走 convTnoptr，用不扫描指针的分配方式加 memmove。类型字仍由编译器构造接口时配上。对于整数、字符串、slice，还有专用数据转换函数：convT16、convT32、convT64、convTstring、convTslice。调用哪个函数取决于源类型的大小、对齐、是否含指针和具体形状等条件，并不是见到名字里有 64 就只有 int64 才能使用。〔TB29 p23〕</p>
+  <details id="LKtfDEIS" summary="选读：历史 convT2E、convT2I 如何完成四步装箱" open="false">
+    <p>TB29 p21 的历史 amd64 汇编中，ei = t 先取得 type.T，再调用 runtime.convT2E；i = t 先取得相应 go.itab 符号，再调用 runtime.convT2I。17、字符串地址和长度先写入栈上的临时对象，随后传入临时对象地址。这说明编译器安排了元数据与输入值；栈临时对象本身不应被误说成“一定在只读区静态化的常量对象”。原文用于观察的命令是 go tool compile -S interface_internal.go；现行含 import 的完整程序通常用 go build -gcflags=-S 观察更方便。</p>
+    <p>下面保留两份历史函数的源码逻辑，用于阅读旧资料，不是 Go 1.26.4 可直接调用的 API，也不是这版工具链生成代码时必须出现的符号。原文的 dump 工具标了 Go 1.17，不能因此把同讲中的所有历史汇编与 helper 也一律归入 Go 1.17。〔TB29 p21–22〕</p>
+    <codeblock lang="go">// 历史 runtime 内部源码；仅供阅读。
+func convT2E(t *_type, elem unsafe.Pointer) (e eface) {
+    if raceenabled {
+        raceReadObjectPC(t, elem, getcallerpc(), funcPC(convT2E))
+    }
+    if msanenabled {
+        msanread(elem, t.size)
+    }
+    x := mallocgc(t.size, t, true)
+    typedmemmove(t, x, elem)
+    e._type = t
+    e.data = x
+    return
+}
+
+func convT2I(tab *itab, elem unsafe.Pointer) (i iface) {
+    t := tab._type
+    if raceenabled {
+        raceReadObjectPC(t, elem, getcallerpc(), funcPC(convT2I))
+    }
+    if msanenabled {
+        msanread(elem, t.size)
+    }
+    x := mallocgc(t.size, t, true)
+    typedmemmove(t, x, elem)
+    i.tab = tab
+    i.data = x
+    return
+}</codeblock>
+    <p>convT2E 的主过程有四步：按 t.size 分配 x；从 elem 按类型复制数据到 x；把 t 填进 e._type；把 x 填进 e.data。convT2I 同样分配与复制，只是先从 tab._type 取得具体类型，返回时填 i.tab 而非 e._type。开头 raceenabled、msanenabled 分支用于相应检测工具的读内存检查，不负责决定接口动态类型；未启用时不执行这些检查。〔TB29 p21–22〕</p>
+    <p>Go 1.26.4 中的通用帮助函数是 convT、convTnoptr，以及若干专用数据转换函数，不应继续把旧符号 convT2E、convT2I 当成现代运行时接口。新 convT 仍有 mallocgc 与 typedmemmove 这条具体路径，但其返回的是数据指针，不是填好两字的完整 eface。新源码还包括 ASan 检查。历史代码把“分配、复制、填两个字”放在一个函数里，现代代码把职责拆开，不影响前面的接口赋值语义。</p>
+  </details>
+  <h3 id="K2lRTFd-">小整数与零值为什么有时不需要新内存</h3>
+  <p id="l3jCy805">专用函数不仅减少通用复制工作，还能复用静态数据。Go 1.26.4 的 runtime 声明 staticuint64s [256]uint64，内容是 0 到 255，由 runtime/ints.s 的 DATA 指令提供，并用 RODATA 标成只读。历史版本将同样内容写成 Go 数组字面量；变的是初始化表达方式，不是这里的小整数范围。〔TB29 p23〕</p>
+  <p id="26OoQKQY">以 convT64 为例，它先判断传入的 uint64 值是否小于 len(staticuint64s)，也就是严格小于 256。值为 0 至 255 时返回对应静态元素地址，不再新分配；值为 256 或更大时，走 mallocgc(8, uint64Type, false)，再把值写入这八字节。范围不是“所有绝对值小于 256 的有符号整数”：负数转换成这条路径所使用的无符号表示后，不在该范围内；其他编译器优化仍可能另行避免分配。不能把这一条件当作 Java Integer 缓存范围的复制品。</p>
+  <codeblock id="IhYrZbm8" lang="go">// Go 1.26.4，runtime 内部源码片段，不是应用层可调用 API。
+func convT64(val uint64) (x unsafe.Pointer) {
+    if val &lt; uint64(len(staticuint64s)) {
+        x = unsafe.Pointer(&amp;staticuint64s[val])
+    } else {
+        x = mallocgc(8, uint64Type, false)
+        *(*uint64)(x) = val
+    }
+    return
+}</codeblock>
+  <p id="70tP5r31">convT16 与 convT32 也使用同一静态区，小值路径在大端平台上分别偏移六字节、四字节，以读取正确宽度的值；本章的 darwin/arm64 是小端，不需要这项调整。convTstring 对空字符串直接返回 zeroVal 的地址，否则分配并复制字符串描述符；convTslice 检查切片底层数组指针，指针为空时复用 zeroVal，否则分配并复制切片描述符。后者不是“长度为零就免分配”：非 nil 的空切片底层数组指针仍可能非空。专用函数不使用通用 typedmemmove，不代表它们会深拷贝字符串内容或 slice 底层数组。</p>
+  <details id="oQVbBXBD" summary="选读：观察装箱路径时怎样控制结论范围" open="false">
+    <p>在需要单独观察帮助函数的实验中，可以依次让动态 int64、含指针结构体、无指针数组、uint16、string 逃逸到接口保存位置，再阅读 go build -gcflags=-S 的输出。它们可能分别走 convT64、convT、convTnoptr、convT16、convTstring；但常量输入、未逃逸输入或被优化掉的转换可能不出现这些调用。旧手册记录过一组这样的 Go 1.26.4 arm64 观察，不能将那次选择当作所有程序的固定映射。</p>
+    <p>如果只是想验证 255 与 256 的边界，除了观察 helper 源码，还要确保实验确实走到相应 helper，不能让常量静态化或栈分配把待观察路径消掉。把构建条件、输入如何取得、接口值是否逃逸与实际观察到的调用一起记录，才能解释结果。数据表示路径和方法调用的去虚拟化是两项不同优化，不要用“没看见间接调用”证明“没有发生任何复制”。</p>
+  </details>
+  <p id="kqXaPtRb">接口赋值可能复制数据，也可能需要分配；接口调用可能保留间接分派，也可能被去虚拟化、内联。两者都不能从源码关键字单独判定，更不能凭小整数的一条快速路径断言接口没有成本。性能敏感路径应先通过基准测试与性能分析定位，再决定是否减少装箱、改变值的传递方式或使用更合适的具体类型和泛型。接口带来的解耦收益也要计入设计，而不是为省一个猜测中的分配放弃本来需要的契约。〔TB29 p23–24〕</p>
+  <p id="xW8iET6K">最后可以把开头的返回值例子作为练习：先写出 p 和返回接口各自的静态类型、动态类型与 nil 状态，再分别用“直接分支返回”和“局部变量声明为 error”修复；除了 bad 为 false 时输出 ok，也检查 bad 为 true 时仍能进入错误分支。然后给四种比较情形逐一解释类型与值，并指出 slice 反例为什么不是第五种“返回 false”的普通情况，而是运行时 panic。再回想自己的错误返回代码里，是否曾把具体 nil 指针作为 error 返回。〔TB29 p24–25〕</p>
+  <details id="R-Ct7YM5" summary="来源与实现边界" open="false">
+    <p>TB29 p1 引述 Russ Cox：“如果要从 Go 语言中挑选出一个特性放入其他语言，我会选择接口。”同页作者将接口与并发原语列为偏爱的两类特性，并用“动静兼备”描述接口。这里沿用静态检查加动态实现替换这一解释，不把“唯一动静兼备”扩张成 Go 中其他机制都没有任何动态行为的严格结论。</p>
+    <p>本部分的接口布局、现代转换函数与比较实现按 Go 1.26.4 源码说明；旧 helper、旧字段名与 Go 1.17 dump 工具作为历史背景保留。语言规则可由规范确认，具体地址、哈希、方法入口、寄存器、分配位置属于实现与构建结果。独立示例在本章指定工具链中运行核对，不把一组输出或一次构建推广为所有实现的固定行为。</p>
+  </details>
+  <h2 id="QRHvLyXp">六、嵌入：让已有能力成为新类型的一部分</h2>
+  <p id="d8rzwfW-">前面的 Welcome 通过 Sender 使用 Email 或 SMS。接口解决了“调用方怎样换实现”，但另一个需求是“新类型怎样复用已有能力”。例如，给邮件发送器加配置，仍希望它能作为 Sender 传给 Welcome。Go 可以把已有类型嵌入结构体，让字段和方法在规则允许时提升到外层；也可以把小接口嵌入大接口，组合行为要求。这两种都叫类型嵌入，前者组合字段与实现，后者组合接口要求。它们都不建立类的父子关系。〔TB26 p2〕〔TB30 p4-6〕</p>
+  <h3 id="-k898pfV">接口嵌入组合的是要求，不是实现</h3>
+  <p id="bMKd2-Jp">假设原来的 Sender 只要求 Send(string)，另一段代码还需要关闭发送器。可以保留 Sender，再把两种要求组合起来。下面是依赖前文 Sender 的类型声明片段：</p>
+  <codeblock id="kd30kq0X" lang="go">type CloseSender interface {
+	Sender
+	Close() error
+}
+</codeblock>
+  <p id="bnS162w7">CloseSender 要求同一个实现同时提供 Send(string) 和 Close() error。Sender 的 Send 被并入了它的方法集合，并不是给接口复制了一段发送实现。Welcome 只需要发送，仍接收 Sender，不必因为出现了新接口就承担关闭职责。用抽象的方法名看同一规则，下面的 I 与 FlatI 表达相同的方法要求；参数名不影响签名匹配。〔TB26 p2-3〕</p>
+  <codeblock id="FJqejNiK" lang="go">type E interface {
+	M1()
+	M2()
+}
+
+type I interface {
+	E
+	M3()
+}
+
+type FlatI interface {
+	M1()
+	M2()
+	M3()
+}
+</codeblock>
+  <p id="ezrKpK3n">组合以后，方法要求更多，可满足它的具体类型反而更少：实现 I 的类型必须同时实现 E 和 M3。对本章这种只含方法要求的基本接口，可以说“方法集合取并集”；用 Go 1.18 起的类型集语言描述，则是“能够满足各项要求的类型集合取交集”。这不是两套相反规则，而是在分别数方法和数可用类型。一般接口还可以包含类型项或联合项，用于泛型约束；因此“接口只能嵌入接口”只能作为旧式基本接口的讲法，不能概括现行全部接口语法。泛型约束的展开留在泛型章。〔TB26 p2-3〕现行依据：Go 语言规范 Interface types、Embedded interfaces、General interfaces。</p>
+  <p id="qrCnpVZZ">小接口容易这样组合。io 包先分别定义 Reader、Writer、Closer，再按实际任务组合成双能力或三能力接口。不需要给每一种设备单独造一棵类型继承树。下面是 io 包这些接口的定义形式，属于声明摘录，不是完整可运行程序。〔TB26 p3-4〕</p>
+  <codeblock id="7VpItiNz" lang="go">type Reader interface {
+	Read(p []byte) (n int, err error)
+}
+
+type Writer interface {
+	Write(p []byte) (n int, err error)
+}
+
+type Closer interface {
+	Close() error
+}
+
+type ReadWriter interface {
+	Reader
+	Writer
+}
+
+type ReadCloser interface {
+	Reader
+	Closer
+}
+
+type WriteCloser interface {
+	Writer
+	Closer
+}
+
+type ReadWriteCloser interface {
+	Reader
+	Writer
+	Closer
+}
+</codeblock>
+  <p id="G4PcZCCA">Go 1.14 之前，嵌入接口之间不能出现同名方法，嵌入方法也不能与外层显式声明的方法重名。下面的 Interface3 和 Interface4 在当时分别因为 M1、M2 重复而被拒绝；TB26 使用 Go 1.12.7 展示了 duplicate method。自 Go 1.14 起，如果同名方法的签名一致，这两种组合都允许。下面的声明是现行合法片段，不应再给它们加上“当前编译错误”的注释。〔TB26 p5〕</p>
+  <codeblock id="yGmje33p" lang="go">type Interface1 interface { M1() }
+type Interface2 interface {
+	M1()
+	M2()
+}
+
+type Interface3 interface {
+	Interface1
+	Interface2
+}
+
+type Interface4 interface {
+	Interface2
+	M2()
+}
+</codeblock>
+  <p id="GsirNdOe">放宽不等于允许重载。如果把 Interface4 的 M2() 改成 M2(string)，同名方法的签名不一致，仍然非法；在同一个接口里直接写两遍 M2()，也不是这次放宽的范围。嵌入解决重复契约的组合，不负责在两个不同签名间挑选一个。现行依据：Go 语言规范 Embedded interfaces；这里的历史版本条件见〔TB26 p5〕。</p>
+  <h3 id="m3tgvDaL">结构体嵌入首先仍是字段</h3>
+  <p id="6S4BcWWM">接口没有要保存的发送实现，结构体则需要真实的数据。把 Email 写进另一个结构体而不另起字段名，得到的是名为 Email、类型为 Email 的嵌入字段。对带包名的类型，只取不带包限定符的类型名作字段名；io.Reader 的字段名是 Reader，*strings.Reader 的字段名也叫 Reader。字段是否导出看这个名字的首字母，不能把“嵌入”当作突破包可见性的办法。〔TB26 p6-8〕</p>
+  <p id="V96Accwl">先把几种字段放在一起看。T1 是整数定义类型，t2 是结构体，I 是接口；结构体不只可以嵌入结构体。下面是独立的声明片段，I 只需要 M1，与上一小节的三方法 I 分属不同示例文件。〔TB26 p6-7〕</p>
+  <codeblock id="NbmRtWb4" lang="go">type T1 int
+
+type t2 struct {
+	n int
+	m int
+}
+
+type I interface { M1() }
+
+type S1 struct {
+	T1
+	*t2
+	I
+	a int
+	b string
+}
+</codeblock>
+  <p id="MxhpTmoR">S1 的三个嵌入字段分别叫 T1、t2、I，类型分别是 T1、*t2、I。后面的 a、b 是普通命名字段。嵌入字段的合法声明形式是类型名 T，或指向非接口类型名的 *T；T 本身不能是指针类型或类型参数。因此 type P *t2 后不能嵌入 P，也不能嵌入接口指针 *I。这里禁止的是这种指针定义类型和接口指针，不是禁止正常的 *t2 嵌入。所有直接字段名仍须唯一；同时嵌入 T1 和 *T1 都会生成字段名 T1，因此不能出现在同一个结构体中。〔TB26 p8〕现行依据：Go 语言规范 Struct types。</p>
+  <p id="BrmwtJet">初始化也照字段规则进行：使用嵌入字段名作键，访问时仍然可以显式写出字段路径。下面保留一个同时嵌入指针、值、接口的完整程序。strings.Reader 在这里是确定的内存输入，但程序仍检查 Read 返回的错误，并只打印读到的 n 个字节。〔TB26 p7-8〕</p>
+  <codeblock id="aPncg-cY" lang="go">package main
+
+import (
+	&quot;fmt&quot;
+	&quot;io&quot;
+	&quot;strings&quot;
+)
+
+type MyInt int
+
+func (n *MyInt) Add(m int) { *n += MyInt(m) }
+
+type t struct {
+	a int
+	b int
+}
+
+type S struct {
+	*MyInt
+	t
+	io.Reader
+	s string
+	n int
+}
+
+func main() {
+	m := MyInt(17)
+	s := S{
+		MyInt: &amp;m,
+		t: t{a: 1, b: 2},
+		Reader: strings.NewReader(&quot;hello, go&quot;),
+		s: &quot;demo&quot;,
+	}
+	buf := make([]byte, len(&quot;hello, go&quot;))
+	n, err := s.Reader.Read(buf)
+	if err != nil &amp;&amp; err != io.EOF {
+		panic(err)
+	}
+	fmt.Println(string(buf[:n]))
+	s.MyInt.Add(5)
+	fmt.Println(*s.MyInt)
+}
+</codeblock>
+  <p id="G2T-mq9o">按代码推导，先读出 hello, go，再把 17 加到 22。MyInt: &amp;m 让结构体保存了指向外部变量 m 的指针，Add 的指针接收者修改的正是 m；不是结构体把 m 的数值复制后单独修改。Reader 是 io.Reader 生成的字段名，所以字面量使用 Reader: 而不是 io.Reader:。普通字段 n 未初始化，保持零值；t 的 a、b 用嵌套字面量初始化，仍属于那个 t 字段。〔TB26 p7-8〕</p>
+  <codeblock id="1X7KuBGC" lang="text">hello, go
+22
+</codeblock>
+  <p id="scPK2fsr">保持同一个程序，只把 s.Reader.Read(buf) 改成 s.Read(buf)，把 s.MyInt.Add(5) 改成 s.Add(5)，结果不变。选择符 s.Read 在没有遮蔽或歧义时找到嵌入字段 Reader 的 Read，调用效果就是 s.Reader.Read；s.Add(5) 同样交给 s.MyInt.Add(5)。这叫方法提升。s.a 也可以找到嵌入 t 的 a 字段，但提升字段不能直接当作外层复合字面量的键：S{a: 1} 不合法，仍须写 S{t: t{a: 1}}。〔TB26 p9〕现行字面量规则见 Go 语言规范 Struct types。</p>
+  <p id="Otye6RK2">这条转发路径可以理解为代理或委派：外层公开一个可用入口，实际工作由内层字段保存的值完成。编译器根据选择符规则确定路径；它可以为需要的方法集合、方法表达式或接口调用生成包装入口，但语言规则并没有要求“把内层方法体复制到外层”。接口字段参与转发时，最终行为还由该接口字段里的动态值决定。〔TB26 p9-10〕</p>
+  <mermaid id="OUaZJ7Bb">flowchart LR
+    A[&quot;调用 s.Read(buf)&quot;] --&gt; B[&quot;选择器解析到嵌入字段 Reader&quot;]
+    B --&gt; C[&quot;调用 s.Reader.Read(buf)&quot;]
+    C --&gt; D[&quot;接口字段中的具体 Reader 实现&quot;]
+</mermaid>
+  <h3 id="-ka8_R9n">提升以后，值和指针各有哪些方法</h3>
+  <p id="BKvxxZ9O">是否可以简写调用，和是否实现某接口，仍然需要分开。若结构体 S 嵌入值 T，S 与 *S 都提升 T 接收者方法，只有 *S 还提升 *T 接收者方法。若 S 嵌入 *T，S 与 *S 都提升 T 和 *T 接收者方法。前提始终是相应方法没有被更浅的同名字段或方法遮蔽，也没有同层冲突；不能不加条件地把所有嵌入字段的方法集合相加。〔TB26 p15-17〕</p>
+  <p id="qTAUBF2U">把规则用两种内层类型同时展开，四种方法的来源就能在同一个程序里看清。这里的方法体不读接收者，是为了观察方法集合，而不是依赖零值嵌入指针能完成业务。完整程序使用 reflect 只列出这些导出方法，不会调用它们。〔TB26 p15-17〕</p>
+  <codeblock id="rbJxAd41" lang="go">package main
+
+import (
+	&quot;fmt&quot;
+	&quot;reflect&quot;
+)
+
+type T1 int
+func (T1) T1M1() {}
+func (*T1) PT1M2() {}
+
+type T2 int
+func (T2) T2M1() {}
+func (*T2) PT2M2() {}
+
+type T struct {
+	T1
+	*T2
+}
+
+func names(v any) []string {
+	typ := reflect.TypeOf(v)
+	var result []string
+	for i := 0; i &lt; typ.NumMethod(); i++ {
+		result = append(result, typ.Method(i).Name)
+	}
+	return result
+}
+
+func main() {
+	fmt.Println(names(T{}))
+	fmt.Println(names(&amp;T{}))
+}
+</codeblock>
+  <p id="HJKgLl5K">按方法集合规则，T 应有 PT2M2、T1M1、T2M1；*T 还多 PT1M2。嵌入的 T1 以值保存，所以 T 的方法集合只得到它的值方法；*T 可以沿字段取到 *T1，于是再得到指针方法。另一个字段本来就是 *T2，外层无论值还是指针都已经持有它的地址，因此两边都得到 T2 的两种方法。〔TB26 p16-17〕</p>
+  <codeblock id="qoCjia2_" lang="text">[PT2M2 T1M1 T2M1]
+[PT1M2 PT2M2 T1M1 T2M1]
+</codeblock>
+  <p id="G1uD8F4O">如果另有接口要求 PT1M2，T 的值不能赋给它，*T 可以。可寻址变量 t 却可以直接调用 t.PT1M2()，因为直接调用允许自动取地址；T{}.PT1M2() 以及从 map 取出的不可寻址 T 值没有这个保证。可寻址的语法便利没有给 T 的方法集合增添方法。“T 与 *T 变量都能调用”必须带上这项条件。另一个独立问题是字段能否使用：上面 T{} 的 *T2 是 nil，观察方法集合无妨，调用某个需要解引用它的方法可能 panic，尤其经 nil *T2 调用值接收者方法需要先取得一个 T2 值。</p>
+  <p id="NV7BvZgO">把同样规则用到接口字段：结构体 T 嵌入 I，I 要求 M1、M2，T 再声明值方法 M3；在无冲突时，T 与 *T 的方法集合都包含这三个方法。下面是声明及观察片段；可以复用上个完整程序的 names，替换原来的 T1、T2、T 声明与 main，不要将两个 T 同放一个文件。〔TB26 p10-11〕</p>
+  <codeblock id="RTbsNjgd" lang="go">type I interface {
+	M1()
+	M2()
+}
+type T struct { I }
+func (T) M3() {}
+
+func main() {
+	fmt.Println(names(T{}))
+	fmt.Println(names((*T)(nil)))
+}
+</codeblock>
+  <p id="eT9OUP9H">两行都应列出 [M1 M2 M3]。这是类型层面的结论，不要求这里的 I 字段已初始化；但 var t T 的 I 是 nil，真正调用提升的 t.M1() 会尝试通过 nil 接口分派而 panic。声明了入口和准备好了接收调用的对象，是两件不同的事。〔TB26 p11〕</p>
+  <h3 id="kQ4ifeSf">嵌入不是继承，内层的自调用不会变成外层重写</h3>
+  <p id="mfrIxSi6">回到复用的边界。下面保留 Base、Child 这个小例子，因为它能把“直接调用外层同名方法”和“内层方法调用自己的另一个方法”放在同一行比较。独立函数 Hello 接受接口，展示另一条明确选择行为的路径。</p>
+  <codeblock id="vpm3P8Ix" lang="go">package main
+
+import &quot;fmt&quot;
+
+type Base struct { Name string }
+func (b Base) Hello() string { return &quot;hi &quot; + b.Who() }
+func (b Base) Who() string { return b.Name }
+
+type Child struct { Base }
+func (c Child) Who() string { return &quot;child&quot; }
+
+type Whoer interface { Who() string }
+func Hello(w Whoer) string { return &quot;hi &quot; + w.Who() }
+
+func main() {
+	c := Child{Base: Base{Name: &quot;base&quot;}}
+	fmt.Println(c.Hello(), &quot;|&quot;, c.Who())
+	fmt.Println(Hello(c))
+}
+</codeblock>
+  <p id="bCBjuHng">第一行按语言规则是 hi base | child，第二行是 hi child。c.Hello() 找到的是 c.Base.Hello()，进入方法的接收者 b 是一个 Base 值。b.Who() 因而调用 Base.Who，它不知道哪个外层结构体保存着自己。直接写 c.Who() 则先找到 Child 自己的方法，遮住提升的 Base.Who。Hello(c) 是另一种设计：接口 Whoer 保存的具体值是 Child，所以接口调用选择 Child.Who。</p>
+  <codeblock id="Aehm9Yg8" lang="text">hi base | child
+hi child
+</codeblock>
+  <p id="UfuqV-Z_">在熟悉 Java 的读者看来，Child 这个名字很容易让人联想到 extends 与 override，但这里没有那条父子关系。不能把 Child 自动当成 Base 传参；需要 Base 时显式取 c.Base。外层同名方法不会改写 Base.Hello 的自调用，也不会让 Base 获得一个指向外层的隐含 this。若算法需要可替换步骤，就像 Hello(w Whoer) 这样明确传入所需行为，也可以使用函数参数等设计；接口是本章采用的一条多态路径，不是 Go 唯一可以表达多态或可替换行为的机制。嵌入委派的边界见〔TB26 p9-10〕〔TB30 p4-5〕。</p>
+  <h3 id="M2h_yxlI">同名方法怎样消歧，测试替身又怎样使用提升</h3>
+  <p id="IeKzwqey">提升的查找由浅到深进行。外层直接声明同名字段或方法时，优先使用较浅的名字；同一最浅深度出现两个候选时，编译器不能随意挑一个。这个问题不仅发生在接口，也可能发生在多个嵌入具体类型之间。下面是有意不能编译的独立示例：E1、E2 都有 M1、M2，而 T 没有自己的实现。〔TB26 p12-13〕</p>
+  <codeblock id="ap3-D72Y" lang="go">package main
+
+type E1 interface {
+	M1()
+	M2()
+	M3()
+}
+type E2 interface {
+	M1()
+	M2()
+	M4()
+}
+type T struct {
+	E1
+	E2
+}
+
+func main() {
+	t := T{}
+	t.M1() // 有意错误：ambiguous selector t.M1
+	t.M2() // 有意错误：ambiguous selector t.M2
+}
+</codeblock>
+  <p id="Haer7rz5">同名同签名能在接口嵌入中合成一个要求，却不能让结构体替我们决定把调用交给 E1 字段还是 E2 字段。Go 1.14 的放宽只针对前一种情况。类型声明本身可以存在；使用 t.M1、t.M2 这样的歧义选择符或要求相应接口实现时才会遭遇问题。若确实要选择 E1，可显式写 t.E1.M1()，不过此示例中 E1 为 nil，显式路径只解决编译期的歧义，不能解决运行期缺少实现。</p>
+  <p id="jXqTyM_d">还可以重新划分两个字段的接口，消除职责交集；或给外层提供明确实现，决定要做自己的工作还是显式转发到哪一边。沿用上一段 E1、E2、T，给 T 添加下面的方法，原 main 的两次调用就会命中外层实现，而不是在两个字段之间选择。〔TB26 p13〕</p>
+  <codeblock id="DHTB0n6Z" lang="go">func (T) M1() { println(&quot;T&apos;s M1&quot;) }
+func (T) M2() { println(&quot;T&apos;s M2&quot;) }
+</codeblock>
+  <p id="4kYQpCYj">这里应打印 T&apos;s M1、T&apos;s M2。若把外层方法改成 *T 接收者，可寻址 t 的直接调用仍能经自动取地址命中外层；这不表示 T 的值也实现要求这些方法的接口，更不表示被遮住的内层方法会补回 T 的方法集合。</p>
+  <p id="AL9ia1F9">外层自己实现一部分、其余由接口字段提供入口的特点，有时能减少旧式大接口的测试样板。下面保留员工查询的例子：Stmt 有 Close、NumInput、Exec、Query 四个方法，MaleCount 实际只使用 Exec。伪对象嵌入 Stmt，并为要测的 Exec 提供明确行为。为使错误路径也可见，例子让一个字段决定 Exec 是否失败；这不是连接数据库的实现。〔TB26 p13-15〕</p>
+  <codeblock id="--tT6DWz" lang="go">package main
+
+import (
+	&quot;errors&quot;
+	&quot;fmt&quot;
+)
+
+type Result struct { Count int }
+func (r Result) Int() int { return r.Count }
+type Rows []struct{}
+
+type Stmt interface {
+	Close() error
+	NumInput() int
+	Exec(stmt string, args ...string) (Result, error)
+	Query(args []string) (Rows, error)
+}
+
+func MaleCount(s Stmt) (int, error) {
+	result, err := s.Exec(&quot;select count(*) from employee_tab where gender=?&quot;, &quot;M&quot;)
+	if err != nil {
+		return 0, err
+	}
+	return result.Int(), nil
+}
+
+type fakeStmtForMaleCount struct {
+	Stmt
+	err error
+}
+
+func (f fakeStmtForMaleCount) Exec(_ string, _ ...string) (Result, error) {
+	if f.err != nil {
+		return Result{}, f.err
+	}
+	return Result{Count: 5}, nil
+}
+
+func main() {
+	fmt.Println(MaleCount(fakeStmtForMaleCount{}))
+	fmt.Println(MaleCount(fakeStmtForMaleCount{err: errors.New(&quot;query failed&quot;)}))
+}
+</codeblock>
+  <p id="WYu0NW-x">成功分支按代码应打印 5 &lt;nil&gt;，错误分支打印 0 query failed，错误没有被吞成“查到了零人”。成功测试可以断言 err == nil 且 count == 5；失败测试检查原错误被返回，而不是继续读取空 Result。嵌入提供完整方法集合，使这个类型能作为 Stmt 实参；真正被调用的 Exec 则由自己的方法接住。〔TB26 p14-15〕</p>
+  <codeblock id="RzY6RO4X" lang="go">// 放在与上段类型同包的 _test.go 中，需 import &quot;testing&quot;。
+func TestEmployeeMaleCount(t *testing.T) {
+	count, err := MaleCount(fakeStmtForMaleCount{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 5 {
+		t.Errorf(&quot;want: %d, actual: %d&quot;, 5, count)
+	}
+}
+</codeblock>
+  <p id="oJWqO9D5">没有实现的 Close、NumInput、Query 依赖那个零值为 nil 的 Stmt 字段。只要被测代码开始调用它们，就会发生 nil 接口调用 panic。编译期满足接口，不等于每条运行路径都可用。这种技巧适合范围明确、你能控制调用面的测试替身；若生产函数本来只需要 Exec，更直接的长期设计是让参数接收只含 Exec 的小接口。测试里的意外调用也可以通过显式失败方法给出更清楚的诊断，不应把嵌入 nil 接口当成完整可用的通用实现。</p>
+  <h3 id="vX3Po_YI">普通字段、新定义类型和别名不是同一种复用</h3>
+  <p id="5RBCQM1b">回看前面的 S1。把它的类型逐个加上显式字段名，即使字段名刚好与类型同名，也会得到不同的结果。下面沿用 T1、t2、I、S1 的声明，另加 S2；观察片段可复用 names，并导入 fmt。〔TB26 p21-24〕</p>
+  <codeblock id="TXFqy-xK" lang="go">type S2 struct {
+	T1 T1
+	t2 *t2
+	I I
+	a int
+	b string
+}
+
+func main() {
+	fmt.Println(names(S1{}), names(&amp;S1{}))
+	fmt.Println(names(S2{}), names(&amp;S2{}))
+}
+</codeblock>
+  <p id="kYsRJZnK">在 T1、t2 没有方法，I 只有 M1 的前提下，S1 与 *S1 都有 [M1]，S2 与 *S2 都是空集合。S2.I.M1() 仍然是合法的显式字段访问，但 S2 自身没有提升的 M1；两者既不是同一个类型，也不具有相同的接口实现关系。如果给 S1 的 *t2 也加上 M1，同层的 t2 与 I 会冲突，原先提升的 M1 也就不能再不加限定地使用。〔TB26 p21-24〕</p>
+  <p id="02izZTRo">另一种容易被当作复用的写法是 type S T。它定义一个与 T 不同的新类型，不会把直接绑定在 T 上的已声明方法带过来。下面是完整程序，对照新类型与别名；方法都补上了方法体，而不是把只有声明的示意代码当作可独立运行代码。〔TB25 p12-13〕〔TB26 p17-20〕</p>
+  <codeblock id="yQt2VAT0" lang="go">package main
+
+import (
+	&quot;fmt&quot;
+	&quot;reflect&quot;
+)
+
+type T struct{}
+func (T) M1() {}
+func (T) M2() {}
+
+type S T
+
+type Alias = T
+
+func names(v any) []string {
+	typ := reflect.TypeOf(v)
+	var result []string
+	for i := 0; i &lt; typ.NumMethod(); i++ {
+		result = append(result, typ.Method(i).Name)
+	}
+	return result
+}
+
+func main() {
+	fmt.Println(names(S{}), names(&amp;S{}))
+	fmt.Println(names(Alias{}), names(&amp;Alias{}))
+	fmt.Printf(&quot;%T\n&quot;, Alias{})
+	var s S
+	T(s).M1()
+}
+</codeblock>
+  <p id="gW8k1IOu">由定义规则可得，第一行两个空集合，第二行两个 [M1 M2]，类型名打印 main.T。S.M1 不存在，需要自己为 S 声明方法，或像最后一行那样在允许的情况下显式转换为 T 再调用；T 先前满足的接口不会仅因 type S T 自动归到 S 头上。Alias 则根本不是第二个类型，它与 T 是同一个类型，所以有相同方法、相同接口实现关系，反射也没有另一个“别名动态类型”可报告。〔TB25 p12-13〕〔TB26 p18-20〕</p>
+  <p id="EVwkVAQB">这里的“新类型方法集合为空”有明确前提：原例是没有嵌入字段的非接口结构体。若原来的底层结构含嵌入字段，这些字段仍在，新类型仍可有提升方法；若基于接口 I 定义 type NI I，新接口的行为要求也仍然与 I 一致。下面是另一个声明片段，不能和上段同名类型混放。〔TB26 p17〕现行依据：Go 语言规范 Type definitions。</p>
+  <codeblock id="JonSm00w" lang="go">type E struct{}
+func (E) Promoted() {}
+
+type Original struct { E }
+func (Original) Own() {}
+
+type Defined Original
+// Defined 没有 Own，但仍能沿其嵌入字段 E 提升 Promoted。
+
+type I interface { M1() }
+type NI I
+// NI 与 I 是不同的定义接口类型，具有相同的方法要求。
+</codeblock>
+  <p id="gQI9Nqyr">这几种写法解决的是不同问题：普通字段让依赖与调用路径显式；嵌入让某些字段和方法参与外层选择符与方法集合；新类型建立独立类型身份；别名给同一个类型增加一个名字。选择时应先问是否确实要把内层方法作为外层 API 公开。若只是保存一个依赖，写成命名字段并手动实现少量转发，常常更清楚，也避免内层新增方法意外扩张外层 API。</p>
+  <h2 id="cryYstsI">七、把实现连接起来：创建、包装、适配与中间件</h2>
+  <p id="QPFxWJ4h">嵌入把能力组合进一个类型，可以叫垂直组合；Welcome(Sender) 把已经存在的不同类型连接到同一段业务，则是水平组合。后者不要求嵌入：一个结构体持有命名接口字段，再显式调用它，同样是在组合。二者分别侧重类型的构造与程序部件的连接，不是必须逐层搭建的继承树。〔TB30 p3-9〕</p>
+  <p id="x3AGPqBL">Rob Pike 曾把 C++、Java 对类型层次的关注，与 Go 对组合的关注作对照。支持这种组合的不是一个万能语法，而是几项相对独立的机制：类型不需要先排进父子类层次，方法通过接收者在包内关联到类型，接口与实现之间又不必显式登记。这种相互不强制绑定的关系，可以用“正交性”来理解：调整一个部件，不必无故改动另一个。像设计良好的数据库代码与界面代码，可以各自替换而不牵动对方；这是连接边界设计带来的目标，不是只要用了 Go 就自动保证。〔TB30 p3〕</p>
+  <h3 id="MfVHfk0l">先让参数只表达实际需要的能力</h3>
+  <p id="n4v6_yOV">第二节已经把 Save 从 *os.File 改成 io.Writer，并运行了标准输出与内存 buffer 两种目标。那次改动不仅能换设备，也改变了测试依赖：原先必须创建文件、写入后读回并清理，现在可以只使用内存。接口表达的仍是同一份写入契约，不要求 Save 依赖文件的 Chdir、Chmod、Chown 等无关能力，也不因此接管目标的关闭职责。〔TB30 p6-8〕</p>
+  <p id="QvGqNNQ4">这里直接复用第二节的 Save，不再重复定义。下面的测试放在同包 _test.go 中，需导入 bytes、testing：它既检查返回错误，也比较实际保存的数据，不需要磁盘文件或网络连接。Save 只尝试一次 Write，保留原错误，并以 io.ErrShortWrite 拦截“数量不完整却无错误”的违规实现；测试成功路径之外，还应分别核对这两条错误分支。〔TB30 p8〕</p>
+  <codeblock id="Yb42Ggx2" lang="go">func TestSave(t *testing.T) {
+	var buf bytes.Buffer
+	data := []byte(&quot;hello, golang&quot;)
+	if err := Save(&amp;buf, data); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf.Bytes(), data) {
+		t.Fatalf(&quot;want %q, actual %q&quot;, data, buf.Bytes())
+	}
+}
+</codeblock>
+  <p id="b-mwETdC">这类接口参数能帮助落实依赖倒置：业务依赖写入抽象；接口分离：不要求无关方法；替换实现：不同写入者接入同一个 Save。隐式满足省去了实现方声明接口名字的耦合，但签名匹配不自动保证语义上的里氏替换。一个 Write 总是返回成功却丢数据的类型，即使编译通过，也没有履行 io.Writer 的行为契约。不能把“不存在父类强制转换”推成“所有实现天然可正确替换”。〔TB30 p9〕</p>
+  <p id="eY2HjOgR">也不是每个参数都该立刻改成接口。一个 Add(a, b int64) int64 已能表达普通加法，额外造 Adder 再让 Add(adder, a, b) 转一层，未必带来收益。先有具体实现，出现真实的替换、测试或边界解耦需求时，再提取所需能力。抽象会增加理解路径；接口调用和装箱可能产生间接调用、复制或分配，但具体开销受内联、去虚拟化、逃逸分析等影响，不能见到接口就断言每次都分配或一定更慢。〔TB30 p2〕</p>
+  <h3 id="75GkG-ei">构造函数把依赖留下，把具体类型交还调用方</h3>
+  <p id="INvYJEIJ">除了直接把接口传给函数，也可以在创建对象时把依赖保存下来。通知案例可以让构造函数接收 Sender，返回一个有自己业务方法的具体结构体。以下片段沿用前文 Sender 和 Welcome，并不重新定义发送失败语义；Send(string) 仍然没有返回值。</p>
+  <codeblock id="uOieD99D" lang="go">type Notifier struct { sender Sender }
+
+func NewNotifier(sender Sender) *Notifier {
+	return &amp;Notifier{sender: sender}
+}
+
+func (n *Notifier) Welcome() {
+	Welcome(n.sender)
+}
+</codeblock>
+  <p id="fHYAsgwt">这就是“接受接口，返回具体类型”的一种应用：调用方可以注入 Email、SMS 或测试替身，得到的 *Notifier 仍保留自身 API。它不是所有函数必须遵循的法律；马上会看到，包装器特意返回接口才能方便组合。构造函数也不会自动消除 nil 依赖，是否允许 nil、怎样处理错误，应由各 API 明确约定。〔TB30 p10-11〕</p>
+  <p id="u1QWaSNc">标准库有三个直接可查的例子：sync.NewCond(l sync.Locker) *sync.Cond 将锁保存到 L；log.New(out io.Writer, prefix string, flag int) *log.Logger 把输出目的地保存在内部；bufio.NewWriterSize(w io.Writer, size int) *bufio.Writer 保存写入目标并增加缓冲。最后一个若收到已有且缓冲足够大的 *bufio.Writer，会直接返回它；否则在 size 非正时选默认大小并创建缓冲。这里的 bufio 路径不是 log 包。〔TB30 p10-11〕</p>
+  <h3 id="HWTWQ7yC">包装器：保留同一接口，改变一层行为</h3>
+  <p id="tsNsROHd">构造函数解决“对象用谁工作”，包装器则要在既有行为前后增加工作，又不修改被包装类型。形式常是 func Wrap(x I) I：输入一个接口，返回仍可作为同一接口使用的值，因此能继续套下一层。io.LimitReader(r, n) 接收 io.Reader，返回仍是 io.Reader 的限长读取器；其具体实现 *io.LimitedReader 用命名字段 R 保存内层，N 记录剩余可读字节。这里根本不需要嵌入。〔TB30 p11-12〕</p>
+  <p id="M_tBnZ9U">限长读取器在 N 已用尽时返回 EOF；否则把本次读取缓冲裁到剩余额度，调用内层 Read，再按实际读取 n 扣减 N。包装的是可读长度，不是关闭或释放底层资源；返回的 io.Reader 也没有承诺 Close。由此已经能看到选择接口的边界：只能使用接口明确公开的能力。</p>
+  <p id="eKWhYcnt">再加一层 ASCII 大写转换，保留现有的 hello gopher 例子，同时重现四字节 HELL 的来源例子。下面是完整程序。CapReader 返回新的包装值，upper.Read 只处理这次读到的 p[:n]，不分配一份整块缓冲来做转换。</p>
+  <codeblock id="Rj6q4h8r" lang="go">package main
+
+import (
+	&quot;fmt&quot;
+	&quot;io&quot;
+	&quot;strings&quot;
+)
+
+type upper struct { r io.Reader }
+
+func (u upper) Read(p []byte) (int, error) {
+	n, err := u.r.Read(p)
+	for i := 0; i &lt; n; i++ {
+		if p[i] &gt;= &apos;a&apos; &amp;&amp; p[i] &lt;= &apos;z&apos; {
+			p[i] -= &apos;a&apos; - &apos;A&apos;
+		}
+	}
+	return n, err
+}
+
+func CapReader(r io.Reader) io.Reader { return upper{r: r} }
+
+func main() {
+	var r io.Reader = strings.NewReader(&quot;hello gopher&quot;)
+	r = io.LimitReader(r, 8)
+	r = CapReader(r)
+	b, err := io.ReadAll(r)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(b))
+
+	r = CapReader(io.LimitReader(strings.NewReader(&quot;hello, gopher!\n&quot;), 4))
+	b, err = io.ReadAll(r)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(b))
+}
+</codeblock>
+  <p id="pNxGKQDi">按实现推导应输出 HELLO GO 与 HELL。外层 Read 调内层 LimitReader.Read，内层向字符串读取最多指定字节，字节返回后再由外层转换；变量 r 的静态类型一直是 io.Reader。链式写法与分步赋值表达同一关系。包装器的同接口签名使它们可相接，却不保证交换顺序仍等价：长度变化、缓冲、计数或失败拦截都可能使顺序影响语义。这个 ASCII 原地转换恰好不改变长度，不应据它推断所有转换都可交换。〔TB30 p12-13〕</p>
+  <codeblock id="8TWIuxfj" lang="text">HELLO GO
+HELL
+</codeblock>
+  <p id="fxpLY0D3">Read 允许一次同时返回 n &gt; 0 与非 nil 错误，包括 EOF。包装器必须先处理这 n 个有效字节，再把原来的 n、err 交还调用方；不能写“只要 err != nil 就 return 0, err”，否则会丢掉已经读到的数据。缓冲的 n 以外部分也不是本次有效输入，不应一并转换。上述实现限于 ASCII 的 a 到 z；通用 Unicode 大写可能改变 UTF-8 长度，流的分块还可能切开一个字符，不能把整块 bytes.ToUpper 的结果不加容量和状态处理地塞回同一缓冲。Reader 的 n/error 规则以现行 io.Reader 文档为准，包装链的场景来自〔TB30 p13〕。</p>
+  <h3 id="MUIE2MSI">适配器：给函数值一组方法</h3>
+  <p id="x1d6snCL">Welcome 目前需要一个有 Send 方法的值。若某个测试只需要一段发送函数，没有必要再写一整个结构体：定义一个函数类型，再给它声明方法，方法体调用这个函数值即可。下面依赖前文 Sender、Welcome；需导入 fmt。</p>
+  <codeblock id="YW_sRMHv" lang="go">type SendFunc func(string)
+
+func (f SendFunc) Send(message string) { f(message) }
+
+func example() {
+	Welcome(SendFunc(func(message string) {
+		fmt.Println(&quot;记录通知：&quot;, message)
+	}))
+}
+</codeblock>
+  <p id="eMzQrAww">普通 func(string) 本身没有 Send 方法。显式转换成 SendFunc 后，它具有我们声明的 Send，所以满足 Sender；转换没有把函数体改写成另一套业务逻辑。这一模式的标准库范本是 http.HandlerFunc：名字中虽有 Func，它是类型，不是注册路由的 http.HandleFunc 函数。下面摘录其核心定义，省去了包限定符，不能原样放在普通包中替换标准库。〔TB30 p14〕</p>
+  <codeblock id="Uo60dgQg" lang="go">type Handler interface {
+	ServeHTTP(ResponseWriter, *Request)
+}
+
+type HandlerFunc func(ResponseWriter, *Request)
+
+func (f HandlerFunc) ServeHTTP(w ResponseWriter, r *Request) {
+	f(w, r)
+}
+</codeblock>
+  <p id="xn7xfB9C">将 greetings(w http.ResponseWriter, r *http.Request) 显式转成 http.HandlerFunc(greetings)，得到的值就能传给接收 http.Handler 的地方，例如 http.ListenAndServe 的第二个参数。它只适配这个确切函数签名，不会自动给任意函数增加方法，也不会凭空处理 nil 函数；若函数值为 nil，真正调用它仍会 panic。〔TB30 p14〕</p>
+  <h3 id="RD04I53F">中间件：包装处理器，并决定是否继续</h3>
+  <p id="byT03LDx">把包装器和函数适配器放在一起，就能写出 func(http.Handler) http.Handler 形式的 Web 中间件。外层函数保存 next，内部匿名函数在处理一次请求时做自己的工作，再决定是否调用 next.ServeHTTP。日志、请求检查、限流、熔断经常采用这种连接方式，但每一层的行为与失败处理仍要自己实现。〔TB30 p15-16〕</p>
+  <p id="xXfz3ptP">下面保留日志层与检查层组成的完整内存请求例子，不启动监听端口。X-Token 非空仅用来分出两条控制流，不是真正的身份认证。</p>
+  <codeblock id="Hc1clpFI" lang="go">package main
+
+import (
+	&quot;fmt&quot;
+	&quot;net/http&quot;
+	&quot;net/http/httptest&quot;
+)
+
+func logMW(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println(&quot;log:&quot;, r.URL.Path)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func authMW(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println(&quot;auth check&quot;)
+		if r.Header.Get(&quot;X-Token&quot;) == &quot;&quot; {
+			http.Error(w, &quot;unauthorized&quot;, http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func main() {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, &quot;hello&quot;)
+	})
+	srv := logMW(authMW(h))
+	for _, token := range []string{&quot;&quot;, &quot;t&quot;} {
+		req := httptest.NewRequest(&quot;GET&quot;, &quot;/ping&quot;, nil)
+		if token != &quot;&quot; {
+			req.Header.Set(&quot;X-Token&quot;, token)
+		}
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		fmt.Println(rec.Code, rec.Body.String())
+	}
+}
+</codeblock>
+  <p id="iqcSPOQU">按调用路径，两个请求都会先打印 log: /ping，再打印 auth check。空头分支写入 401，随后 return，业务 h 不运行；非空头分支继续到 h，响应为 200 hello。http.Error 的正文自带换行，再经 Println 打印会留下一个空行，输出应是：</p>
+  <codeblock id="HlFYxf3J" lang="text">log: /ping
+auth check
+401 unauthorized
+
+log: /ping
+auth check
+200 hello
+</codeblock>
+  <p id="DQYnULR6">logMW(authMW(h)) 构造时先把 h 包进检查层，再把检查层包进日志层；处理请求时，从最外层日志开始进入。若交换成 authMW(logMW(h))，拒绝分支会在到达日志层前返回。若某层在 next 调用后还有工作，则返回时按相反方向展开；有条件中断时，内层根本不会被执行。可以把这与 Java Servlet Filter 或 Rust tower Layer 的“层层包装”目标对照，但这里的控制流来自显式函数调用，不表示三者运行模型相同。〔TB30 p15-16〕</p>
+  <p id="JT76BHhL">此示例未验证令牌内容，更没有实现签名、有效期、密钥管理或真实的认证授权，不能直接用于保护接口。若把打印改成真实日志，应考虑敏感字段；若包装 ResponseWriter，还须决定怎样保持所需的可选接口能力。接口相同让各层可连接，不会替我们完成这些行为约定。</p>
+  <h2 id="c3_4h5q9">八、any：接受任意值，不等于获得任意能力</h2>
+  <p id="RkoUv-d7">Sender 为编译器提供 Send(string) 的要求；把参数改成 any 后，Email、SMS 乃至整数都能传入，调用方却不能直接写 value.Send。因为 any 没有承诺业务方法。any 是 interface{} 的预定义别名，自 Go 1.18 起可用，不是新增关键字，也不是一种与空接口不同的动态容器。〔TBX05 p14〕</p>
+  <p id="cys4Om_G">下面沿用前文 Sender、Email、SMS、Welcome，并导入 fmt。这里刻意接收未知输入，所以使用 any，再通过前文已讲过的类型断言询问“它能否作为 Sender”。</p>
+  <codeblock id="8wVJxBvC" lang="go">func WelcomeUnknown(value any) bool {
+	sender, ok := value.(Sender)
+	if !ok {
+		return false
+	}
+	Welcome(sender)
+	return true
+}
+
+func exampleAny() {
+	fmt.Println(WelcomeUnknown(Email{}))
+	fmt.Println(WelcomeUnknown(SMS{}))
+	fmt.Println(WelcomeUnknown(42))
+}
+</codeblock>
+  <p id="j2x1gNXB">前两次会先发送对应通知，再返回 true；整数分支返回 false，不会因为“所有值都能放入 any”就获得 Send 方法。若入口本来就只接受发送者，应直接声明 Sender，让编译期拒绝 42，而不是每次进入函数后才做同一项断言。单值断言失败会 panic；逗号 ok 形式才允许在本地处理不匹配。这里的断言也不保证接口中保存的 nil 指针能安全发送，具体 nil 接收者的行为仍由实现决定。〔TB30 p16-17〕</p>
+  <p id="G9b9AJqJ">“空接口不提供信息”指的是它不向编译器提供这里需要哪些业务能力，并不是说它没有静态类型，或把 Go 的全部类型检查都关闭了。any 仍是接口类型，使用方式仍受编译器约束；只是具体输入是否符合业务要求，可能要推迟到断言、type switch 或其他运行期检查时处理。〔TB30 p16-17〕</p>
+  <p id="VIES8U9I">格式化和日志等 API 本来就要面对不同类型的值，使用 any 有合理目的。历史上的 container/heap、list、ring、sort 相关 API、sync.Map 等也有面对未知类型的设计；这些不是现行标准库使用 any 的穷尽分类。Go 1.18 以后的容器或算法，若要让输入输出保持同一种静态类型，可以考虑类型参数；若任务本来是异构数据、未知数据或通用格式化，any 仍然适用。不能把泛型的出现写成所有空接口都会被替代。〔TB30 p17〕</p>
+  <h3 id="iAqBSKXc">如果没有接口，哪些设计会更难</h3>
+  <p id="pSTVPr6_">这是一道设计思考题，不是说没有接口就写不出程序。先看耦合：Welcome 若写死为 Email，新增 SMS 需要改调用边界或另找分派方式；Sender 则让调用方只声明发送契约，让实现各自履约。接口与实现关系由方法集合隐式建立，使用方可以后来定义一个小接口，而不要求修改已有实现去声明 implements。〔TB28 p8〕</p>
+  <p id="vn79gn9h">再看测试：小接口让替身只承担少量真正需要的方法，像 Sender 只需一个 Send，测试章的 fakeStore 只需 Get。已有大接口还可用前面的嵌入 Stmt 技巧，但要守住未实现方法会 panic 的边界。若没有接口，这些以行为契约接入不同具体类型的做法不能原样成立；仍可以传入函数、在具体类型内部注入行为或使用其他测试手段，因此不能说“完全不可能替换依赖或测试”。〔TB28 p12〕〔TB26 p13-15〕</p>
+  <p id="v42rjI2x">最后看组合：io.ReadWriter 把小接口拼成新的契约，包装器链让不同实现按同一行为连接，中间件让处理流程分层。移去接口，这套依靠隐式满足与接口参数建立的连接就需要别的表达方式；但结构体组合、函数组合和其他机制不会随之消失。接口让这一类组合格外方便，不等于它是 Go 唯一的抽象能力。以上是结合本章例子给出的参考分析；题目本身来自〔TB28 p16〕，契约与小接口组合的依据见〔TB28 p8〕〔TB28 p12-13〕。</p>
+  <h2 id="Ngrov0b7">把本章的几条调用路径连起来</h2>
+  <p id="rLEJbuS-">方法仍然遵循接收者参数的值传递：值接收者得到副本，指针接收者得到地址的副本，并可通过它修改原值。方法集合描述类型拥有哪些方法，决定它是否满足本章的基本接口；可寻址变量的自动取地址只便利直接调用，不改变类型的接口实现关系。</p>
+  <p id="yBLAt5pT">接口值既有静态接口类型，也保留具体动态类型和值。没有错误要返回真正的 nil 接口，而不是先声明一个 nil *MyErr 再返回它作为 error；后者仍带着 *MyErr 的动态类型，所以不等于 nil。值能否比较还取决于动态类型，使用 any 并不会把不可比较的值变得可比较。</p>
+  <p id="3nmle87W">嵌入让无冲突的字段与方法被提升，实际调用仍沿内层字段发生；外层同名方法不改写内层接收者的自调用。普通命名字段不提升，新定义类型不继承绑定在原类型上的声明方法，别名则还是同一个类型。包装、适配、中间件利用这些已经讲清的规则连接实现，不需要引入父子类。</p>
+  <p id="xaahcXX4">实际编码时，把几个常见误区放回具体判断：混用接收者不一定非法，但必须检查到底由值还是指针满足接口；任何“嵌入就能重写”的预期都要追到实际接收者；只有需要未知类型输入时才用 any，已知需要 Send 或 Write 时就保留相应能力约束。这些都是根据调用路径作选择，不是背一套固定模板。</p>
+  <h2 id="ypJ3sQ-l">判断题、练习与参考答案</h2>
+  <p id="UkbzOiE-">先不运行代码，用本章规则回答四个问题。第一，Incrementer 要求指针接收者方法 Add，为什么 &amp;c 能赋给它而 c 不能，但可寻址的 c.Add(3) 可以调用？第二，对没有嵌入字段的普通结构体 T，type S T 与 type S = T 的方法集合有什么差别？第三，前面 c.Hello() 为什么是 hi base，想要 hi child 怎样改变设计？第四，返回 error 时 var p *MyErr; return p，为什么调用方会发现 err != nil？</p>
+  <details id="FMGr1vpe" summary="四道题的参考答案" open="false">
+    <p>第一，赋给接口时检查实际类型的方法集合；指针方法属于 *T，不属于 T。直接调用可寻址 c 的方法时，可以自动取地址，所以 c.Add(3) 能改写为 (&amp;c).Add(3)。不可寻址值不适用，语法便利也不会改变 T 的方法集合。</p>
+    <p>第二，type S T 定义新类型，不继承 T 的已声明方法；题设没有嵌入字段，也就没有可保留的提升方法，若 S 没有自己的方法，S 与 *S 的方法集合都是空的。type S = T 是别名，S 就是 T，*S 就是 *T，各自的方法集合分别与原类型一致；值、指针的差别仍由原方法接收者决定。</p>
+    <p>第三，c.Hello() 调的是 c.Base.Hello()，内部 b 的静态类型是 Base，b.Who() 调 Base.Who。外层 Child.Who 只影响从 Child 选择该名字的调用。把需要变化的 Who 作为接口参数传给独立函数 Hello(w Whoer)，再传入 c，便会选择 Child.Who；不要期待嵌入自动实现继承式重写。</p>
+    <p>第四，返回时 nil 指针进入 error 接口，接口带着动态类型 *MyErr，只是动态值为 nil。它不等于没有动态类型和值的 nil 接口。没有错误时直接 return nil；若确有错误，再返回具体错误值。</p>
+  </details>
+  <p id="O5BPCW2Z">继续完成三个与嵌入和组合直接相关的推导。第一，把 S1 的嵌入字段改成 S2 那样的普通命名字段，哪些方法不再提升？第二，给 T1 的方法改接收者，再解释 T{T1; *T2} 的值与指针各能赋给哪些接口；不要只测试可寻址变量的直接调用。第三，交换日志与检查中间件的包裹顺序，说明被拒绝请求还会不会进入日志层。</p>
+  <details id="7sx9vjgB" summary="嵌入与组合练习的参考答案" open="false">
+    <p>第一，在 T1、t2 无方法而 I 有 M1 的题设下，S1 和 *S1 都通过嵌入 I 得到 M1；S2、*S2 不提升任何方法，但仍可显式访问 S2.I。第二，嵌入值 T1 时，外层值只得到 T1 值方法，外层指针还得到 *T1 指针方法；嵌入 *T2 时，外层值和指针都得到 T2 与 *T2 的可提升方法。每次改动都按新接收者重新计算，还须排除同名冲突。第三，logMW(authMW(h)) 先日志后检查，拒绝也有日志；authMW(logMW(h)) 先检查，拒绝时 return，日志层不会运行。</p>
+  </details>
+  <p id="ORgRBLrX">还可以对包装器增加一项契约练习：写一个 Reader，在同一次 Read 返回一个字节和 io.EOF，预测 CapReader 对这一个字节的处理。参考答案是字节仍要被转换，调用结果保留 n == 1 和原来的 io.EOF；若提前返回 0，就丢了这次有效数据。再尝试处理非 ASCII 输入，说明为什么当前逐字节算法不能宣称实现完整 Unicode 大写。</p>
+  <p id="q5vgZghD">关于接口设计，还有两道开放题：如果 Go 没有接口，本章哪些连接必须改写；怎样从具体实现中提炼出更小而非更碎的接口？可以从 Welcome 只调用 Send、Save 只调用 Write 入手，先核对调用方需要哪些方法，再检查这些方法是否属于同一职责；不要按想象一次设计覆盖全部未来变化的大接口。问题来自〔TB28 p16〕，前文已给出没有接口时的参考分析。</p>
+  <p id="W6EgRIFC">如果还见过其他接口使用模式，可以继续问“参数依赖什么行为、返回值保留什么能力、错误和资源责任由谁承担”。例如错误包装可连接到错误处理章，但不必把所有带函数参数的模式都叫接口模式。这对应 TB30 的开放练习，不把留言中的建议冒充已经验证的固定模式。〔TB30 p18〕</p>
+  <p id="zrikq2a_">仓库 exercises/p30/ 提供已有练习锚点：TestMethodSetMatrix 观察值与指针的方法集合，TestTypeAliasMethodSet 对照新类型与别名，TestEmbedNotInherit 检查嵌入提升的三方法/四方法差异，TestNilErrorTrap 检查 typed nil，TestCapReaderChain 检查四字节 HELL 链，TestMiddlewareCompose 检查顺序与拒绝分支，TestSaveBuffer 用内存目标保存数据。这里列的是源码实际覆盖的目标；其中 TestEmbedNotInherit 当前验证的是方法集合，不应声称它已经执行了 Base/Child 自调用反例。反射和 trace 的其他练习有自己的主题，不是本章这些测试的替代品。</p>
+  <h2 id="-Vf8A5Up">在项目中沿同一条路径读代码</h2>
+  <p id="Y8UnuaW8">dnsproxi-go/tcp/server.go 的 streamConn 是具体的适配器。它没有声明 implements net.PacketConn，而是由 *streamConn 的方法满足接口。业务查询处理只需要通过 WriteTo 回应，适配器将它翻译为“给 TCP 连接写带两字节长度前缀的 DNS 帧”，忽略逐包目标地址。底层 Write 返回 n &gt;= 2 时，它从计数中减去两字节前缀；不足两字节时，原样返回底层计数和错误。因此不能把所有失败路径都理解为严格的载荷字节计数。帧过大时返回编码错误。Close 与 deadline 等操作显式转发给内部 net.Conn。</p>
+  <p id="L0xB_iDM">这个项目连接也展示了语义边界：ReadFrom 虽然为了方法集合而存在，却明确返回 tcp streamConn: ReadFrom not used，读取发生在 serveConn 的成帧循环。因此不能仅凭满足 net.PacketConn 就宣称它是任意 UDP 场景都能等价使用的通用 PacketConn。它适配的是现有查询处理路径所用的那部分语义。具体调用处把 sc 传给 h，正好可以沿着“接口参数—适配器方法—底层连接”读下去。</p>
+  <p id="-V2JlTRT">同文件的 Handler 是签名与业务 handleQuery 一致的函数类型，可直接接收相应方法值。这里不要把它与 http.HandlerFunc 混为一谈：它本身没有额外的 ServeHTTP 方法，接入点是函数参数；http.HandlerFunc 则通过方法满足 http.Handler。两者都利用了函数值，但连接的契约不同。</p>
+  <p id="OeJD3vcc">dnsproxi-go/logger.go 的 ctxHandler 使用命名字段 inner slog.Handler，是包装器而非继承。Handle 从 context 取请求 ID，在 Record 没有同名属性时补上，再调用 inner.Handle；Enabled 转发开关判断。更重要的是，WithAttrs、WithGroup 不直接把内层返回值交出去，而是把新的内层再包进 ctxHandler，避免派生 logger 后丢掉请求 ID 注入层。检查包装器是否保住整个接口的行为，比只看一个 Handle 方法更重要。这里的查重检查的是 Record 自带属性，不能从它推断能检查内层预置的全部属性。</p>
+  <p id="TwnM04c2">测试章 guide/handbook/14-testing.md 的 Store 只要求 Get，Service 保存 Store，fakeStore 用 map 实现查找；错误路径返回 ErrNotFound，而不是为测试启动数据库。这是 Welcome(Sender)、Save(io.Writer) 在业务服务里的延续。具体依赖也有可测试手段，接口的收益是让替换所需行为的连接点明确，而不是保证所有外部系统都不再需要集成测试。</p>
+  <h2 id="3JfsIxDU">想深入时，按问题找材料</h2>
+  <p id="450mt3R5">本章 TB 编号是出处标记，不是继续阅读的前提。方法声明、接收者与函数等价转换查 TB24；方法集合和接收者选型查 TB25；接口与结构体嵌入、同名歧义、定义类型和别名查 TB26；接口契约、断言、小接口查 TB28；接口表示、nil、比较和装箱查 TB29；创建、包装、适配和中间件查 TB30。原材料分别对应 work/text/ 下同名文本与 work/digest/ 下摘要；摘要辅助定位，遇到边界条件应回原文核对。</p>
+  <p id="fV3vp9FH">若要对照更长的旧讲解，读 notes/p2-lang-core.md 与 notes/p30-methods-interfaces.md。它们包含接口表示、itab、装箱基准以及反射入口；具体性能和 runtime 布局必须连同工具链版本看，不能把示例数字或内部字段当稳定语言契约。本章关于正确调用和方法集合的解释不依赖 unsafe 打印工具。</p>
+  <p id="LY52O5vZ">完整反射专题、跨版本运行时布局实验和 trace 工具不在本章当前正文范围。反射可继续到原材料索引 C:dachang/reflection，对应 work/text/C_dachang__reflection.txt 与 work/digest/C_dachang__reflection.md；函数调用跟踪可查 TB27 与 C:dachang/trace，对应 work/text/TB27.txt、work/text/C_dachang__trace.txt 及同名 digest。把接口用于业务连接，不要求先学会这些工具，也不要用这些入口替代本章已经展开的方法集合和调用机制。</p>
+  <h2 id="AwX5ruRi">章级验收</h2>
+  <p id="RDvAXUa9">本轮候选经过分片来源忠实性审阅与整章读者审阅，已修复发现的必修问题；独立示例、关键错误边界、旧新循环语义与 Java 字节码均实际验证。请以实际阅读体验决定是否通过，不必因为审阅通过而接受不好读的段落。</p>
+  <p id="c6WVHd5X">整章是否可以进入正式落盘批审？<ask id="chapter04-acceptance-20261105" recommend="accept"><option value="accept">章级阅读验收通过，进入正式批审；未通过门禁不落正文</option><option value="revise">还需要修改，请按我的正文评论修订候选</option></ask></p>
+  <details id="a4gpOtyG" summary="本轮证据、验证范围与未做事项" open="false">
+    <p>当前候选依照原章全部连续区块与附录独有知识建覆盖记录，并新增 Java 语言、字节码、HotSpot 实现与 JIT 层次对照。原稿本轮未修改，docs 镜像和台账处置未更新，也没有生成新的正式 apply 回执。</p>
+    <p>验证包含完整独立程序，nil 两修法的正常/错误路径，断言静态类型编译反例，引用浅复制，Reader 的 n 与错误同时返回，Writer 短写与错误透传，中间件拒绝与交换顺序，以及 Go1.21/1.22 的确定性循环身份对照。unsafe 工具只核对指定工具链的示例布局和可见字段关系；不保证跨版本。未做 Java JIT 汇编或跨语言性能基准。</p>
+    <p>现有 exercises/p30 测试和方法表达式演示通过；候选路径检查、设计文档 ESLint、站点构建通过。构建仍提示部分压缩后代码块大于 500kB，本轮没有为文档改动调整打包配置。候选当前展示在 Artifact，不把站点构建成功说成候选已经进入站点。</p>
+    <p>覆盖与运行记录保存在 .ryugi/sdd/2026-11-05-go-tutorial-rewrite-design/ 下，整合清单为 coverage/integration.md，检查记录为 verification.md。旧汇总状态与逐项台账差异留作单独核对，没有借本轮候选修改完成进度。</p>
+  </details>
+  <details id="_B5o8NP-" summary="已批准设计与先前讨论（保留评论锚点）" open="false">
+    <h2 id="tH_GfdlZ">当前理解：事实、猜测与待确认</h2>
+    <p id="2kJCA8Mr"><b>已知事实：</b>你最初要解决的是语言风格与教学组织，而不只是补齐知识点。你要求范围涉及仓库内所有文档，参考已下载的教程；不希望把每节固定成一套表格模板，也明确否定过不利于人类阅读的机制对照表。现在你要求重新用 Ryugi 脑暴和 Artifact 讨论。</p>
+    <p id="iP1mFcTU"><b>已有执行记录：</b>上一阶段 TB29 K1-K14 已分两批落盘，批 2 的 run 为 <code>handbook-batch-mw32ryu8-efq9zn</code>。这证明该批经过条目双审，不证明全书语言风格已校准，也不证明 04 章所有来源、所有内容都已完成。</p>
+    <p id="ieZ4e8cH"><b>问题判断（我的判断）：</b>事实覆盖与阅读体验是不同的验收维度。前期批审提供的事实证据继续保留，但不能替代对章节主线、衔接和机制解释的检查。</p>
+    <p id="qW4KhwIg"><b>当前授权边界：</b>整体方案已按推荐提交批准，接下来制作完整章稿；源文件落盘仍需另一次章级验收。旧批次汇报与台账若有不一致，候选覆盖记录以当前逐项数据和回执为准，不据汇总声明扩大完成范围。</p>
+    <h2 id="XqEFTfCE">沿用的决定与本轮边界</h2>
+    <ul id="kh-abYDU">
+      <li><b>你的要求：</b>覆盖仓库内所有文档；实际改动按文档用途区分，不把教程讲法机械套进操作说明与索引。</li>
+      <li><b>你的要求：</b>参考之前下载的教程，讲解要有体系、讲透机制；不靠悬念修辞，不以术语清单和表格代替推导。</li>
+      <li><b>我的决定：</b>本轮只更新讨论材料，不改教程正文、不启动批审、不改台账。旧审稿与落盘回执原样保留。</li>
+      <li><b>你的选择（本轮提交）：</b>先看一段完整讲解，校准讲法。该项按推荐提交；没有新增文字评论。</li>
+      <li><b>你的选择（第 2 轮提交）：</b>候选讲法接近预期，沿这条讲解主线继续展开机制；该项按推荐提交，没有新增文字评论。尚未批准整章替换或全书统一模板。</li>
+      <li><b>你的选择（第 3 轮提交）：</b>机制深度合适，正文解释过程、汇编选读；该项按推荐提交，没有新增文字评论。</li>
+    </ul>
+    <h2 id="c9aCCViJ">一、目标：读者能跟着推导，不只是记住结论</h2>
+    <p id="57GWaYJM">面向已有 Java、TypeScript、Python 等语言经验、希望建立 Go 知识体系的开发者。读者读完一个连续主题，应能说清：代码要解决什么问题；具体发生了什么；为什么这样发生；何时使用，以及边界是什么。解释机制时讲到编译器或运行时实际承担的工作，但先让读者知道正在解释哪段代码。</p>
+    <p id="Fd7brTGU">这不是把所有文章写短，也不是增加“你”“我们”等口语词。改写可以增加必要篇幅；目标是减少上下文切换和推理跳步，让细节围绕主线展开。</p>
+    <h2 id="XSCqIivX">二、范围与不做的事</h2>
+    <table id="kczDm8VD">
+      <tr>
+        <th>
+          <p>对象</p>
+        </th>
+        <th>
+          <p>处理方式</p>
+        </th>
+        <th>
+          <p>边界</p>
+        </th>
+      </tr>
+      <tr>
+        <td>
+          <p>guide/handbook</p>
+        </td>
+        <td>
+          <p>作为连续学习主路径，按主题组织问题、例子、推导与机制</p>
+        </td>
+        <td>
+          <p>已审内容保留证据；改动后的正确性重新核对</p>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <p>notes</p>
+        </td>
+        <td>
+          <p>保留细节库职责，修复解释断裂、过时内容和与主线不一致之处</p>
+        </td>
+        <td>
+          <p>不直接复制整章手册；详细机制不能只剩术语或链接</p>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <p>docs</p>
+        </td>
+        <td>
+          <p>按现有规则同步源文档镜像；独立维护的读者页面单独检查</p>
+        </td>
+        <td>
+          <p>生成镜像不作为第二份独立改写稿</p>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <p>README、路线、索引、操作与贡献说明</p>
+        </td>
+        <td>
+          <p>按导航或操作用途改善信息组织、术语和链接</p>
+        </td>
+        <td>
+          <p>不强制使用故事、失败案例或运行时分析</p>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <p>下载教程与 work 原材料</p>
+        </td>
+        <td>
+          <p>作为事实核对与成品讲法的参照</p>
+        </td>
+        <td>
+          <p>不重写付费原件，不照搬段落，不把 PDF 或私有材料发布到站点</p>
+        </td>
+      </tr>
+    </table>
+    <p id="FS4-Z3RW"><b>不做：</b>重设计站点界面、改业务代码、全库统一替换词语、删除来源链、为消除文章缺陷而重建一套批审平台。全库文档是总体范围，不是一次提交的范围；不能因为 04 章样稿认可就声称其他文档已经改好。</p>
+    <h2 id="f87MpzJg">三、写作方式：一条主线，按需要展开</h2>
+    <p id="hkS4WjTY">先决定本段要让读者理解什么，再选择一个能承载这些问题的具体场景。保留现有好例子；同一主题尽量让代码逐步演进，每次说明沿用了什么、改了什么。代码前说观察目的，代码后给实际结果，再解释结果与机制。不为制造悬念而隐瞒答案，不刻意安排“撞墙”。</p>
+    <p id="sFs-rshR">一般的讲解顺序是“任务与当前代码 → 需要改变的地方 → 一次改动 → 结果 → 因果 → 规则与边界”。这是写作选择，不是每节必须具备的栏目。速查、配置步骤、目录与源码分析可以采用不同结构，只要读者不需要自行补齐推理。</p>
+    <p id="cFl21bku">主线必要的解释必须留在正文；汇编、逐字段源码和复核证据可以选读。是否移入选读，要检查读者不展开它时能否理解主线，不能只因篇幅长就移走。第 2 轮把多方法声明放在展开区只是样稿选择，正式改写时仍逐项核查，不因此默许降级其他知识。</p>
+    <p id="WfSCIBx5">关系、状态与调用流程用图；确有比较价值的属性用表；因果解释用连续段落。没有“每节三件套”、固定类比次数或强制小结。先讲清机制，再决定排版。</p>
+    <h2 id="aTWiFfIX">四、机制与跨语言对照的深度</h2>
+    <p id="IDmT3YBj">采用已确认的第 3 轮基准：沿着正在运行的代码区分编译期规则、运行时表示和方法调用，再解释优化可能改变什么。实现细节注明工具链版本，不能把本次汇编中的寄存器、偏移、符号名说成语言规范。</p>
+    <p id="RlQZE8U_">跨语言对照围绕同一个问题：读者在 Java 中已经理解什么，Go 保留了什么目标，改变了哪条关系或执行路径。04 章必须补齐 Java/Go 多态机制对照，但不沿用旧样张“Java 一律查 vtable”“成本同量级”等结论。正式候选需区分 Java 语言规则、JVM 字节码、所选 JVM 实现与 JIT 优化；实现层结论查对应版本的原始依据，示例与字节码实际验证，不编造性能结论。</p>
+    <p id="WwM_Z1GA"><b>我的选择：</b>Java 作为 04 章主要对照背景，TS/Python 只在确实能解除误解时补充；不把三门语言逐项铺成大表。机制讲解服务 Go 主线，不把整章变成 JVM 专题。</p>
+    <h2 id="7QJqshoW">五、先完成 04 章试产，再扩展</h2>
+    <steps id="lN4-9Ypr">
+      <step id="s_2ckpgqdz" title="核对整章内容边界">
+        <p>把当前 04 章各段、相关原材料、已经双审的条目与未审部分建立对应关系。覆盖方法、方法集合、接口、nil、比较与装箱、嵌入、组合、any 以及练习和项目连接，不能只拿 TB29 十四条代表全章。记录每条知识的条件、例子、异常分支和引用。</p>
+      </step>
+      <step id="s_ydts4a4w" title="写成连贯的章级候选">
+        <p>沿已确认样稿的通知场景串联接口部分；方法、指针、嵌入与组合按其自身问题安排例子。可调整小节顺序，但须补足依赖说明。把类型断言、nil 陷阱、接收者规则等完整落在候选中，不以链接代替已有必要讲解。整章候选先放在同一讨论文档的后续修订中供你阅读，不直接覆盖源文件。</p>
+      </step>
+      <step id="s_can7sfvq" title="同时验证教学与事实">
+        <p>实际运行示例与失败案例，核对来源和版本。用独立忠实性审读查知识遗漏与归属，用只读候选的读者审读查解释能否自洽。再由你检查完整章节的阅读体验；机器两审与人的章级验收都需要，互不代替。</p>
+      </step>
+      <step id="s_om6kt3d1" title="通过门禁后落盘与发布检查">
+        <p>guide/handbook 的正式改动按现有 handbook-batch 生成提案；只有 reviewed 才做 apply --check 与 apply，同一目标串行落盘。随后按源文件规则同步对应镜像，运行引用守卫、ESLint、文档构建并实际查看变更页面。验证通过后回填台账和场景，主仓与状态仓互引证据。</p>
+      </step>
+      <step id="s_46ibkfvr" title="按知识单元推进其余文档">
+        <p>04 章通过后，先按读者依赖推进其余 handbook，同步处理该知识单元关联的 notes；README、路线与索引随依赖变化更新。每章开始时核对事实与欠账，不照抄 04 章结构。每章结束给出变更范围、验收证据和剩余问题，不用一个总百分比掩盖不同层面的完成状态。</p>
+      </step>
+    </steps>
+    <h2 id="8-rJUugE">六、完整性、出处与审读纪律</h2>
+    <p id="ChTyff9z">每个改写主题维护“原知识 → 新落点 → 处理方式 → 验证依据”的覆盖清单。合并只用于确实重复的内容；删改错误或过时知识时说明证据与版本。替换例子必须保留旧例所展示的不同机制，正文不能退化为条目名称、参考链接或附录清单。</p>
+    <p id="fAedqmRB"><b>出处安排（我的选择，待整体批准）：</b>保留可追溯的条目与页码，当前不删除正文现有来源标记、不修改引用守卫。新写讲解不反复插入“原课说”“全文唯一”等审计口吻；这些归属判断放到审读记录，需要限定历史版本时才在正文解释。完整章稿中给出清楚的来源说明，不假装 TB 编号是读者必须回看的学习材料。是否调整引注的站点视觉呈现不在本次范围。</p>
+    <p id="uurTjUzx">不得手改 run 的 status、reviews、pass 或逐项证据来让提案通过。needs_rework 或 blocked 保持未完成；问题来自上下文缺失时，把真实前文加入新评审输入，让独立审稿人重新判断。无法复核的实测只说明来源与未验证项，不伪装成这轮亲自运行。</p>
+    <p id="Nvq2x3g2">notes 不在现有 apply 工具允许的 target 范围内，不能硬套 handbook 回执。我的执行选择是：沿用现有来源清单、候选、忠实性与读者两种独立审读，取得完整逐项证据后，由主助手以当前文件版本和唯一 before/after 校验手工落盘，并在状态仓保存目标、版本、提案、两份审读结果与落盘记录；缺少这组证据就不标“已落盘(双审通过)”。只换措辞或改导航的变更不虚增原材料条目的已审进度，不为此改造批审程序。</p>
+    <h2 id="rGFKUQgZ">七、验收：四种证据分别交代</h2>
+    <table id="Olw3_Cvv">
+      <tr>
+        <th>
+          <p>维度</p>
+        </th>
+        <th>
+          <p>通过标准</p>
+        </th>
+        <th>
+          <p>不能拿什么代替</p>
+        </th>
+      </tr>
+      <tr>
+        <td>
+          <p>内容完整</p>
+        </td>
+        <td>
+          <p>覆盖清单逐项可追踪到新文，条件、反例、边界与机制均有落点</p>
+        </td>
+        <td>
+          <p>字数、关键词、引用数量</p>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <p>教学自洽</p>
+        </td>
+        <td>
+          <p>只读候选能解释任务、行为、原因、选择与边界；用户章级阅读认可</p>
+        </td>
+        <td>
+          <p>只给“看起来顺”的审稿结论</p>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <p>技术正确</p>
+        </td>
+        <td>
+          <p>示例、失败案例实际验证；实现与版本依据准确；两类独立审读有记录</p>
+        </td>
+        <td>
+          <p>编译成功或助手自己宣布通过</p>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <p>站点交付</p>
+        </td>
+        <td>
+          <p>源文与镜像一致、链接与引用有效、构建通过、实际页面可读</p>
+        </td>
+        <td>
+          <p>只改源 Markdown 或只给构建日志</p>
+        </td>
+      </tr>
+    </table>
+    <p id="xnfdsWp4">已知命令：python3 -I scripts/check-handbook-refs.py；对变更文件运行 npx eslint；pnpm run docs:build。镜像沿 scripts/mirror.sh 的标题 frontmatter 规则同步，只处理本轮变更文件，避免覆盖无关改动。章节时长、导航和交叉链接如受影响，同批更新。执行中不把未运行的验证写成通过。</p>
+    <h2 id="nE-MPBdl">八、交付与授权边界</h2>
+    <p id="ZDre1mXM">这是一个跨多篇文档的项目，先交付一个完整 04 章试产，不一次性铺开全库。章内选词、段落划分、具体例子与图表由执行者按上述标准决定；改变知识范围、弱化机制深度或取消用户章级验收，不由执行者自行决定。</p>
+    <p id="ZV4GD1OY">你批准后，先把本方案保存到 docs/ryugi/specs/2026-11-05-go-tutorial-rewrite-design.md，再开展 04 章覆盖清单与章级候选。保存的是设计，不是直接应用现有样稿。只有整章候选经你验收并通过技术门禁，才修改教程正文。</p>
+    <p id="2SCnmCfl"><b>本次 Artifact 记录：</b>document/rewrite-style-clarify，路径 .ryugi/artifacts/document/rewrite-style-clarify/doc.xml，同一链接承载三轮讨论与本方案。第 2 轮确定连续叙事方向，第 3 轮确定机制正文与汇编选读的分工。旧 artboard/style-reference 仅作历史参照，不把旧 A/B 或旧技术表述当作本方案验收标准；后面的旧动态演示也不成为新实现依据。</p>
+    <p id="gtTz47i9"><b>设计可执行性检查：</b>独立审阅者 DesignBuilderCheck 已只读检查正式方案，返回“没有重要未决问题”。此检查只说明执行者不缺少重大规划信息，不代表全章技术双审已完成，也不替代你的整体批准。</p>
+    <h2 id="dV1nxpdG">整份方案批准</h2>
+    <p id="6v0N2MAN">请重点检查我的三项安排：先完成 04 章章级候选再改正文；按知识单元衔接 handbook 与 notes；保留出处证据但减少正文的审计口吻。<ask id="design-approval-20261105" recommend="approve"><option value="approve">批准此方案，先准备 04 章章级候选，不直接改正文</option><option value="revise">方案需要修改，具体看我的评论</option></ask></p>
+    <h2 id="WNr0bQM9">已确认样稿与原讨论记录</h2>
+    <p id="RlqtAraI">以下保留原块与评论锚点，便于对照讲法。旧轮次的问题已经结算；本次待答的是上面的整份方案批准。旧轮次中的建议只有被本方案明确采用的部分才生效。</p>
+    <h2 id="kl_0dLJM">重新讨论 · 第 3 轮：同一行 Send，怎样找到不同的方法？</h2>
+    <p id="QEmcDy8-"><b>衔接位置：</b>下面接在上一轮“两次调用为什么输出不同”之后。Sender、Email、SMS 和 Welcome 都沿用，不换案例。上一轮末尾预告的指针方法集合仍保留为后续主题，这次先解释已有程序的调用过程。正文样稿从下一标题开始。</p>
+    <h3 id="PRt27GxF">接口检查和方法调用，是两件事</h3>
+    <p id="K0cB_aTD">前面这段程序已经能运行：</p>
+    <codeblock id="C4REzcxV" lang="go">var sender Sender = Email{}
+Welcome(sender)
+
+sender = SMS{}
+Welcome(sender)</codeblock>
+    <p id="hXobX9OE">编译时，Go 检查 Email 和 SMS 是否都提供 Sender 要求的 Send(string)。这个检查回答的是“能不能传进去”。检查通过后，还有另一件事要做：程序运行到 Welcome 里的 sender.Send(&quot;欢迎注册&quot;) 时，究竟该执行 Email.Send，还是 SMS.Send？</p>
+    <p id="1iTnW4KK">答案不能只看 sender 声明时的类型。它一直是 Sender，这一点没有变化；变化的是接口值当前保存的具体类型和值。我们把前者叫静态类型，把当前保存的具体类型叫动态类型。第一次调用时，动态类型是 Email；第二次是 SMS。接口调用必须保留这份区别，才能选择相应的方法。</p>
+    <h3 id="u7x7-ZqM">接口值不只保存数据，还保存怎样使用它的信息</h3>
+    <p id="POaMVcL8">Sender 是一个带方法的接口。在本机 Go 1.26.4 的运行时实现中，这类接口值由两个字段表示：tab 和 data。data 用来表示保存的具体值；tab 指向一张方法表，运行时源码称它为 itab。不要把接口值想成仅有一个“指向对象的地址”：要通过 Sender 调用方法，还需要知道这个具体类型怎样满足 Sender。</p>
+    <p id="AP3jDd1b">itab 记录的是“接口类型与具体类型”这一对组合。Sender 与 Email 的组合有自己的方法表，Sender 与 SMS 的组合也有自己的方法表。表里既有接口和具体类型的信息，也有接口方法对应的调用入口。这里 Sender 只要求一个方法 Send，所以只需关注它对应的那一个入口。</p>
+    <mermaid id="AjZS2qdF">flowchart LR
+    A[&quot;第一次：Sender 保存 Email 值&quot;] --&gt;|tab| B[&quot;Sender × Email 的 itab&quot;]
+    A --&gt;|data| C[&quot;Email 值的数据表示&quot;]
+    B --&gt; D[&quot;Send 对应的调用入口&quot;]
+    D --&gt; E[&quot;执行 Email.Send&quot;]
+    F[&quot;第二次：Sender 保存 SMS 值&quot;] --&gt;|tab| G[&quot;Sender × SMS 的 itab&quot;]
+    F --&gt;|data| H[&quot;SMS 值的数据表示&quot;]
+    G --&gt; I[&quot;Send 对应的调用入口&quot;]
+    I --&gt; J[&quot;执行 SMS.Send&quot;]</mermaid>
+    <p id="AMLQB_an">图中分开画出两个值，是为了说明两次赋值的含义，不是在断言它们一定占用两块不同的堆内存。示例里的 Email 和 SMS 都是空结构体；实际的数据存放和地址复用可以被编译器、运行时优化。这里要理解的是：接口值携带了调用所需的类型信息和数据表示，不是每次赋值都必须新建对象。</p>
+    <h3 id="R5n0f8uo">调用时取入口，不是重新按名字找方法</h3>
+    <p id="jQ_KcB1d">回到 Welcome：</p>
+    <codeblock id="DogO6BPS" lang="go">func Welcome(sender Sender) {
+    sender.Send(&quot;欢迎注册&quot;)
+}</codeblock>
+    <p id="9LYJeCLZ">编译器知道这里调用的是 Sender 的 Send 方法，因此也知道该使用方法表里的哪个位置。在保留接口分派的调用路径中，程序从 sender 的 tab 取出对应入口，把接收者所需的数据和消息参数传过去，再通过这个入口调用方法。入口可能是编译器生成的包装函数，由它衔接到具体方法；不必把表里的每个地址都理解成源码方法原样编译后的地址。</p>
+    <p id="-P8mmv6j">第一次传入的接口值带着 Sender × Email 的表，所以最终执行 Email.Send；第二次带着 Sender × SMS 的表，所以执行 SMS.Send。Welcome 的函数体没有变，改变的是传入接口值携带的信息。</p>
+    <p id="yWt8bY04">这也说明，接口调用不是每次都拿着字符串 &quot;Send&quot; 去遍历所有方法、重新判断“这个类型能不能用”。在这里，实现关系已经通过编译期检查；调用所需的入口已经安排在方法表中。运行时取用的是已确定位置的入口。</p>
+    <h3 id="tnxobjyQ">为什么查看汇编时，有时看不到这个间接调用？</h3>
+    <p id="y1yEMmWR">上面讲的是接口分派的实现路径，不是说每一个接口调用都一定留下相同的机器指令。如果编译器能确定某个调用点保存的就是 Email，它可能把接口调用改成直接调用 Email 的方法；还可能继续内联方法体。这个优化叫去虚拟化。</p>
+    <p id="euxgheaP">因此要分清两层：在语言层面，程序通过 Sender 调用 Send；在优化后的机器代码层面，编译器可能已经消除了这次间接调用。不能只因为源代码用了接口，就断言它每次都查表、一定分配内存，或者一定比直接调用慢多少。</p>
+    <details id="RwoCp7zX" summary="实测：让 Welcome 保持独立，观察一次接口分派" open="false">
+      <p>沿用上一轮的完整程序，只在 Welcome 声明前添加下面的编译器指令，其余不变。它用于本次观察，防止 Welcome 被内联进调用方；不是建议在业务代码中禁用优化。</p>
+      <codeblock lang="go">//go:noinline
+func Welcome(sender Sender) {
+    sender.Send(&quot;欢迎注册&quot;)
+}</codeblock>
+      <p>在本机 go1.26.4、darwin/arm64 下，运行仍输出先邮件、后短信两行。使用 go build -gcflags=-S 查看这次构建，Welcome 内有以下关键指令（中间的参数准备指令已省略）：</p>
+      <codeblock lang="text">MOVD  24(R0), R3
+...
+CALL  (R3)</codeblock>
+      <p>在这次调用约定中，R0 起初保存 tab，R1 保存 data。第一条从表中取出 Send 对应入口；CALL (R3) 通过取出的地址调用。偏移 24 来自这版工具链在 arm64 上的布局，不是语言规范保证的常量。main 中还可分别看到 go:itab.main.Email,main.Sender 和 go:itab.main.SMS,main.Sender 两个表符号。</p>
+      <p>这次实测证明这个程序构建中保留了接口分派，不能据此推断所有程序的所有接口调用都如此。去虚拟化与内联要看具体调用点和构建条件，本轮没有用性能测试给它们排快慢。</p>
+    </details>
+    <h3 id="ykLBVpF0">从 Java 过来，先对齐问题，再比较实现</h3>
+    <p id="v6XBtR03">在 Java 中，用 Sender 接口引用调用 send，也要区分“实现类型是否允许用于这里”和“当前对象执行哪个实现”。熟悉的多态目标可以沿用到 Go：调用方只依赖接口，行为由当前具体实现决定。</p>
+    <p id="FLU0PY1B">区别先落在关系的建立上：Java 类通常需要声明 implements，或者通过继承已经建立的实现关系；Go 则检查方法集合是否满足接口，不要求实现方写出 Sender 的名字。后者让使用方可以在不改 Email 定义的情况下，再定义一个适合自己需要的接口。</p>
+    <p id="QOZexxq0">不要把这一步对应，扩张成“Java 和 Go 的调用机制完全一样”。这里已经沿 Go 的 tab → 方法入口解释了调用；Java 的字节码指令、JVM 的分派结构和 JIT 优化需要分别说明。单凭都有间接调用，推不出二者性能相同，更不能把所有 JVM 实现概括成一张固定的 vtable。</p>
+    <p id="IHsEMCmG">至此可以把两件事接起来了：编译期的方法集合检查保证“这个值可以作为 Sender 使用”；接口值携带的类型信息和数据表示，让程序在需要分派时找到具体方法。下一步研究 T 与 *T 的差别，是继续细化第一件事；研究装箱与内存分配，则是继续细化接口值怎样形成。它们有关联，但不必在第一次看 Send 调用时一起塞进来。</p>
+    <h3 id="Rl5Pv79G">本轮决定：这种机制深度放在哪里？</h3>
+    <p id="qA59XH71"><b>我的推荐：</b>正文保留“两个问题 → 接口值 → 方法表 → 调用入口 → 优化边界”的解释，汇编作为选读。这样能回答为什么，而不要求读者先学寄存器。Java 的详细实现对照仍是后续必须补齐的内容，这段只校准 Go 一侧的讲解方式，不把它算作已完成的跨语言对照。</p>
+    <p id="ObM6uL1p">读完这段，你希望机制正文讲到这里吗？<ask id="mechanism-depth-20261105" recommend="keep"><option value="keep">这个深度合适，正文讲过程，汇编选读</option><option value="lighter">正文负担太重，具体删改见我的评论</option><option value="deeper">仍然跳步，需要继续解释的地方见我的评论</option></ask></p>
+    <details id="sUSN3Axf" summary="本轮核对依据（非教程正文）" open="false">
+      <p>精读已下载 Tony Bai 第 29 讲提取原文 p5–7 的 iface、itab 及 fun 方法入口数组。现行源码已核对：go1.26.4 runtime/runtime2.go:184–192 的 iface/eface；internal/abi/iface.go:9–18 的 ITab，包含 Inter、Type、Hash、Fun。带方法接口与空接口并非同一表示，本段只用 Sender，不把 any 的布局混进来。</p>
+      <p>新增程序已运行并构建，实际观察了输出、Welcome 的取入口及间接调用、main 的两个 itab 符号。本轮不测 Java/JVM 分派，不给跨语言性能结论；未修改教程正文、站点镜像或审读台账。</p>
+    </details>
+    <h2 id="EcKNGoYE">重新讨论 · 第 2 轮：先把“实现接口”讲清楚</h2>
+    <p id="xa_iQrvH"><b>样稿范围：</b>04 章第二节的接口引入、声明与实现判定（现稿 182–318 行）。保留通知场景、两种实现、签名反例、参数名规则和方法集合判定；增加一个显式的接口变量，把“同一个参数为什么会调用不同实现”说明白。这不是整章替代稿；重复方法、类型断言、指针方法集合、完整运行时布局与 Java 调用机制对照，不在这次样稿范围内，后续不能因此删掉。</p>
+    <details id="GuPNcn2M" summary="对照：现稿的两处原文摘录（非全文）" open="false">
+      <p>前面的现稿已用 Email → SMS → Sender 演示发送通知，这个场景保留，不为换风格另造一套。</p>
+      <blockquote>
+        <p>两次调用执行的是同一个 Welcome，为什么输出不同？</p>
+        <p>第一次传入的是 Email{}，sender.Send(...) 调用 Email.Send；第二次传入的是 SMS{}，同一行代码调用 SMS.Send。Welcome 只负责决定发送什么，不负责决定具体怎样发送。</p>
+      </blockquote>
+      <blockquote>
+        <p>回看 Sender 的声明形式。接口类型由 type 和 interface 关键字定义的一组方法集合构成，方法集合唯一确定这个接口类型所表示的接口；集合里的每个方法，形式上是不带 func 关键字的“函数名 + 函数签名（参数列表 + 返回值列表）”的组合。之所以称它们为“方法”，是从接口实现者的角度说的。</p>
+      </blockquote>
+      <p><b>我的判断：</b>场景和输出已经清楚，不必推倒重来；需要试着改善的是后面的衔接。现稿从两次调用转到一段密集定义，再切换为 M1/M2 示例，读者要同时消化多套名字。下面先用 Send 把规则讲完，再说明更一般的声明形式。</p>
+    </details>
+    <h3 id="wLuntkW9">候选样稿正文 · Welcome 需要的是发送能力，不是 Email</h3>
+    <p id="UpCKYGnL">注册成功后，我们要给用户发一条欢迎消息。最初只发邮件，可以把参数直接写成 Email：</p>
+    <codeblock id="Ur193ist" lang="go">func Welcome(sender Email) {
+    sender.Send(&quot;欢迎注册&quot;)
+}</codeblock>
+    <p id="vDwwwC7a">这里的 Email 是我们定义的类型，提供 Send(string) 方法。为了只看调用过程，示例里的 Send 用打印代替真正发送，不连接邮件服务器，也不处理发送失败。</p>
+    <p id="9gTsfuHO">后来增加短信。SMS 也有 Send(string)，但 Welcome(SMS{}) 仍不能编译：参数写的是 Email，短信类型不是邮件类型。同名方法不会让两个具体类型变成同一个类型。</p>
+    <p id="Lrnw3_Rp">需要改变的不是欢迎消息，而是 Welcome 对参数的要求。它只调用一次 Send，不读取 Email 的字段，也不用邮件专属的方法。因此参数不必限定为 Email；我们可以把它真正需要的方法单独声明出来：</p>
+    <codeblock id="Np7dMyk0" lang="go">type Sender interface {
+    Send(message string)
+}</codeblock>
+    <p id="yjCNDd6F">这个声明定义了一个接口类型 Sender。里面不写发送过程，只写允许怎样调用：方法名为 Send，接收一个 string 参数，没有返回值。把 Welcome 的参数改成 Sender，函数体不用改。完整程序如下，可以直接运行：</p>
+    <codeblock id="Rtd24QmM" lang="go">package main
+
+import &quot;fmt&quot;
+
+type Sender interface {
+    Send(message string)
+}
+
+type Email struct{}
+
+func (Email) Send(message string) {
+    fmt.Println(&quot;发送邮件：&quot;, message)
+}
+
+type SMS struct{}
+
+func (SMS) Send(message string) {
+    fmt.Println(&quot;发送短信：&quot;, message)
+}
+
+func Welcome(sender Sender) {
+    sender.Send(&quot;欢迎注册&quot;)
+}
+
+func main() {
+    var sender Sender = Email{}
+    Welcome(sender)
+
+    sender = SMS{}
+    Welcome(sender)
+}</codeblock>
+    <p id="L4DG3aNA">运行结果是：</p>
+    <codeblock id="TENn2LUa" lang="text">发送邮件： 欢迎注册
+发送短信： 欢迎注册</codeblock>
+    <p id="mlK6n--d">注意 main 里只有一个 sender 变量，它声明时的类型一直是 Sender。第一次赋值放入 Email 值，第二次赋值换成 SMS 值。Welcome 接收的也是 Sender，但调用 Send 时，实际执行哪个方法由接口值中保存的具体类型决定：前一次是 Email.Send，后一次是 SMS.Send。</p>
+    <p id="08ZuH0Ly">这就是此处的多态：同一段调用代码可以使用不同实现。Welcome 决定“发什么”，具体类型决定“怎么发”。以后增加站内信，只要新类型满足 Sender 的要求，这段欢迎逻辑就可以继续使用，不需要再复制一个 Welcome 函数。</p>
+    <h3 id="ZrHR-z-f">为什么不写 implements，也能传进去？</h3>
+    <p id="VhQiLcXg">如果你写过 Java，可能会找 implements Sender。Go 不要求实现类型作这种声明。编译器检查的是类型具有哪些方法，以及这些方法是否满足接口。Email 和 SMS 都提供了 Send(string)，而 Sender 只要求这一个方法，所以它们都实现了 Sender。这叫隐式实现。</p>
+    <p id="PSbKvdAe">“隐式”不等于运行到调用处才试试看。把 Email 值赋给 Sender 变量，或者把它传给 Welcome 时，编译器就会检查。即使 Email 定义在前、Sender 后来才定义，只要方法满足要求，也能这样使用。</p>
+    <p id="QjEOvAbA">只看方法名还不够。保持 Sender 不变，若把 Email 的方法改成下面这样，再调用 Welcome(Email{}) 就不能编译：</p>
+    <codeblock id="B3dpJPlg" lang="go">func (Email) Send(message string) error {
+    return nil
+}</codeblock>
+    <p id="FFZpNvXt">新方法多了一个 error 返回值，不再是接口要求的 Send(string)。本次实测，编译器给出的关键差别是：</p>
+    <codeblock id="5oKZSc3t" lang="text">Email does not implement Sender (wrong type for method Send)
+    have Send(string) error
+    want Send(string)</codeblock>
+    <p id="C-zN4akh">这里不能因为调用方愿意忽略返回值，就认为两种方法可以互换。要实现接口，参数与返回值的类型必须匹配；方法名相同只是其中一项条件。</p>
+    <h3 id="6hCyViPu">把刚才的检查归纳成方法集合</h3>
+    <p id="D68yZ-8v">一个类型具有的方法组成它的方法集合。对本文这种只声明方法的接口，如果具体类型的方法集合包含接口要求的全部方法，这个类型就实现了接口；可以恰好相同，也可以拥有更多方法。比如 Email 再增加一个 Close() 方法，不会妨碍它实现 Sender，因为 Sender 需要的 Send 仍然在。</p>
+    <p id="x_hJWKPB">相反，Welcome 里的 sender 是 Sender 类型，能直接调用哪些方法要看 Sender 的声明。即使某次传入的 Email 还有 Close()，也不能直接在 Welcome 中写 sender.Close()：接口没有承诺这个能力。实现类型可以提供更多，调用方却只能依赖接口明确要求的部分。</p>
+    <p id="rMQoi4U6">接口声明里的参数名只是帮助人阅读，不参与上述匹配。Send(message string)、Send(s string) 和 Send(string) 描述同一个方法，返回值是否起名字也一样。声明时写方法名、参数和返回值，不写 func，也不写方法体；从实现它的类型来看，这些要求对应的正是该类型的方法。</p>
+    <details id="-raNLXeR" summary="同一规则用于多个方法时，声明是什么样的？" open="false">
+      <p>现稿还给出了下面这个例子；这里保留它，作为 Send 的规则推广，而不是在主线中间突然换案例。此片段使用 io.Writer，放入源文件时需要导入 io。</p>
+      <codeblock lang="go">type MyInterface interface {
+    M1(int) error
+    M2(io.Writer, ...string)
+}</codeblock>
+      <p>M1(a int) error 和 M1(n int) error 都与上面的 M1(int) error 相同。M2(w io.Writer, strs ...string) 与 M2(w io.Writer, args ...string) 也都与 M2(io.Writer, ...string) 相同。一个类型需要提供这两个方法才满足 MyInterface；参数名怎样取，不改变这个判断。</p>
+    </details>
+    <p id="ClgySp1b">回到开头，Email 和 SMS 并不是因为彼此相似就能互换，而是因为它们各自满足了 Sender。Welcome 的参数从某一种具体实现，变成了它实际需要的方法要求。接下来再讨论指针接收者时，我们只需继续追问同一件事：T 和 *T 各自的方法集合里，是否真的包含接口要求的方法？</p>
+    <h3 id="6XOiD9sL">本轮只确认这一件事</h3>
+    <p id="hdijW-Qe"><b>我的推荐：</b>以这段的衔接方式继续打磨：先用一个场景把调用过程与实现判定讲完，再深入指针方法集合和运行时机制。不是只加口语词，也不是每个知识点都强行配表格。多方法声明的细节暂放在可展开区，这是本候选的编排建议，还不是正式迁移决定。</p>
+    <p id="G82GdJ-P">这版讲法是否更接近你想要的？<ask id="sample-reading-20261105" recommend="continue"><option value="continue">接近，沿这条讲解主线继续展开机制</option><option value="revise">方向接近，但这段还需要修改，请看我的评论</option><option value="rethink">仍不对，先重新讨论讲法而不是继续扩写</option></ask></p>
+    <details id="L0P1V8lH" summary="依据与验证记录（不是样稿正文）" open="false">
+      <p>参照：已下载 Tony Bai《Go语言第一课》第 28 讲，精读其提取原文 work/text/TB28.txt 的 p3、p5、p8；接口声明、参数名、方法集合覆盖与隐式实现分别据此核对。通知案例沿用现稿，不冒充下载教程原例。静态与动态类型的区分参考 TB29 的机制清单，本轮不展开 itab 或比较 Java/Go 性能。</p>
+      <p>样稿主程序已实际运行，得到上面的两行输出；签名不匹配反例已实际编译，得到 have Send(string) error / want Send(string) 的错误。这里只校准阅读体验，尚未走新的条目双审，未修改 handbook、docs 镜像或台账。</p>
+    </details>
+    <h2 id="xZmUmiNl">第 1 轮记录（已提交：先校准讲法）</h2>
+    <p id="c_QMH7O2"><b>我的推荐：</b>先看 04 章“接口与多态”的一段连续讲解。用一个完整场景连接代码、结果、原因与机制，保留知识深度；你只需指出哪里读不下去、哪里跳步、哪里太像机器写的。它最接近你最初点名的问题，也能检验前面补齐事实后，文章是否真的更好读。</p>
+    <table id="3-BZ05ff">
+      <tr>
+        <th>
+          <p>方向</p>
+        </th>
+        <th>
+          <p>接下来展示什么</p>
+        </th>
+        <th>
+          <p>代价与限制</p>
+        </th>
+      </tr>
+      <tr>
+        <td>
+          <p>先校准讲法（推荐）</p>
+        </td>
+        <td>
+          <p>现稿与一版连贯候选，使用相同知识范围</p>
+        </td>
+        <td>
+          <p>能具体判断阅读体验；暂不调整全书目录</p>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <p>先校准全书结构</p>
+        </td>
+        <td>
+          <p>读者路径、章节职责与主线关系</p>
+        </td>
+        <td>
+          <p>先解决体系；暂时不能证明段落好读</p>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <p>先讨论这套推进方式</p>
+        </td>
+        <td>
+          <p>为什么批审完成仍不等于文章合格、怎样由你验收</p>
+        </td>
+        <td>
+          <p>先修协作节奏；本轮不出新样稿</p>
+        </td>
+      </tr>
+    </table>
+    <p id="hVGM1Hb3">这次从哪一层开始？<ask id="restart-focus-20261105" recommend="sample"><option value="sample">先看一段完整讲解，校准讲法</option><option value="structure">先重看全书结构与阅读主线</option><option value="process">先讨论推进与验收方式</option></ask></p>
+    <p id="nBBZIKBT">如果这三个方向都没抓住你的意思，可以直接在评论或聊天里描述你希望重新讨论的那一点。后续问题等你选定方向后再提出。</p>
+    <h2 id="Jj6s661f">此前讨论记录（保留上下文，不作为本轮已批准方案）</h2>
+    <p id="_L6oXXQT">以下保留旧轮次原文，便于追溯你的评论。旧统计、候选样稿与助手建议不代表当前事实或你的批准；特别是“Java 接口调用一律查 vtable”“两者性能同量级”“Go 只剩接口这一条多态路径”等绝对表述，不作为后续技术结论沿用。引用的读者价值也尚未由你明确确认，不能把先前助手的“绝不删”当成你的决定。</p>
+    <h2 id="wnsfoCLh">我对需求的理解</h2>
+    <h3 id="z0F-Yt2O">已知事实（来自仓库与历史会话，已核实）</h3>
+    <ul id="HlnpNgIJ">
+      <li>仓库是 golearn Go 教程：主路径 <code>guide/handbook/</code> 27 节 + 细节库 <code>notes/</code> 35 章（约 1.3 万行），另有 <code>docs/</code> 站点镜像。</li>
+      <li>你 10-27 起对现状语言的判断：&quot;写的一塌糊涂、东一斧头西一榔头、蜻蜓点水、问题没说到点子上&quot;，并点名廖雪峰的 js/python/java 教程和 dbwu/eddycjy 的 Go 文章作为风格参照。</li>
+      <li>当时已形成共识的讲法要领（你在 10-27 会话里认可的）：从会的代码出发 → 一次引入一个新东西 → 每段代码立刻跑 → 用小失败制造&quot;为什么&quot; → 失败后才给术语和原则；对 Java/TS/Python 背景读者建立体系。</li>
+      <li>仓库有批审机器：条目级台账 <code>audit/entry-ledger.jsonl</code> 共 3713 条，当前 <b>已落盘(双审通过) 263</b>、待审 2677、待清点 591、有理由省略 182。改 <code>guide/handbook/</code> 默认走 handbook-batch 双审工作流；直改不允许在台账标&quot;已审&quot;。</li>
+      <li>10-28 你在&quot;方法本质&quot;会话里看过按廖雪峰套路即兴重讲的内容（三个 six、receiver 决策），反馈是&quot;大体满意、深入性认可&quot;；那份内容没落盘，只是会话演示。</li>
+    </ul>
+    <h3 id="v-YWJiWi">我的猜测（标了 ⚠ 的是我替你补的，需要你确认或纠正）</h3>
+    <ul id="cEi65Gyq">
+      <li>⚠ &quot;语言风格&quot;指叙事节奏与口语化程度（问题先行、小失败推进、比喻、第二人称&quot;你&quot;），不是指排版或术语翻译。<b>已被 Round 1 部分推翻：风格之外还必须包含&quot;提纲挈领的机制分析&quot;（见 Settled S5）。</b></li>
+      <li>⚠ 这次重写主要动 <code>guide/handbook/</code>；<code>notes/</code> 保持细节库定位，暂不在范围内。</li>
+      <li>⚠ 重写仍要走批审机器（双审 + 台账回填），你不会为了风格放弃质量门禁。</li>
+    </ul>
+    <h3 id="L9RABK97">待确认</h3>
+    <ul id="jGXw2oYw">
+      <li>重写对象、验收标准、批审机器是否保留、节奏与范围——见 Round 1。</li>
+    </ul>
+    <h2 id="tYu8usrP">已经确定的决定</h2>
+    <ul id="cZXFlIzs">
+      <li><b>theirs</b> 风格基准：廖雪峰式教学节奏（问题先行、逐步演进、小失败、术语后置），参照 dbwu/eddycjy 的语言口语度。→ 来自 10-27 会话。</li>
+      <li><b>theirs</b> 读者画像不变：有 Java/TS/Python 背景的后端工程师，要建立 Go 体系而非查规则。→ 来自 skill 定义与你 10-27 反馈。</li>
+      <li><b>theirs</b> 完成判定不变：只有双审落盘（runId + 回执）算改完。→ 来自 skill 与 CROSS-MACHINE 纪律。</li>
+      <li><b>mine</b> 本澄清过程用 document artifact 承载，视觉对比用 artboard 承载；本文档收敛后整理成完整设计方案。</li>
+      <li><b>theirs</b> S1 · 重写对象：go-tutorial-writing skill 管辖的教程与手册（handbook 全 27 节为主线，notes 不在本次范围；docs 镜像按仓库规则同步）。→ 你对 Q1 的回答。</li>
+      <li><b>theirs</b> S2 · 验收基准：完整设计方案以&quot;目录/索引能一眼看出体系&quot; + &quot;机制讲解到实现层&quot;为双重标准，读者测试按 skill 的完整性规则执行。→ 你对 Q1 的回答。</li>
+      <li><b>theirs</b> S3 · 风格档位：B 档（廖雪峰节奏）但修两处——不讲&quot;先让问题撞墙&quot;式的悬念修辞；机制对照要提纲挈领、成体系，不做零碎点缀。→ 你对 Q2/Q3 的回答。</li>
+      <li><b>theirs</b> S4 · 试产章：04-interfaces（Q4 无人反对，按推荐）。→ 推荐生效。</li>
+      <li><b>theirs</b> S5 · 新增硬要求：面向 Java 背景，接口与多态一节必须详细对比 Java 与 Go 的多态实现机制（显式 implements + 单一 vtable vs 隐式方法集合 + itab），从 Java 工程师视角组织。→ 你 Round 1 反馈原文。</li>
+      <li><b>mine</b> S6 · Q5（已落盘条目重走双审）与 Q6（按篇分组推进）按推荐视为接受，细节在 Round 2 Q10 确认。→ 无人反对。</li>
+    </ul>
+    <h2 id="RBvO1aJZ">Round 1：影响整体方向的问题</h2>
+    <h3 id="bu_DT-BP">Q1（分叉点）重写对象和验收基准是什么？</h3>
+    <p id="JRqQdECT"><b>问题：</b>&quot;用 Ryugi 风格重写澄清文档&quot;的对象和&quot;改好了&quot;的标准是什么？</p>
+    <p id="iBbrjq7b"><b>我的推荐：</b>对象 = <code>guide/handbook/</code> 全部 27 节（notes/ 不动）；验收 = 读者测试（只读新文能答出：为什么需要此机制、例子发生了什么、何时用、边界在哪），批审机器照旧作为落盘门禁。</p>
+    <p id="a8CecEhZ"><b>理由：</b>27 节是读者主路径；notes 是回查库，风格改造收益低、破坏&quot;可引用细节&quot;的风险高。验收若只看&quot;读起来像不像廖雪峰&quot;，审稿 agent 无法执行；读者测试可进 handbook-learner 审稿角色，机器能跑。台账 263/3713 已落盘，风格重写和已落盘条目如何兼容（重写=新一轮批次）是本问题的直接推论，等你答复后进 Round 2。</p>
+    <ul id="BBr--PQA" type="check">
+      <li checked="true">对象含 notes/</li>
+      <li checked="false">验收只看风格观感，不设读者测试</li>
+    </ul>
+    <h3 id="PXtu0ATC">Q2 风格基准选哪一档？</h3>
+    <p id="6HUBIy_2"><b>问题：</b>现状（A）和廖雪峰节奏（B）之间选哪个作为全书基准？</p>
+    <p id="F1CpdEYz"><b>我的推荐：</b>B，但口语浓度取&quot;中档&quot;——问题先行和小失败保留，表情符号、网络梗、&quot;💀&quot;这类元素不用；第二人称&quot;你&quot;可以用，但不写成段子。</p>
+    <p id="70e6I6QE"><b>理由：</b>你点名参照的廖雪峰文章本身没有表情包，靠的是节奏而不是卖萌；dbwu/eddycjy 的口语度也在中档。artboard 上两块板子就是 A/B 的对照，请在那里选。如果&quot;中档&quot;不对，直接在评论里说&quot;再放一点&quot;或&quot;再收一点&quot;。</p>
+    <h3 id="Ap4i26rY">Q3 比喻和跨语言对照的密度？</h3>
+    <p id="7mcf2CnF"><b>问题：</b>Java/TS/Python 类比（如&quot;接口 = 带静态检查的鸭子类型&quot;）每节出现多少次合适？</p>
+    <p id="LPfzcgME"><b>我的推荐：</b>每个新概念第一次出现时给一次对照（单独小段落，说明类比边界），之后纯 Go 语境推进；每节类比总量 2-4 处。</p>
+    <p id="S_295WQK"><b>理由：</b>10-27 你特别肯定了&quot;从其他语言背景建立体系&quot;的价值；但 04 章现状已经示范了类比边界写法（&quot;这种说法是帮助理解的类比，不意味着……&quot;），逐条对照会淹没主线，回归 dbwu 式密集对照反而打断推导。</p>
+    <h4 id="5oWejn_9">Q4 先拿哪一节试产？</h4>
+    <p id="4CbblYFj"><b>问题：</b>全量重写前，先用哪一节跑通&quot;新风格 + 批审&quot;的完整闭环？</p>
+    <p id="Sapmcxxy"><b>我的推荐：</b>04-interfaces。它是你最初点名&quot;写的一塌糊涂&quot;的章节，已有 8 条已落盘条目可对照新旧效果，且 10-28 会话已有一份即兴重讲素材可参考。</p>
+    <p id="I7I0G_SY"><b>理由：</b>试产章选你最有意见的，校准成本最低；跑通后按它定 PROMPT 模板，再批量推其余章节。</p>
+    <h4 id="HwilnT3Y">Q5 已落盘的 263 条怎么处理？</h4>
+    <p id="70l376ch"><b>问题：</b>已经双审落盘的条目（多在 18/11/13/03 章），风格重写时要不要重过一遍？</p>
+    <p id="ucb8V0uS"><b>我的推荐：</b>重写触碰到的章节，把该章已落盘条目并入新一轮批次重走双审（处理状态记&quot;风格重写&quot;）；没触碰的章节不动。台账进度不回退，旧 runId 保留。</p>
+    <p id="m-FHfBun"><b>理由：</b>风格重写会改写这些条目的承载句，after 变了双审就失效，按 skill 的 before/after 哈希规则本来也过不了 apply；主动声明比事后被发现好。</p>
+    <h4 id="19pUnN1k">Q6 交付节奏？</h4>
+    <p id="HEOJE8GR"><b>问题：</b>试产章通过后，其余章节按什么节奏推进？</p>
+    <p id="G1LZFFUe"><b>我的推荐：</b>按 README 的篇分组推进：心智模型(01-03) → 核心范式(04-09) → 服务工程(10-16) → 规模与演进(17-21) → 交付与运行(22-23) → 项目线(24-25)。每完成一组提交并汇报，允许你随时插队调整优先级。</p>
+    <p id="j93fnXyH"><b>理由：</b>前置依赖顺着读者路径（26 节路线也是这个顺序）；按组提交让 docs 镜像和时长重算有稳定节奏。</p>
+    <details id="TAR0U5ah" summary="本轮不问的问题（依赖 Round 1 答案，已全部进入 Round 2）" open="false">
+      <p>试产章的新 PROMPT 模板怎么写、口语浓度如何在审稿 issue 里量化、docs 镜像同步时机、26/27 两节路线与速查是否豁免重写——已并入 Round 2 Q10 与收敛阶段。</p>
+    </details>
+    <h2 id="iNCptLAk">Round 2：风格定稿与机制讲解的落法</h2>
+    <h3 id="yFGkaHWs">先看两个重录样张（按 S3/S5 新基准）</h3>
+    <p id="IFEpgsgX">Round 1 的 B 样张被你否了两点：悬念修辞（&quot;撞墙&quot;）和缺机制分析。下面是修正后的同段内容——<b>先给提纲，再进细节</b>：</p>
+    <h4 id="v-oW3XKF">样张 C · 提纲挈领的开法（替换样张 B 的开头）</h4>
+    <p id="nOimLETZ">假如你是从 Java 过来的，这一节的地图先画给你：</p>
+    <table id="wzgQc8vx">
+      <tr>
+        <th>
+          <p>Java 里你熟的</p>
+        </th>
+        <th>
+          <p>Go 里对应什么</p>
+        </th>
+        <th>
+          <p>关键差异</p>
+        </th>
+      </tr>
+      <tr>
+        <td>
+          <p><code>interface</code> + <code>implements</code></p>
+        </td>
+        <td>
+          <p><code>type X interface{...}</code>，无需 implements</p>
+        </td>
+        <td>
+          <p>关系在使用点成立，方法集合决定</p>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <p>继承 + override 的动态绑定</p>
+        </td>
+        <td>
+          <p>接口变量 + 方法集合</p>
+        </td>
+        <td>
+          <p>没有继承树；嵌入不是继承（见样张 D 结论）</p>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <p>编译期 vtable + <code>invokeinterface</code></p>
+        </td>
+        <td>
+          <p>运行时 itab（接口×类型组合表）</p>
+        </td>
+        <td>
+          <p>同样是查表间接调用，成本同量级</p>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <p>多态 = 父类引用指向子类对象</p>
+        </td>
+        <td>
+          <p>多态 = 接口变量装住具体值</p>
+        </td>
+        <td>
+          <p>Go 只有多态这一半，没有&quot;层次&quot;那一半</p>
+        </td>
+      </tr>
+    </table>
+    <p id="ans_read"><b>你的评论（已采纳，样张 C 判不合格）：</b>&quot;这种表述和编排并不适合人类阅读理解和学习&quot;——同意，表格把连续的因果拆碎了。下面是同一信息的<b>叙事重写</b>，一行表格都不要：</p>
+    <h4 id="sampleC2h">样张 C2 · 同一内容的叙事重写（候选，请评论）</h4>
+    <p id="sampleC2p1">你已经会用 Java 的多态：声明一个 <code>Sender</code> 接口，让 SMS、Email 各自 <code>implements</code>，然后拿父类引用指向子类对象。现在把这套搬进 Go——你会发现 <code>implements</code> 这个关键字不存在了，但多态还在。这一节就讲两件事：<b>关系怎么建立</b>，和<b>调用怎么发生</b>。</p>
+    <p id="sampleC2p2">先看关系。Go 不要求类型声明&quot;我实现了谁&quot;；只要你的方法集合里凑齐了接口要求的方法，赋值的那一刻关系就成立了。这带来一个 Java 给不了的自由：你可以给标准库的类型配一个自己定义的接口——因为不需要改对方的源码。</p>
+    <p id="sampleC2p3">再看调用。写下一行 <code>sender.Send(&quot;hi&quot;)</code> 时，编译器不知道 <code>sender</code> 里装的是谁，它生成的指令是：查这个组合的 itab，取函数地址，间接跳转。Java 的 <code>invokeinterface</code> 做的也是这件事——所以性能不用担心，两者同量级。</p>
+    <p id="sampleC2p4">那 Java 的继承呢？Go 把这条路堵死了：没有 extends，嵌入只是编译期把内层方法&quot;抄写&quot;到外层——内层方法被调用时，接收者永远是内层自己，不存在虚方法。想要&quot;调用方不改一行代码、行为随实现变&quot;，Go 只剩接口这一条路。这也是为什么 Go 社区说：复用靠嵌入，多态靠接口。</p>
+    <p id="sampleC2note">（这就是&quot;提纲挈领&quot;的落法：第一段给全节地图——&quot;讲两件事&quot;，后文每段只展开一件。读完这段你已经知道整节要去哪。）</p>
+    <dynamic id="Z26UE1Ey" url="assets/java-go-polymorphism.html" initial-height="320" />
+    <p id="FraeeMfp">（可交互：上面的机制对照表就是正文中要落的形态之一——如果这类表比段落更适合你，正文的机制节会按&quot;表 + 逐行代码对照&quot;组织。）</p>
+    <h4 id="tth6Fy6P">样张 D · 机制讲透的样子（接口调用在运行时怎么发生）</h4>
+    <p id="DaRgk_O6">同一行 <code>sender.Send(&quot;欢迎注册&quot;)</code>，编译器生成的是间接调用：<code>sender</code> 不只是&quot;一个值&quot;，它是一个两字结构 <code>(类型信息, 数据指针)</code>。类型信息里存着这个&quot;接口 × 具体类型&quot;组合的方法地址表 itab；调用时取 <code>itab.fun[0]</code> 间接跳转。Java 的 <code>invokeinterface</code> 做的是同一类事——查 vtable 槽位再调用。所以两种多态的<b>运行时成本同量级</b>，真正的差异在<b>关系怎么建立</b>：</p>
+    <dynamic id="2iWGqp72" url="assets/vtable-itab.html" initial-height="300" />
+    <p id="mw_22075">推论（Java 视角）：Go 没有&quot;继承树上的多态&quot;，只有&quot;接口上的多态&quot;。嵌入（struct 嵌入）是编译期转发糖——<code>c.Hello()</code> 改写成 <code>c.Base.Hello()</code>，内层不知道外层存在，没有虚方法、没有 override。想要&quot;改一行代码，所有调用点行为变化&quot;，Go 里只有接口赋值这一条路。</p>
+    <p id="YqNZbmv6">〔TB29 p5-7〕〔TB28 p2-8〕</p>
+    <p id="ans_cite"><b>你的评论（引注保留但降权）：</b>&quot;我在想这个引注到底有用吗，我大概率是不会回到 TBXX 的相关文档去看的&quot;——查了它们的工作方式：引注主要不是给读者看的，是给<b>审稿 agent</b> 用的——双审时逐条回对原文防杜撰（skill 里 15% 的审稿 issue 是杜撰/归属错误；全书 2978 个标签可被 <code>scripts/check-cite-pages.py</code> 机器校验，当前全过）。所以结论：正文保留引注但降权——挪到行尾小灰字（如上行），读者扫不到就不打扰；绝不删，删了双审链条就断了。</p>
+    <h3 id="xUHbC3Qe">Q7 机制对照的深度基线？</h3>
+    <p id="BS1Gp-JU"><b>问题：</b>&quot;详细分析实现机制&quot;按哪个深度写进验收标准？</p>
+    <p id="IvHFkdYk"><b>我的推荐：</b>三档中的&quot;机制层&quot;——每个核心机制讲到&quot;运行时/编译器实际做什么&quot;（如 itab 结构、vtable 槽位、方法集合判定），配源码级引注；不展开到汇编/内存布局（那是 notes/ 和 TB29 深挖材料的职责，正文给链接）。</p>
+    <p id="LApmLHgK"><b>理由：</b>样张 D 就是机制层的密度——讲到 itab.fun 间接调用就停，不贴 runtime 汇编。04 章&quot;想深入&quot;里已有 TB29 装箱/itab 细节作为第二档，正文不必重复。提纲挈领≠讲到底层，而是&quot;地图 + 每站机制一句话 + 需要深入时的路标&quot;。</p>
+    <h3 id="KDQixfNL">Q8 修辞尺度怎么收？</h3>
+    <p id="WIrsAyv9"><b>问题：</b>样张 B 里被你点名的&quot;先让问题撞墙&quot;式悬念修辞，边界划在哪？</p>
+    <p id="3IDa_88V"><b>我的推荐：</b>禁三类——悬念标题（&quot;先撞墙再解释&quot;）、卖萌元素（💀/梗图/惊叹号轰炸）、故意隐瞒答案的倒计时式写法。保三类——问题先行的引入（&quot;如果要换成短信呢？&quot;）、每个例子马上给输出、失败案例直接展示并解释。标题用机制命名（如&quot;接口调用在运行时怎么发生&quot;），不用悬念。</p>
+    <p id="OSCc5Urn"><b>理由：</b>你反对的是&quot;制造紧张感&quot;而非&quot;制造问题意识&quot;——廖雪峰原文的问题感也来自业务推进而非标题党。样张 C/D 的标题就是按此收的。</p>
+    <h3 id="R7rhS6HX">Q9 提纲挈领怎么落成硬结构？</h3>
+    <p id="pIdknj_-"><b>问题：</b>&quot;没有提纲挈领&quot;怎么变成每节可检查的硬要求？</p>
+    <p id="5V75Lt5B"><b>我的推荐：</b>每节开头强制三件套：① 一张机制对照表（本节新概念 × 你已会的 Java/TS/Python 概念 × 差异，≤6 行）；② 本节问题清单（读完能答什么）；③ 与前后节的依赖一句话。审稿 issue 类别里加&quot;缺提纲/缺机制对照&quot;专项。</p>
+    <p id="6ZzrqU9c"><b>理由：</b>&quot;提纲挈领&quot;要能被 fidelity 审稿 agent 检查就必须落成清单项；三件套正好是 26 节路线图和 27 节决策表的节级版，全书结构不会碎。</p>
+    <p id="ans_Q9"><b>你的评论（已采纳）：</b>&quot;并不一定非要按照这个范式，还是得看具体场景&quot;——收到。三件套降级为<b>缺省模板</b>而非硬性范式：默认按三件套写；当某节是纯操作/速查型内容（如 26 节路线、27 节决策表）或机制简单到一眼见底时，审稿人可跳过对照表，但要在审稿记录里写一句跳过理由。这样既保留可检查性，又不逼着每节摆表格。</p>
+    <h3 id="Lz96yvzF">Q10 节奏与批审细节（Q5/Q6 的落地确认）</h3>
+    <p id="2-_LBx5H"><b>问题：</b>已落盘条目重走双审 + 按篇分组推进，两个细节确认：a) 重审批次的 before 取当前 handbook 文本（而非原始 digest），双审仍跑全量；b) 26/27（路线/决策）两节豁免重写，只随各节时长重算更新。</p>
+    <p id="T9TDrK6C"><b>我的推荐：</b>两者都按此执行。</p>
+    <p id="ans_Q10a"><b>你的评论（已采纳，改变了范围）：</b>&quot;范围涉及到仓库内的所有文档，记得要参考我之前下载过的别人的教程文档&quot;——两点都记入：</p>
+    <ul id="ans_Q10list">
+      <li><b>范围</b>：不止 <code>guide/handbook/</code>，仓库内所有面向读者的文档都在重写对象内（<code>notes/</code> 35 章也排进来；<code>docs/</code> 镜像与 README 类导航页按仓库规则同步）。推进顺序仍是 handbook 优先，notes 按章补入批次。</li>
+      <li><b>参照语料</b>：重写时参考 <code>downloads/</code> 里的已购教程——核实过的有两类：Tony Bai《Go语言第一课》讲义 PDF（10 讲起，变量声明/项目布局/构建模式等）与 krm-backend 周课文档（Gin/GORM/K8s/可观测性等 21+ 讲）。这些进 PROMPT 的风格参照列表，与廖雪峰、dbwu/eddycjy 并列；引用事实仍以本仓库 <code>work/text/</code> 原文为准。</li>
+    </ul>
+    <p id="4dJkHh-m2"><b>理由：</b>台账 3713 条本来就覆盖 W/TB/C/my 全部语料单元（W04 178 条、W10 136 条…），把 notes 排进范围与台账结构天然对齐；下载教程是成品书稿，比 raw 页面更能示范&quot;成体系的讲法&quot;。</p>
+    <details id="hnZsYAMg" summary="本轮不问的问题（依赖 Round 2 答案）" open="false">
+      <p>试产章 04 的新 PROMPT 模板、docs 镜像同步时机、台账&quot;风格重写&quot;状态的字段格式——等 Q7-Q10 定了直接执行，不再开新一轮问。</p>
+    </details>
   </details>
 </doc>
 
