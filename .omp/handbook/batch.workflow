@@ -13,9 +13,9 @@ if (!/^guide\/handbook\/(?:0[1-9]|1\d|2[0-7])-[a-z0-9-]+\.md$/.test(target || ''
   throw new Error('target 必须是 guide/handbook/01-27 的一个章节')
 if (!/^[a-f0-9]{64}$/.test(revision || ''))
   throw new Error('revision 必须是该文件当前内容的 SHA-256')
-if (!requiredIds.length || requiredIds.length > 8 || new Set(requiredIds).size !== requiredIds.length
+if (!requiredIds.length || requiredIds.length > 16 || new Set(requiredIds).size !== requiredIds.length
   || requiredIds.some(id => !/^[A-Za-z0-9_-]+#[A-Za-z0-9_-]+$/.test(id)))
-  throw new Error('items 必须是 1-8 个不重复的 单元#条目 编号')
+  throw new Error('items 必须是 1-16 个不重复的 单元#条目 编号')
 if (typeof task !== 'string' || !task.trim())
   throw new Error('请说明本批业务场景与要补清的问题')
 

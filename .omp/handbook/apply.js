@@ -24,7 +24,7 @@ export function validateRun(run, text, expectedScript) {
   assert.equal(r.revision, run.args?.revision, '返回的版本与原始任务不一致')
   assert.match(r.target, /^guide\/handbook\/(?:0[1-9]|1\d|2[0-7])-[a-z0-9-]+\.md$/)
   const ids = Array.isArray(run.args.items) ? run.args.items : String(run.args.items).split(',').filter(Boolean)
-  assert(ids.length > 0 && ids.length <= 8 && new Set(ids).size === ids.length, '任务清单非法')
+  assert(ids.length > 0 && ids.length <= 16 && new Set(ids).size === ids.length, '任务清单非法')
   const exact = entries => Array.isArray(entries) && entries.length === ids.length
     && new Set(entries).size === entries.length && ids.every(id => entries.includes(id))
   assert(exact(r.requiredIds), '必审条目被删减')
