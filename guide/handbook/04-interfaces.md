@@ -1014,89 +1014,331 @@ func main() {
 
 所以第三节开头的问题现在有了完整答案：`Save(&buf, ...)` 传 `&buf`，是因为接口赋值检查的是赋入类型的方法集合，编译器不会在赋值时自动把值变成指针。
 
-## 四、接口值和 nil
+## 四、接口值和 nil：动静兼备的接口，内部如何表示
 
-接口变量可以先后保存不同的具体类型。为了理解它的行为，可以把非 nil 接口值想成一对信息：**动态类型和动态值**。这个模型描述语言语义，不要求依赖某个 Go 版本的运行时内存布局。
+上一节的 `Sender`、`error` 都是接口类型，接口变量可以先后保存不同具体类型的值。Go 是一门静态语言，接口却是这门静态语言中唯一“动静兼备”的语法特性：静态的一面在编译期，动态的一面在运行时。Russ Cox 说过：“如果要从 Go 语言中挑选出一个特性放入其他语言，我会选择接口。”〔TB29 p1〕接口与并发原语，正是作者最喜欢的两类 Go 语法元素，这个特性的地位可见一斑。〔TB29 p1〕也正因为它动静兼备，初学者常在接口上遇到困惑；要解开困惑，必须深入到运行时层面，看接口类型的运行时表示。〔TB29 p1〕
 
-下面看一个实际会遇到的问题：函数声明返回 `error`，没有错误时却返回了一个 nil 指针。
+先看静态的一面。接口变量有静态类型：`var err error` 中 `err` 的静态类型是 `error`。编译器在编译阶段对所有接口类型变量的赋值操作做类型检查，检查右值的类型是否实现了该接口方法集合中的所有方法，不满足就报错：
 
 ```go
-package main
+var err error = 1
+```
 
-import "fmt"
+原课示例的报错是：cannot use 1 (type int) as type error in assignment，即把 `int` 赋给 `error` 接口类型变量时编译失败。〔TB29 p2〕
 
-type MyErr struct{}
+再看动态的一面。接口变量在运行时还存储了右值的真实类型信息，称为动态类型：
 
-func (*MyErr) Error() string { return "my err" }
+```go
+var err error
+err = errors.New("error1")
+fmt.Printf("%T\n", err) // *errors.errorString
+```
 
-func mayFail(bad bool) error {
-	var p *MyErr
-	if bad {
-		p = &MyErr{}
+`err` 的静态类型始终是 `error`，`%T` 打印的却是它运行时保存的动态类型 `*errors.errorString`。〔TB29 p2〕运行时接口变量可以被赋值为不同动态类型的变量，每次赋值后其中存储的动态类型信息都会变化。〔TB29 p2〕
+
+关于“类型靠行为决定”的思想，第二节“这和鸭子类型有什么关系？”已经讲过：Duck/Dog/Bird 没有共同的父类型，只凭各自实现了 `Quack` 就都能赋给 `QuackableAnimal`。这里补一层运行时的视角：某类型能否作为某接口类型的右值，不由它的“基因”（如 C++ 中的父类）决定，而由它表现出的行为（拥有的方法）决定；每次赋值后接口变量里存的动态类型不同，`a.Quack()` 的执行结果就由这份动态类型信息决定。〔TB29 p2-4〕与动态语言不同，编译器在编译期就能捕捉把 `int` 变量传给 `QuackableAnimal` 这类明显错误，决不会让错误遗漏到运行时才被发现：Python 式的灵活与编译期安全并存。〔TB29 p2-4〕
+
+有了这些铺垫，本节开头的问题可以回答得更透。看一个改编自 Go FAQ 的例子：
+
+```go
+type MyError struct {
+	error
+}
+
+var ErrBad = MyError{
+	error: errors.New("bad things happened"),
+}
+
+func bad() bool {
+	return false
+}
+
+func returnsError() error {
+	var p *MyError = nil
+	if bad() {
+		p = &ErrBad
 	}
 	return p
 }
 
-func mayFailOK(bad bool) error {
-	if bad {
-		return &MyErr{}
-	}
-	return nil
-}
-
 func main() {
-	err := mayFail(false)
-	fmt.Println(err == nil)
-	fmt.Printf("%T %v\n", err, err == (*MyErr)(nil))
-	fmt.Println(mayFailOK(false) == nil)
+	if err := returnsError(); err != nil {
+		fmt.Printf("error occur: %+v\n", err)
+		return
+	}
+	fmt.Println("ok")
 }
 ```
 
-输出：
+初学者预期 `bad()` 恒为 false，`p` 保持为 nil，`main` 输出 ok 后退出；真实输出却是：
 
 ```text
-false
-*main.MyErr true
-true
+error occur: <nil>
 ```
 
-`p` 的值确实是 nil，但 `return p` 把它赋给了 `error` 接口。返回的接口值具有动态类型 `*MyErr`，动态值则是 nil 指针；接口本身因此不是 nil。`err == (*MyErr)(nil)` 为 true，是因为两边转换成接口后动态类型相同，动态指针值也相同。
+程序进入了错误处理分支。〔TB29 p4-5〕为什么 `err != nil` 会成立？要解释这个问题，必须换一个视角：接口值在运行时如何表示。先记住结论：返回的 `error` 接口变量 `err` 的数据指针虽为空，但类型信息 `iface.tab` 并不为空，而是 `*MyError` 对应的类型信息，因此 `err` 与 nil（内部表示 `(0x0,0x0)`）相比自然不相等。〔TB29 p14〕下面把这个结论拆开讲。
 
-没有错误时直接 `return nil`，返回的才是 nil 接口。不要把一个 nil 的具体指针作为 `error` 返回。〔TB29 p3-5〕
+### 内部表示：eface 与 iface
+
+在运行时，Go 用两个结构体表示接口变量，定义在 `$GOROOT/src/runtime/runtime2.go`：
+
+```go
+// iface 表示拥有方法的非空接口类型变量
+type iface struct {
+	tab  *itab
+	data unsafe.Pointer
+}
+
+// eface 表示没有方法的空接口类型变量
+type eface struct {
+	_type *_type
+	data  unsafe.Pointer
+}
+```
+
+〔TB29 p5-6〕两个结构都有两个指针字段，第二个字段功能相同：指向当前赋给该接口类型变量的动态类型变量的值。〔TB29 p6〕区别在第一个字段。空接口没有方法列表，`eface` 的第一字段直接指向动态类型的类型信息 `_type`；非空接口除了动态类型信息，还要存储接口自身的信息（接口类型信息、方法列表）以及动态类型所实现方法的信息，所以第一字段指向 `itab`。〔TB29 p6〕
+
+这一双表示至今未变。本机 go1.26.4 源码 `$GOROOT/src/runtime/runtime2.go:184-192` 中，`iface{tab *itab; data unsafe.Pointer}` 与 `eface{_type *_type; data unsafe.Pointer}` 的布局与书中完全一致；不过 `itab` 与 `_type` 现在都是别名（`runtime2.go:1129` 的 `type itab = abi.ITab`、`runtime/type.go:25` 的 `type _type = abi.Type`），物理定义移到了 `internal/abi` 包，见后文。
+
+### 动态类型的统一档案：_type
+
+`_type` 定义于 `$GOROOT/src/runtime/type.go`，描述一个类型的元信息：
+
+```go
+type _type struct {
+	size       uintptr // 大小
+	ptrdata    uintptr // 内含指针的内存前缀大小
+	hash       uint32  // 类型哈希
+	tflag      tflag   // 额外的类型信息标志
+	align      uint8   // 该类型变量对齐
+	fieldAlign uint8   // 结构体字段对齐
+	kind       uint8   // 类型种类
+	// function for comparing objects of this type
+	// (ptr to object A, ptr to object B) -> ==?
+	equal func(unsafe.Pointer, unsafe.Pointer) bool  // 比较函数指针
+	gcdata  *byte // GC 类型数据
+	str     nameOff // 类型名字符串的偏移
+	ptrToThis typeOff // 指向该类型的指针的类型信息的偏移
+}
+```
+
+〔TB29 p6〕各字段的职责：`size` 是该类型值的大小；`ptrdata` 是含指针的内存前缀的大小；`hash` 是类型哈希；`tflag` 存放额外的类型信息标志；`align` 与 `fieldAlign` 分别是该类型变量、结构体字段的对齐；`kind` 标记类型种类；`equal` 是比较函数指针，比较两个对象指针是否相等；`gcdata` 存 GC 类型数据，`kind` 设置 `KindGCProg` 位时是 GC program，否则是 ptrmask 位图（见 `runtime/mbitmap.go`）；`str` 与 `ptrToThis` 是偏移量，分别对应类型名字符串与“指向该类型的指针”的类型信息。〔TB29 p6〕
+
+运行时还有一个关键事实：Go 中每种类型，无论内置原生类型还是自定义类型，都有唯一的 `_type` 信息；运行时会为程序内全部类型建立只读的共享 `_type` 信息表。因此，拥有相同动态类型的同类接口变量，其 `_type`/`tab` 信息是相同的。〔TB29 p9〕据此，每个接口变量运行时表示的两部分可以统一记作 `eface(_type, data)` 与 `iface(tab, data)`：虽然第一字段有差别，但 `tab` 与 `_type` 都可统一看作动态类型的类型信息。〔TB29 p9〕
+
+本机 go1.26.4 源码中，`runtime/type.go:25` 声明 `type _type = abi.Type`，物理定义移到了 `$GOROOT/src/internal/abi/type.go:20-45`。字段顺序与语义和书中 Go 1.17 版本一致，但字段名改为导出形式：`Size_`、`PtrBytes`（即书中 `ptrdata`，注释是 "number of (prefix) bytes in the type that can contain pointers"）、`Hash`（注释 "hash of type; avoids computation in hash tables"）、`TFlag`、`Align_`、`FieldAlign_`、`Kind_`、`Equal`、`GCData`、`Str`（类型 `NameOff`）、`PtrToThis`（类型 `TypeOff`）。GCData 的注释还新增了一种按需模式：设置 `TFlagGCMaskOnDemand` 位时 GCData 是 `**byte`，位图按需构建。内存布局与书中描述一致。
+
+### itab：非空接口的“实现档案”
+
+`iface.tab` 指向的 `itab` 定义同样在 `$GOROOT/src/runtime/runtime2.go`：
+
+```go
+type itab struct {
+	inter *interfacetype // 接口类型自身信息
+	_type *_type         // 动态类型信息
+	hash  uint32         // copy of _type.hash; used for type switches
+	_     [4]byte
+	fun   [1]uintptr     // variable sized；fun[0]==0 表示动态类型未实现该接口
+}
+```
+
+〔TB29 p7〕四个关键部分：`inter` 指向 `interfacetype`，存储接口类型自身的信息；`_type` 存储该接口变量的动态类型信息；`hash` 是 `_type.hash` 的副本，用于 type switch 快速分派；`fun` 是动态类型已实现的接口方法的调用地址数组，方法调用直接走这里预存的地址，无需运行时查表，`fun[0]==0` 则表示未实现。〔TB29 p7〕
+
+`interfacetype` 由三部分组成，定义在 `$GOROOT/src/runtime/type.go`：
+
+```go
+type interfacetype struct {
+	typ     _type   // 类型信息
+	pkgpath name    // 包路径名
+	mhdr    []imethod // 接口方法集合切片
+}
+```
+
+〔TB29 p7〕本机 go1.26.4 源码中，`runtime2.go:1129` 声明 `type itab = abi.ITab`，物理定义在 `$GOROOT/src/internal/abi/iface.go:14-19`：`ITab{Inter *InterfaceType; Type *Type; Hash uint32; Fun [1]uintptr}`。显式的 `_ [4]byte` 填充字段消失了，`Hash` 之后的 4 字节对齐填充改由 `Fun` 的 8 字节对齐隐式保证，内存布局不变；注释保留 `fun[0]==0 means Type does not implement Inter` 的语义，`Hash` 的注释是 "copy of Type.Hash. Used for type switches."。`interfacetype` 同样是别名：`runtime/type.go:403` 声明 `type interfacetype = abi.InterfaceType`，定义在 `internal/abi/type.go:447-451`：`{Type; PkgPath Name; Methods []Imethod}`，书中 `mhdr` 改名为 `Methods`。
+
+### 两幅“指向图”
+
+看两个例子，把上面的结构画成指向图。第一个是空接口：
+
+```go
+type T struct {
+	n int
+	s string
+}
+
+var ei interface{} = t
+```
+
+运行时用 `eface` 表示：`_type` 字段指向动态类型 T 的类型信息，`data` 指向一个 T 类型的实例值。〔TB29 p7-8〕第二个例子给 T 增加两个方法，并定义一个含这两个方法的接口：
+
+```go
+func (t T) M1() {}
+func (t T) M2() {}
+
+type NonEmptyInterface interface {
+	M1()
+	M2()
+}
+
+var i NonEmptyInterface = t
+```
+
+这次运行时用 `iface` 表示，结构比 `eface` 复杂：`tab` 指向的 `itab` 里同时存着接口自身的信息（`interfacetype`：类型信息、包路径、方法集合）、动态类型的类型信息（`_type`）、哈希，以及 `fun` 数组中动态类型所实现方法的地址；`data` 依旧指向 T 的实例值。〔TB29 p8-9〕
+
+统一到记法上：每个接口变量的运行时表示由两部分组成，即 `eface(_type, data)` 与 `iface(tab, data)`。`data` 指向一块动态分配的内存空间，存储赋给接口变量的动态类型变量的值；未显式初始化的接口变量值为 nil，即 `_type`/`tab` 和 `data` 都为 nil。〔TB29 p9〕
+
+理解了内部表示，回头看 `returnsError` 陷阱：`p` 是值为 nil 的 `*MyError` 指针，装入 `error` 接口后得到一个 `iface`，`tab` 指向 `*MyError` 的类型信息（非空），`data` 为 nil。所以 `err` 不是“两个字段都为空”的 nil 接口，与 nil 比较自然为 false。修复办法也不止一种：让 `returnsError` 直接返回 nil 接口，或把 `p` 的类型改为 `error`，删除 `p`，按需 `return &ErrBad` 或 nil。不要把一个 nil 的具体类型指针装进接口再返回。
 
 ## 五、接口值的比较和成本
 
-前面用动态类型和动态值解释了 `nil`。同一个模型也能帮助我们理解接口值之间的比较：两个非 nil 接口值要相等，动态类型必须相同，动态值也必须相等。动态类型不同，即使数值看起来一样，结果也不相等。〔TB29 p9-10〕
+内部表示清楚了，接口值的等值比较规则就顺理成章：两个接口值相等，要求类型信息一致，且 data 所指的数据内容一致。下面按原课的顺序过一遍四种等值比较情形。原课输出中的地址是它运行环境的具体值，在你机器上会不同；要看的是相同与不同的关系。〔TB29 p10-15〕顺带说明输出格式：运行时 `println` 一个接口变量，会打印它内部表示的两个字段。以本机 go1.26.4 源码为例，`$GOROOT/src/runtime/print.go:266-272` 中 `printeface` 打印 `(_type, data)`，`printiface` 打印 `(tab, data)`，原课示例输出 `(0x0,0x0)` 这样的二元组正来自这里。
+
+**第一种：nil 接口变量。**未赋初值的接口类型变量值为 nil。〔TB29 p10-11〕
 
 ```go
-package main
+var i interface{} // 空接口类型
+var err error     // 非空接口类型
 
-import "fmt"
+println(i)
+println(err)
+println("i = nil:", i == nil)
+println("err = nil:", err == nil)
+println("i = err:", i == err)
+```
 
-func main() {
-	var a, b any = int(17), int64(17)
-	fmt.Println(a == b)
-	fmt.Printf("%T %T\n", a, b)
+原课运行输出：〔TB29 p11〕
 
-	var c any = int(17)
-	fmt.Println(a == c)
+```text
+(0x0,0x0)
+(0x0,0x0)
+i = nil: true
+err = nil: true
+i = err: true
+```
 
-	var err error
-	fmt.Printf("%T\n", err)
-	err = fmt.Errorf("x")
-	fmt.Printf("%T\n", err)
+无论是空接口还是非空接口变量，值为 nil 时内部表示均为 `(0x0,0x0)`：类型信息与数据信息均为空。所以 `i` 与 `err` 相等，也都等于字面量 nil；nil 状态下空接口与非空接口的内部表示没有区别。
+
+**第二种：空接口类型变量之间。**〔TB29 p11-12〕
+
+```go
+func printEmptyInterface() {
+	var eif1 interface{} // 空接口类型
+	var eif2 interface{} // 空接口类型
+	var n, m int = 17, 18
+	eif1 = n
+	eif2 = m
+	println("eif1:", eif1)
+	println("eif2:", eif2)
+	println("eif1 = eif2:", eif1 == eif2) // false
+	eif2 = 17
+	println("eif1:", eif1)
+	println("eif2:", eif2)
+	println("eif1 = eif2:", eif1 == eif2) // true
+	eif2 = int64(17)
+	println("eif1:", eif1)
+	println("eif2:", eif2)
+	println("eif1 = eif2:", eif1 == eif2) // false
 }
 ```
 
+原课运行输出：〔TB29 p12〕
+
 ```text
-false
-int int64
-true
-<nil>
-*errors.errorString
+eif1: (0x10ac580,0xc00007ef48)
+eif2: (0x10ac580,0xc00007ef40)
+eif1 = eif2: false
+eif1: (0x10ac580,0xc00007ef48)
+eif2: (0x10ac580,0x10eb3d0)
+eif1 = eif2: true
+eif1: (0x10ac580,0xc00007ef48)
+eif2: (0x10ac640,0x10eb3d8)
+eif1 = eif2: false
 ```
 
-没有赋值的 `error` 是 nil 接口，`%T` 打印 `<nil>`。如果两个接口的动态类型相同，但该类型不可比较（例如 slice），比较时会 panic；因此不能把任意接口值都当成可安全比较的值。
+三步分析：
+
+- 第一步：`eif1` 与 `eif2` 分别装入 int 的 17 与 18。两者的 `_type` 相同（都是 int 的类型信息 `0x10ac580`），但 `data` 所指内存块中存储的值不同（17 与 18），不相等。
+- 第二步：`eif2` 重新装入 17。`_type` 仍相同，`data` 所指的值也相同（都是 17），相等。注意这一轮两个 `data` 指针并不相同（`0xc00007ef48` 与 `0x10eb3d0`），说明比较的是 `data` 所指的数据值，不是 `data` 指针本身的值。
+- 第三步：`eif2` 装入 int64 类型的 17。动态类型变了（`_type` 变成 int64 的 `0x10ac640`），即便 `data` 所指的值仍是 17，两者也不相等。
+
+结论：对空接口类型变量，只有 `_type` 与 `data` 所指数据内容都一致时才能划等号；另外 Go 创建 eface 时一般会为 data 重新分配内存空间，把动态类型变量的值复制进去，所以多数情况下看到的 data 指针值都不同。〔TB29 p12〕
+
+**第三种：非空接口类型变量之间。**〔TB29 p13-14〕
+
+```go
+type T int
+
+func (t T) Error() string {
+	return "bad error"
+}
+
+func printNonEmptyInterface() {
+	var err1 error // 非空接口类型
+	var err2 error // 非空接口类型
+	err1 = (*T)(nil)
+	println("err1:", err1)
+	println("err1 = nil:", err1 == nil)
+	err1 = T(5)
+	err2 = T(6)
+	println("err1:", err1)
+	println("err2:", err2)
+	println("err1 = err2:", err1 == err2)
+	err2 = fmt.Errorf("%d\n", 5)
+	println("err1:", err1)
+	println("err2:", err2)
+	println("err1 = err2:", err1 == err2)
+}
+```
+
+原课运行输出：〔TB29 p13〕
+
+```text
+err1: (0x10ed120,0x0)
+err1 = nil: false
+err1: (0x10ed1a0,0x10eb310)
+err2: (0x10ed1a0,0x10eb318)
+err1 = err2: false
+err1: (0x10ed1a0,0x10eb310)
+err2: (0x10ed0c0,0xc000010050)
+err1 = err2: false
+```
+
+与空接口一样，只有 tab 与 data 所指数据内容都一致时，两个非空接口变量才能划等号。重点看 `err1 = (*T)(nil)` 这一步：println 输出 `(0x10ed120,0x0)`，类型信息非空、数据指针为空，因此它与 nil（`(0x0,0x0)`）不能划等号。这正是上一节 `returnsError` 陷阱的机制：`err1` 装的是一个“类型信息不为空、值为 nil”的具体指针。〔TB29 p14〕
+
+`err1 = T(5)`、`err2 = T(6)` 一轮：tab 相同（`0x10ed1a0`，都是 T 的类型信息），data 所指的值不同（5 与 6），比较为 false；`err2` 换成 `fmt.Errorf` 构造的动态类型后，tab 与 data 所指数据都不同，仍为 false。
+
+**第四种：空接口与非空接口变量之间的等值比较。**〔TB29 p14-15〕
+
+```go
+func printEmptyInterfaceAndNonEmptyInterface() {
+	var eif interface{} = T(5)
+	var err error = T(5)
+	println("eif:", eif)
+	println("err:", err)
+	println("eif = err:", eif == err)
+	err = T(6)
+	println("eif:", eif)
+	println("err:", err)
+	println("eif = err:", eif == err)
+}
+```
+
+原课运行输出：〔TB29 p14-15〕
+
+```text
+eif: (0x10b3b00,0x10eb4d0)
+err: (0x10ed380,0x10eb4d8)
+eif = err: true
+eif: (0x10b3b00,0x10eb4d0)
+err: (0x10ed380,0x10eb4e0)
+eif = err: false
+```
+
+空接口与非空接口的内部表示结构不同（第一字段一个是 `_type`、一个是 tab），似乎永远不可能相等。但 Go 在进行等值比较时，类型比较使用的是 eface 的 `_type` 与 iface 的 `tab._type`：`eif` 与 `err` 都装入 `T(5)` 时，`_type` 与 `tab._type` 一致、data 所指数据一致，两者相等；`err` 改装 `T(6)` 后 data 所指数据不同，比较为 false。〔TB29 p15〕
+
+四种情形合起来就是一条规则：接口值的等值比较先比类型信息（空接口看 `_type`，非空接口看 `tab._type`，跨空/非空比较时用 `_type` 对 `tab._type`），再比 data 所指的数据内容；两者都一致才算相等。〔TB29 p9-15〕
+
+比较还有一条边界要注意：如果两个接口的动态类型相同，但该类型不可比较（例如 slice），比较时会 panic；因此不能把任意接口值都当成可安全比较的值。
 
 把值赋给接口时可能发生复制或堆分配，具体取决于类型、使用方式和编译器优化；不能仅凭“使用接口”断定一定分配。性能敏感时应先用基准测试和性能分析确认，再考虑优化。〔TB29 p21-23〕
 
