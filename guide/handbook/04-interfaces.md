@@ -1,6 +1,6 @@
 # 04 方法、接口与组合：从调用行为到运行机制
 
-> 详细程度：深入 · 约 190 分钟
+> 详细程度：深入 · 约 280 分钟
 > 材料：TB24 到 TB30 · 旧长版：`notes/p2-lang-core.md`、`notes/p30-methods-interfaces.md`
 > 前置：写过一种语言的函数、结构体或类，了解基本指针与接口概念
 
@@ -2191,11 +2191,64 @@ type NI I
 
 这几种写法解决的是不同问题：普通字段让依赖与调用路径显式；嵌入让某些字段和方法参与外层选择符与方法集合；新类型建立独立类型身份；别名给同一个类型增加一个名字。选择时应先问是否确实要把内层方法作为外层 API 公开。若只是保存一个依赖，写成命名字段并手动实现少量转发，常常更清楚，也避免内层新增方法意外扩张外层 API。
 
-## 七、水平组合三式：包装器、适配器、中间件
+## 七、把实现连接起来：创建、包装、适配与中间件
 
-组合不一定要靠嵌入：一个结构体也可以持有接口字段，把工作交给另一个值。这让各部分只通过需要的行为协作。下面看三个常见用途：包装器在原有行为前后增加工作，适配器让一种形式满足另一种接口，中间件则常用包装器串联请求处理。〔TB30 p4-9〕
+嵌入把能力组合进一个类型，可以叫垂直组合；Welcome(Sender) 把已经存在的不同类型连接到同一段业务，则是水平组合。后者不要求嵌入：一个结构体持有命名接口字段，再显式调用它，同样是在组合。二者分别侧重类型的构造与程序部件的连接，不是必须逐层搭建的继承树。在原课的骨架比喻里，垂直组合建出的类型像骨架中的器官，器官之间靠关节连接；接受接口类型的参数正是这样的关节，它让位于多个包中的多个类型接上同一段业务，应用因此成为有灵活性和扩展性的静态骨架。〔TB30 p3-9〕
 
-**1. 包装器**：`func Wrap(x I) I`，输入输出同一个接口，所以能链式叠加。标准库的 `io.LimitReader(r, n)` 就是。下面把它和一个自写的大写转换层叠在一起：
+Rob Pike 曾把 C++、Java 对类型层次的关注，与 Go 对组合的关注作对照。支持这种组合的不是一个万能语法，而是几项相对独立的机制：类型不需要先排进父子类层次，方法通过接收者在包内关联到类型，接口与实现之间又不必显式登记。这种相互不强制绑定的关系，可以用“正交性”来理解：调整一个部件，不必无故改动另一个。像设计良好的数据库代码与界面代码，可以各自替换而不牵动对方；这是连接边界设计带来的目标，不是只要用了 Go 就自动保证。〔TB30 p3〕
+
+### 先让参数只表达实际需要的能力
+
+第二节已经把 Save 从 *os.File 改成 io.Writer，并运行了标准输出与内存 buffer 两种目标。那次改动不仅能换设备，也改变了测试依赖：原先必须创建文件、写入后读回并清理，现在可以只使用内存。接口表达的仍是同一份写入契约，不要求 Save 依赖文件的 Chdir、Chmod、Chown 等无关能力，也不因此接管目标的关闭职责。〔TB30 p6-8〕
+
+这里直接复用第二节的 Save，不再重复定义。下面的测试放在同包 _test.go 中，需导入 bytes、testing：它既检查返回错误，也比较实际保存的数据，不需要磁盘文件或网络连接。Save 只尝试一次 Write，保留原错误，并以 io.ErrShortWrite 拦截“数量不完整却无错误”的违规实现；测试成功路径之外，还应分别核对这两条错误分支。〔TB30 p8〕
+
+```go
+func TestSave(t *testing.T) {
+	var buf bytes.Buffer
+	data := []byte("hello, golang")
+	if err := Save(&buf, data); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf.Bytes(), data) {
+		t.Fatalf("want %q, actual %q", data, buf.Bytes())
+	}
+}
+```
+
+测试声明一个 bytes.Buffer，取地址后传给 Save。bytes.Buffer 的 Write 使用指针接收者，*bytes.Buffer 的方法集合覆盖 io.Writer 的全部要求，所以 &buf 能作为 io.Writer 合法传入。随后是两步断言：第一步检查 Save 返回的错误是否为 nil；第二步用 buf.Bytes() 取出实际写入的字节，与 data 逐个比较。整个过程只涉及内存。〔TB30 p8〕
+
+这类接口参数能帮助落实依赖倒置：业务依赖写入抽象；接口分离：不要求无关方法；替换实现：不同写入者接入同一个 Save。隐式满足省去了实现方声明接口名字的耦合，但签名匹配不自动保证语义上的里氏替换。一个 Write 总是返回成功却丢数据的类型，即使编译通过，也没有履行 io.Writer 的行为契约。不能把“不存在父类强制转换”推成“所有实现天然可正确替换”。〔TB30 p9〕
+
+也不是每个参数都该立刻改成接口。一个 Add(a, b int64) int64 已能表达普通加法，额外造 Adder 再让 Add(adder, a, b) 转一层，未必带来收益。先有具体实现，出现真实的替换、测试或边界解耦需求时，再提取所需能力。抽象会增加理解路径；接口调用和装箱可能产生间接调用、复制或分配，但具体开销受内联、去虚拟化、逃逸分析等影响，不能见到接口就断言每次都分配或一定更慢。〔TB30 p2〕
+
+### 构造函数把依赖留下，把具体类型交还调用方
+
+除了直接把接口传给函数，也可以在创建对象时把依赖保存下来。通知案例可以让构造函数接收 Sender，返回一个有自己业务方法的具体结构体。以下片段沿用前文 Sender 和 Welcome，并不重新定义发送失败语义；Send(string) 仍然没有返回值。
+
+```go
+type Notifier struct { sender Sender }
+
+func NewNotifier(sender Sender) *Notifier {
+	return &Notifier{sender: sender}
+}
+
+func (n *Notifier) Welcome() {
+	Welcome(n.sender)
+}
+```
+
+这就是“接受接口，返回具体类型”的一种应用：调用方可以注入 Email、SMS 或测试替身，得到的 *Notifier 仍保留自身 API。它不是所有函数必须遵循的法律；马上会看到，包装器特意返回接口才能方便组合。构造函数也不会自动消除 nil 依赖，是否允许 nil、怎样处理错误，应由各 API 明确约定。〔TB30 p10-11〕
+
+标准库有三个直接可查的例子：sync.NewCond(l sync.Locker) *sync.Cond 将锁保存到 L；log.New(out io.Writer, prefix string, flag int) `*log.Logger` 把输出目的地保存在内部；bufio.NewWriterSize(w io.Writer, size int) `*bufio.Writer` 保存写入目标并增加缓冲。最后一个若收到已有且缓冲足够大的 `*bufio.Writer`，会直接返回它；否则在 size 非正时选默认大小并创建缓冲。这里的 bufio 路径不是 log 包。〔TB30 p10-11〕
+
+### 包装器：保留同一接口，改变一层行为
+
+构造函数解决“对象用谁工作”，包装器则要在既有行为前后增加工作，又不修改被包装类型。形式常是 func Wrap(x I) I：输入一个接口，返回仍可作为同一接口使用的值，因此能继续套下一层。io.LimitReader(r, n) 接收 io.Reader，返回仍是 io.Reader 的限长读取器；其具体实现 *io.LimitedReader 用命名字段 R 保存内层，N 记录剩余可读字节。这里根本不需要嵌入。〔TB30 p11-12〕
+
+限长读取器在 N 已用尽时返回 EOF；否则把本次读取缓冲裁到剩余额度，调用内层 Read，再按实际读取 n 扣减 N。包装的是可读长度，不是关闭或释放底层资源；返回的 io.Reader 也没有承诺 Close。由此已经能看到选择接口的边界：只能使用接口明确公开的能力。
+
+再加一层 ASCII 大写转换，保留现有的 hello gopher 例子，同时重现四字节 HELL 的来源例子。下面是完整程序。CapReader 返回新的包装值，upper.Read 只处理这次读到的 p[:n]，不分配一份整块缓冲来做转换。原文的例子把这个大写转换层写作 capitalizedReader，接收者名为 r，字段访问写作 r.r；本文的 upper、u 与 u.r 与之逐一对应。
 
 ```go
 package main
@@ -2206,7 +2259,7 @@ import (
 	"strings"
 )
 
-type upper struct{ r io.Reader }
+type upper struct { r io.Reader }
 
 func (u upper) Read(p []byte) (int, error) {
 	n, err := u.r.Read(p)
@@ -2218,24 +2271,75 @@ func (u upper) Read(p []byte) (int, error) {
 	return n, err
 }
 
+func CapReader(r io.Reader) io.Reader { return upper{r: r} }
+
 func main() {
 	var r io.Reader = strings.NewReader("hello gopher")
 	r = io.LimitReader(r, 8)
-	r = upper{r}
-	b, _ := io.ReadAll(r)
+	r = CapReader(r)
+	b, err := io.ReadAll(r)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(b))
+
+	r = CapReader(io.LimitReader(strings.NewReader("hello, gopher!\n"), 4))
+	b, err = io.ReadAll(r)
+	if err != nil {
+		panic(err)
+	}
 	fmt.Println(string(b))
 }
 ```
 
+按实现推导应输出 HELLO GO 与 HELL。外层 Read 调内层 LimitReader.Read，内层向字符串读取最多指定字节，字节返回后再由外层转换；变量 r 的静态类型一直是 io.Reader。链式写法与分步赋值表达同一关系。包装器的同接口签名使它们可相接，却不保证交换顺序仍等价：长度变化、缓冲、计数或失败拦截都可能使顺序影响语义。这个 ASCII 原地转换恰好不改变长度，不应据它推断所有转换都可交换。〔TB30 p12-13〕
+
 ```text
 HELLO GO
+HELL
 ```
 
-注意变量 `r` 的类型一直是 `io.Reader`，每一层都是同接口进、同接口出，叠几层都行。
+Read 允许一次同时返回 n > 0 与非 nil 错误，包括 EOF。包装器必须先处理这 n 个有效字节，再把原来的 n、err 交还调用方；不能写“只要 err != nil 就 return 0, err”，否则会丢掉已经读到的数据。原课的 capitalizedReader.Read 正是在 err 非 nil 时立即返回 0 和 err，不做转换；本文的实现选择先处理 p[:n]，再把内层返回的 n、err 原样交还。缓冲的 n 以外部分也不是本次有效输入，不应一并转换。上述实现限于 ASCII 的 a 到 z；通用 Unicode 大写可能改变 UTF-8 长度，流的分块还可能切开一个字符，不能把整块 bytes.ToUpper 的结果不加容量和状态处理地塞回同一缓冲。Reader 的 n/error 规则以现行 io.Reader 文档为准，包装链的场景来自〔TB30 p13〕。
 
-**2. 适配器**：把"满足某签名的普通函数"变成"实现某接口的值"。`http.HandlerFunc` 是范本：一个函数类型，再给它挂一个调用自己的方法。
+原课展示这两个例子时用的是 io.Copy(os.Stdout, r)：对同一个 strings.NewReader("hello, gopher!\n")，只保留 io.LimitReader(r, 4) 一层时输出 hell，加上外层 CapReader 后输出 HELL，差异全部来自外层的大写转换。本节为了在同一程序里打印两个结果改用 io.ReadAll，两种写法读到的字节相同。〔TB30 p12-13〕
 
-**3. 中间件**：包装器加适配器。签名是 `func(http.Handler) http.Handler`，内部用 `http.HandlerFunc` 把匿名函数转型，函数体里先做自己的事（打日志、验签），再调用 `next.ServeHTTP(w, r)`。
+### 适配器：给函数值一组方法
+
+Welcome 目前需要一个有 Send 方法的值。若某个测试只需要一段发送函数，没有必要再写一整个结构体：定义一个函数类型，再给它声明方法，方法体调用这个函数值即可。下面依赖前文 Sender、Welcome；需导入 fmt。
+
+```go
+type SendFunc func(string)
+
+func (f SendFunc) Send(message string) { f(message) }
+
+func example() {
+	Welcome(SendFunc(func(message string) {
+		fmt.Println("记录通知：", message)
+	}))
+}
+```
+
+普通 func(string) 本身没有 Send 方法。显式转换成 SendFunc 后，它具有我们声明的 Send，所以满足 Sender；转换没有把函数体改写成另一套业务逻辑。这一模式的标准库范本是 http.HandlerFunc：名字中虽有 Func，它是类型，不是注册路由的 http.HandleFunc 函数。下面摘录其核心定义，省去了包限定符，不能原样放在普通包中替换标准库。〔TB30 p14〕
+
+```go
+type Handler interface {
+	ServeHTTP(ResponseWriter, *Request)
+}
+
+type HandlerFunc func(ResponseWriter, *Request)
+
+func (f HandlerFunc) ServeHTTP(w ResponseWriter, r *Request) {
+	f(w, r)
+}
+```
+
+将 greetings(w http.ResponseWriter, r *http.Request) 显式转成 http.HandlerFunc(greetings)，得到的值就能传给接收 http.Handler 的地方，例如 http.ListenAndServe 的第二个参数。它只适配这个确切函数签名，不会自动给任意函数增加方法，也不会凭空处理 nil 函数；若函数值为 nil，真正调用它仍会 panic。〔TB30 p14〕
+
+### 中间件：包装处理器，并决定是否继续
+
+把包装器和函数适配器放在一起，就能写出 func(http.Handler) http.Handler 形式的 Web 中间件。外层函数保存 next，内部匿名函数在处理一次请求时做自己的工作，再决定是否调用 next.ServeHTTP。日志、请求检查、限流、熔断经常采用这种连接方式，但每一层的行为与失败处理仍要自己实现。〔TB30 p15-16〕
+
+下面保留日志层与检查层组成的完整内存请求例子，不启动监听端口。X-Token 非空仅用来分出两条控制流，不是真正的身份认证。
 
 ```go
 package main
@@ -2269,11 +2373,10 @@ func main() {
 		fmt.Fprint(w, "hello")
 	})
 	srv := logMW(authMW(h))
-
-	for _, tok := range []string{"", "t"} {
+	for _, token := range []string{"", "t"} {
 		req := httptest.NewRequest("GET", "/ping", nil)
-		if tok != "" {
-			req.Header.Set("X-Token", tok)
+		if token != "" {
+			req.Header.Set("X-Token", token)
 		}
 		rec := httptest.NewRecorder()
 		srv.ServeHTTP(rec, req)
@@ -2281,6 +2384,10 @@ func main() {
 	}
 }
 ```
+
+这里的 logMW 和 authMW 对应原文例子中的 logHandler 和 authHandler，最内层的 h 扮演经 http.HandlerFunc 适配的 greetings；把本例写成原文的形式，就是 logHandler(authHandler(http.HandlerFunc(greetings)))。
+
+按调用路径，两个请求都会先打印 log: /ping，再打印 auth check。空头分支写入 401，随后 return，业务 h 不运行；非空头分支继续到 h，响应为 200 hello。http.Error 的正文自带换行，再经 Println 打印会留下一个空行，输出应是：
 
 ```text
 log: /ping
@@ -2292,7 +2399,11 @@ auth check
 200 hello
 ```
 
-从输出里看顺序：最外层先跑，`logMW(authMW(h))` 是先日志后检查；检查失败时没有走到业务处理函数。这里仅演示控制流：它只判断请求头非空，**不是实际的令牌验证**，不能用于保护生产接口。Java 对应 Servlet Filter，Rust 对应 tower 的 Layer。后面的分层、日志、限流、熔断都会反复用到这三个词。
+logMW(authMW(h)) 构造时先把 h 包进检查层，再把检查层包进日志层；处理请求时，从最外层日志开始进入。若交换成 authMW(logMW(h))，拒绝分支会在到达日志层前返回。若某层在 next 调用后还有工作，则返回时按相反方向展开；有条件中断时，内层根本不会被执行。可以把这与 Java Servlet Filter 或 Rust tower Layer 的“层层包装”目标对照，但这里的控制流来自显式函数调用，不表示三者运行模型相同。〔TB30 p15-16〕原文对 logHandler、authHandler 这类中间件的总结是：中间件本质就是包装函数（支持链式调用），内部再利用适配器函数类型 http.HandlerFunc 把普通函数（例中的匿名函数）转型为实现 http.Handler 的类型的实例。〔TB30 p16〕
+
+用原课的例子核对三个细节：validateAuth 判定请求头 auth 的值是否等于 123456，不等就返回错误 bad auth token；logHandler 在调用内层 h.ServeHTTP 之前，用 log.Printf 记录 r.Method、r.URL.String() 和 time.Now() 取得的时间 t；authHandler 调 validateAuth(r.Header.Get("auth"))，失败就执行 http.Error(w, "bad auth param", http.StatusUnauthorized) 并 return，客户端收到 401 状态码和正文 bad auth param，校验通过才把请求交给内层。bad auth token 是 validateAuth 内部生成的错误文本，写回客户端的正文是 authHandler 自己指定的 bad auth param，两处文本不同并不矛盾。请求头缺失时 r.Header.Get("auth") 返回空字符串，按这个判定条件同样落入失败分支，因此空头与错值走同一条路径，返回同一个状态码和同一个正文。原课用 curl 验证过两种请求：不带 auth 头请求 http://localhost:8080，输出 bad auth param；改带 auth:123456 头请求 localhost:8080/，输出 Welcome!。〔TB30 p15-16〕本节把这一层改成 httptest 内存测试，把记录字段换成 r.URL.Path、判定条件换成 X-Token 是否为空，只是演示细节不同，各层的连接方式与执行顺序没有变。
+
+此示例未验证令牌内容，更没有实现签名、有效期、密钥管理或真实的认证授权，不能直接用于保护接口。若把打印改成真实日志，应考虑敏感字段；若包装 ResponseWriter，还须决定怎样保持所需的可选接口能力。接口相同让各层可连接，不会替我们完成这些行为约定。
 
 ## 八、空接口与 any
 
