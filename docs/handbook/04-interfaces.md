@@ -1201,6 +1201,102 @@ type InterfaceType struct {
 
 </details>
 
+## Java 与 Go：相同的多态目标，不同的实现关系与调用路径
+
+如果你已经用 Java 的接口写过业务代码，Welcome 的目标并不陌生：调用方声明自己需要发送消息，Email 和 SMS 提供两种实现。先用同一个例子把两边对齐，再看实现关系和调用过程各自在哪里确定，避免把“都能多态”误解成“底层完全一样”。
+
+### Java：方法写对了，还要有类型关系
+
+下面是可以独立运行的 Java 版本，保存为 DispatchDemo.java。与 Go 示例一样，这里只打印消息，不真正发送邮件或短信。
+
+```java
+public class DispatchDemo {
+    interface Sender { void send(String message); }
+
+    static final class Email implements Sender {
+        public void send(String message) {
+            System.out.println("发送邮件： " + message);
+        }
+    }
+
+    static final class SMS implements Sender {
+        public void send(String message) {
+            System.out.println("发送短信： " + message);
+        }
+    }
+
+    static void welcome(Sender sender) {
+        sender.send("欢迎注册");
+    }
+
+    public static void main(String[] args) {
+        Sender sender = new Email();
+        welcome(sender);
+        sender = new SMS();
+        welcome(sender);
+    }
+}
+```
+
+运行 javac DispatchDemo.java，再运行 java DispatchDemo，输出仍是先邮件、后短信。Email 和 SMS 显式声明了 implements Sender，所以它们的对象都能赋给 Sender 引用；如果一个父类已经实现 Sender，子类也可以继承这层关系，并不需要每个子类重复写 implements。
+
+仅把 Email 的 implements Sender 删掉，保留同名、同参数的 public void send(String)，并不会让它自动成为 Sender。这一点与 Go 不同：Go 直接检查方法集合是否满足接口，不需要实现方事先写出接口名字。因此，Go 的使用方可以后来再定义自己需要的接口，而不修改 Email；Java 则不能仅因为方法形状相同，就把一个未建立相应类型关系的对象当作 Sender。
+
+### 字节码确定要调哪个接口方法，不确定当前对象是哪一种实现
+
+用 javap -c -p DispatchDemo 看 welcome。下面是本机 Corretto OpenJDK 17.0.19 实际生成的关键部分：
+
+```text
+static void welcome(DispatchDemo$Sender);
+  Code:
+     0: aload_0
+     1: ldc           #7   // String 欢迎注册
+     3: invokeinterface #9, 2
+     8: return
+```
+
+aload_0 把 sender 引用放到操作数栈上，ldc 放入消息，invokeinterface 表示调用接口实例方法。这里的 #9 是当前类常量池中的符号引用，不是对象地址，也不是某个 Email.send 的机器码地址。这个引用描述 Sender.send 以及参数、返回值的描述符；消息和接收者引用则是在运行时通过操作数栈传入的。javap 显示的 #9, 2 里，逗号后面的 2 就是这条指令的 count 操作数。规范规定 count 不能为零，按取值单位记录这次调用在操作数栈上取用的数量：long 或 double 的参数一个占两个单位，其他类型一个占一个单位；这个数量本可以从所选方法的描述符推导出来，把 count 保留在指令里属于历史原因。本例的调用传入接收者 sender 和一个 String 参数：接收者引用占一个单位，消息参数再占一个，正好对应 javac 写出的 2。class 文件里这条指令还有第四个操作数字节，规范要求它恒为 0，javap 没有把它显示出来。
+
+JVM 在解析这个接口方法引用后，还要根据当前接收者对象的实际类选择实现。第一次对象是 Email，第二次是 SMS，因此同一条字节码指令会执行不同实现。这是规范要求的选择语义；规范并没有要求所有 JVM 都用相同的 vtable 布局，或每次执行都按同一个机器级算法查找。
+
+这也解释了两个容易混在一起的问题：常量池解析负责把符号引用关联到相应的方法信息；动态方法选择负责针对这一次实际接收者决定执行哪个实现。不能把前者说成“编译时已经选定永远调用 Email.send”，也不能把后者描述成每次都按字符串重新搜索所有类。
+
+### HotSpot 的 vtable 与 itable，不是一张固定表包办所有调用
+
+把观察范围明确到 OpenJDK 17.0.19 的 HotSpot 实现，才能继续讨论它用了哪些数据结构。这个版本的源码同时定义 klassVtable 与 klassItable。前者组织类的虚方法；后者组织接口实现相关的方法信息。它们属于类元数据，不是 Java 语言要求程序员维护的字段。
+
+以 itable 的结构为例，可以分成接口偏移条目和方法条目两部分：偏移条目记录某个接口以及它对应的方法区位置；方法条目保存相应 Method 信息。这样，接收者的实际类既能关联到它实现的接口，也能关联到该接口方法的具体实现。这个结构服务于接口分派，但不能据此断言每次 invokeinterface 都逐项走完相同查找过程。
+
+```mermaid
+flowchart LR
+    R["Java Sender 引用"] --> O["当前接收者对象"]
+    O --> K["实际类的元数据"]
+    K --> T["HotSpot 接口分派相关信息：itable"]
+    T --> M["对应的具体方法"]
+    B["invokeinterface 的符号引用"] --> S["接口与方法要求"]
+    S -."与实际接收者共同确定目标".-> T
+```
+
+图画的是理解分派所需的信息关系，不是 Java 对象头的逐字段布局，也不是所有优化后机器码必经的完整路径。Java 的引用本身不携带 Go 那样的 (tab, data) 接口值表示；HotSpot 可以从对象关联到实际类的元数据。Go 的非空接口值则把对应接口与动态类型组合的 itab 指针和数据表示放在接口值中，保留接口分派时从该表的已知入口位置取调用地址。
+
+### 两边都要分清语言语义与优化后的机器码
+
+Go 编译器能够确定具体类型时，可以去虚拟化并继续内联；HotSpot 的 JIT 也可能利用类层次信息或调用点收集到的接收者类型信息，把接口调用优化成带检查的直接调用，甚至内联方法体。条件不再满足时，JVM 还可能退回较通用的调用路径或进行去优化。
+
+因此，看到 Go 的接口声明，不能断言一定发生堆分配；看到 Java 的 invokeinterface，也不能断言每次都进行完整的 itable 查找。更不能仅凭两边都有方法表，就推出性能相同。要比较具体成本，需要指定程序、工具链、优化条件和测量方法；本章解释分派机制，不给未经测量的性能排名。
+
+回到写代码时最重要的判断：两门语言都允许调用方通过接口依赖行为。Java 的类型关系通常要显式建立或继承而来；Go 的实现关系由方法集合满足而成立。建立关系以后，两边都必须根据当前具体实现执行正确方法，但运行时怎样保存信息、编译器怎样优化，不应当被一句“都是查 vtable”抹平。
+
+<details>
+<summary>对照依据与版本边界</summary>
+
+本节 Java 程序和 javap 输出已在 Corretto OpenJDK 17.0.19（HotSpot Server VM）运行核对。接口调用语义依据 [JVMS §6.5 invokeinterface](https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-6.html#jvms-6.5.invokeinterface)：常量池接口方法符号引用、接收者与参数，以及根据实际类进行方法选择；count 操作数与恒为 0 的第四操作数字节也出自这一节。引用的是 Java SE 21 版本规范中这段通用语义，不把它说成本机使用了 Java 21。
+
+HotSpot 结构依据固定标签 [OpenJDK jdk-17.0.19+10 的 klassVtable.hpp](https://github.com/openjdk/jdk17u/blob/jdk-17.0.19%2B10/src/hotspot/share/oops/klassVtable.hpp) 中 klassVtable、klassItable、itableOffsetEntry、itableMethodEntry 的定义。优化能力参考 [OpenJDK HotSpot PerformanceTechniques 的 Methods 段](https://wiki.openjdk.org/spaces/HotSpot/pages/11829300/PerformanceTechniques)；这是优化技术说明，不是本程序已经触发特定 JIT 优化的实测证据。本次没有做 JIT 汇编或跨语言基准测试。
+
+
+</details>
+
 ## 五、接口值的比较和成本
 
 内部表示清楚了，接口值的等值比较规则就顺理成章：两个接口值相等，要求类型信息一致，且 data 所指的数据内容一致。下面按原课的顺序过一遍四种等值比较情形。原课输出中的地址是它运行环境的具体值，在你机器上会不同；要看的是相同与不同的关系。〔TB29 p10-15〕顺带说明输出格式：运行时 `println` 一个接口变量，会打印它内部表示的两个字段。以本机 go1.26.4 源码为例，`$GOROOT/src/runtime/print.go:266-272` 中 `printeface` 打印 `(_type, data)`，`printiface` 打印 `(tab, data)`，原课示例输出 `(0x0,0x0)` 这样的二元组正来自这里。
