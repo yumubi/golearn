@@ -1299,158 +1299,258 @@ HotSpot 结构依据固定标签 [OpenJDK jdk-17.0.19+10 的 klassVtable.hpp](ht
 
 ## 五、接口值的比较和成本
 
-内部表示清楚了，接口值的等值比较规则就顺理成章：两个接口值相等，要求类型信息一致，且 data 所指的数据内容一致。下面按原课的顺序过一遍四种等值比较情形。原课输出中的地址是它运行环境的具体值，在你机器上会不同；要看的是相同与不同的关系。〔TB29 p10-15〕顺带说明输出格式：运行时 `println` 一个接口变量，会打印它内部表示的两个字段。以本机 go1.26.4 源码为例，`$GOROOT/src/runtime/print.go:266-272` 中 `printeface` 打印 `(_type, data)`，`printiface` 打印 `(tab, data)`，原课示例输出 `(0x0,0x0)` 这样的二元组正来自这里。
+接口比较首先是语言规则：两个接口值都为 nil 时相等；否则动态类型必须相同，动态值也必须按该类型的相等规则相等。比较操作本身还须满足静态类型的可比较与赋值关系要求。下面按四个具体场景观察，不直接拿内部两个机器字逐位判等。〔TB29 p10–15〕
 
-**第一种：nil 接口变量。**未赋初值的接口类型变量值为 nil。〔TB29 p10-11〕
+### 先用 println 看两个字，再解释比较结果
 
-```go
-var i interface{} // 空接口类型
-var err error     // 非空接口类型
+在这里选用的 Go 实现中，预定义 println 会显示接口值内部的两个字段，空接口是 (_type,data)，非空接口是 (tab,data)。编译器按参数类型选择 runtime/print.go 的 printeface 或 printiface。它是临时理解实现的辅助，不是稳定的序列化格式；地址随版本、构建和运行变化，重点看哪些信息为空、哪些类型或值相同。fmt 的 %T 则显示动态类型，和这种内部打印承担不同工作。〔TB29 p10〕
 
-println(i)
-println(err)
-println("i = nil:", i == nil)
-println("err = nil:", err == nil)
-println("i = err:", i == err)
-```
-
-原课运行输出：〔TB29 p11〕
-
-```text
-(0x0,0x0)
-(0x0,0x0)
-i = nil: true
-err = nil: true
-i = err: true
-```
-
-无论是空接口还是非空接口变量，值为 nil 时内部表示均为 `(0x0,0x0)`：类型信息与数据信息均为空。所以 `i` 与 `err` 相等，也都等于字面量 nil；nil 状态下空接口与非空接口的内部表示没有区别。
-
-**第二种：空接口类型变量之间。**〔TB29 p11-12〕
+下面是一份完整程序，保留四种情形的先后关系。这里的 T 是 type T int，提供 Error 方法；它和上一部分带 n、s 字段的结构体 T 是两个不同示例，不能粘在同一个包里重复声明。
 
 ```go
-func printEmptyInterface() {
-	var eif1 interface{} // 空接口类型
-	var eif2 interface{} // 空接口类型
-	var n, m int = 17, 18
-	eif1 = n
-	eif2 = m
-	println("eif1:", eif1)
-	println("eif2:", eif2)
-	println("eif1 = eif2:", eif1 == eif2) // false
-	eif2 = 17
-	println("eif1:", eif1)
-	println("eif2:", eif2)
-	println("eif1 = eif2:", eif1 == eif2) // true
-	eif2 = int64(17)
-	println("eif1:", eif1)
-	println("eif2:", eif2)
-	println("eif1 = eif2:", eif1 == eif2) // false
-}
-```
+package main
 
-原课运行输出：〔TB29 p12〕
+import "fmt"
 
-```text
-eif1: (0x10ac580,0xc00007ef48)
-eif2: (0x10ac580,0xc00007ef40)
-eif1 = eif2: false
-eif1: (0x10ac580,0xc00007ef48)
-eif2: (0x10ac580,0x10eb3d0)
-eif1 = eif2: true
-eif1: (0x10ac580,0xc00007ef48)
-eif2: (0x10ac640,0x10eb3d8)
-eif1 = eif2: false
-```
-
-三步分析：
-
-- 第一步：`eif1` 与 `eif2` 分别装入 int 的 17 与 18。两者的 `_type` 相同（都是 int 的类型信息 `0x10ac580`），但 `data` 所指内存块中存储的值不同（17 与 18），不相等。
-- 第二步：`eif2` 重新装入 17。`_type` 仍相同，`data` 所指的值也相同（都是 17），相等。注意这一轮两个 `data` 指针并不相同（`0xc00007ef48` 与 `0x10eb3d0`），说明比较的是 `data` 所指的数据值，不是 `data` 指针本身的值。
-- 第三步：`eif2` 装入 int64 类型的 17。动态类型变了（`_type` 变成 int64 的 `0x10ac640`），即便 `data` 所指的值仍是 17，两者也不相等。
-
-结论：对空接口类型变量，只有 `_type` 与 `data` 所指数据内容都一致时才能划等号；另外 Go 创建 eface 时一般会为 data 重新分配内存空间，把动态类型变量的值复制进去，所以多数情况下看到的 data 指针值都不同。〔TB29 p12〕
-
-**第三种：非空接口类型变量之间。**〔TB29 p13-14〕
-
-```go
 type T int
 
-func (t T) Error() string {
-	return "bad error"
+func (T) Error() string {
+    return "bad error"
+}
+
+func printNilInterface() {
+    var i any
+    var err error
+    println(i)
+    println(err)
+    println("i = nil:", i == nil)
+    println("err = nil:", err == nil)
+    println("i = err:", i == err)
+}
+
+func printEmptyInterface() {
+    var eif1 any
+    var eif2 any
+    var n, m int = 17, 18
+    eif1 = n
+    eif2 = m
+    println("eif1:", eif1)
+    println("eif2:", eif2)
+    println("eif1 = eif2:", eif1 == eif2) // false
+
+    eif2 = 17
+    println("eif1:", eif1)
+    println("eif2:", eif2)
+    println("eif1 = eif2:", eif1 == eif2) // true
+
+    eif2 = int64(17)
+    println("eif1:", eif1)
+    println("eif2:", eif2)
+    println("eif1 = eif2:", eif1 == eif2) // false
 }
 
 func printNonEmptyInterface() {
-	var err1 error // 非空接口类型
-	var err2 error // 非空接口类型
-	err1 = (*T)(nil)
-	println("err1:", err1)
-	println("err1 = nil:", err1 == nil)
-	err1 = T(5)
-	err2 = T(6)
-	println("err1:", err1)
-	println("err2:", err2)
-	println("err1 = err2:", err1 == err2)
-	err2 = fmt.Errorf("%d\n", 5)
-	println("err1:", err1)
-	println("err2:", err2)
-	println("err1 = err2:", err1 == err2)
+    var err1 error
+    var err2 error
+    err1 = (*T)(nil)
+    println("err1:", err1)
+    println("err1 = nil:", err1 == nil) // false
+
+    err1 = T(5)
+    err2 = T(6)
+    println("err1:", err1)
+    println("err2:", err2)
+    println("err1 = err2:", err1 == err2) // false
+
+    err2 = fmt.Errorf("%d\n", 5)
+    println("err1:", err1)
+    println("err2:", err2)
+    println("err1 = err2:", err1 == err2) // false
+}
+
+func printEmptyInterfaceAndNonEmptyInterface() {
+    var eif any = T(5)
+    var err error = T(5)
+    println("eif:", eif)
+    println("err:", err)
+    println("eif = err:", eif == err) // true
+
+    err = T(6)
+    println("eif:", eif)
+    println("err:", err)
+    println("eif = err:", eif == err) // false
+}
+
+func main() {
+    printNilInterface()
+    printEmptyInterface()
+    printNonEmptyInterface()
+    printEmptyInterfaceAndNonEmptyInterface()
 }
 ```
 
-原课运行输出：〔TB29 p13〕
+第一种是 nil 接口。未初始化的 any 与 error 都没有动态类型，也没有动态值，内部打印都是 (0x0,0x0)。因此 i == nil、err == nil、i == err 都为 true。虽然变量的静态接口类型不同，但比较的是当前接口值，两者都为 nil。〔TB29 p10–11〕
 
-```text
-err1: (0x10ed120,0x0)
-err1 = nil: false
-err1: (0x10ed1a0,0x10eb310)
-err2: (0x10ed1a0,0x10eb318)
-err1 = err2: false
-err1: (0x10ed1a0,0x10eb310)
-err2: (0x10ed0c0,0xc000010050)
-err1 = err2: false
-```
+第二种是两个空接口。先保存 int 的 17 和 18，类型相同、值不同，得到 false；再都保存 int(17)，得到 true；最后把 eif2 改成 int64(17)，即使数值写作同一个 17，动态类型不同，仍为 false。〔TB29 p11–12〕第二轮 data 地址可以不同而结果仍为 true：例如来源输出分别是 0xc00007ef48 和 0x10eb3d0，关键是它们代表的 int 值都为 17。不能比较地址文本来代替语言的值比较，也不保证不同赋值必定产生不同地址。
 
-与空接口一样，只有 tab 与 data 所指数据内容都一致时，两个非空接口变量才能划等号。重点看 `err1 = (*T)(nil)` 这一步：println 输出 `(0x10ed120,0x0)`，类型信息非空、数据指针为空，因此它与 nil（`(0x0,0x0)`）不能划等号。这正是上一节 `returnsError` 陷阱的机制：`err1` 装的是一个“类型信息不为空、值为 nil”的具体指针。〔TB29 p14〕
+第三种是两个非空接口。(*T)(nil) 放进 error 后是 (非空 tab,0x0)，因此不等于 nil；这里只比较它，没有调用其 Error 方法。接着 T(5) 与 T(6) 的接口类型及动态类型都相同，但值不同，结果 false。再把 err2 换成 fmt.Errorf 构造的错误，动态类型已经不是 T，所以仍然 false；格式化后看起来“都在说错误”不会建立值相等关系。〔TB29 p13–14〕
 
-`err1 = T(5)`、`err2 = T(6)` 一轮：tab 相同（`0x10ed1a0`，都是 T 的类型信息），data 所指的值不同（5 与 6），比较为 false；`err2` 换成 `fmt.Errorf` 构造的动态类型后，tab 与 data 所指数据都不同，仍为 false。
+第四种是空接口与非空接口。eif 保存 T(5)，err 也保存 T(5)，第一个字段一个直接是 T 的类型信息，另一个是 itab 地址，二者地址当然不需要相同。跨接口表示进行转换后，判断的具体类型信息对应 eface._type 与 iface.tab.Type（历史字段名 tab._type），都是 T，动态值也都是 T(5)，所以结果 true；err 改成 T(6) 后才变 false。〔TB29 p14–15〕非空接口转成 any 时，编译器取得 itab 中的具体类型信息并沿用数据字，不会把原接口类型 error 当成新的动态类型再套一层。
 
-**第四种：空接口与非空接口变量之间的等值比较。**〔TB29 p14-15〕
+若具体值本身是指针，比较要按指针相等规则，而不是深入比较它指向的对象内容。例如两个分别分配、都保存 17 的 *int 通常不相等，放进 any 后也不会自动获得深度相等。类型档案里的 Equal 会依据类型选相等算法；对直接表示的可比较指针、channel 等，运行时可以直接比较数据字，对间接表示的值才调用相应值比较函数。
+
+### 动态类型相同，也可能在比较时 panic
+
+“动态类型相同、值相同”还隐含一项前提：这个动态类型必须可以比较。接口自身可以参与 ==，不保证任意装进去的值都能比较。将下面的片段放在一个单独 main 中，并导入 fmt，最后一行是故意触发的运行时错误：
 
 ```go
-func printEmptyInterfaceAndNonEmptyInterface() {
-	var eif interface{} = T(5)
-	var err error = T(5)
-	println("eif:", eif)
-	println("err:", err)
-	println("eif = err:", eif == err)
-	err = T(6)
-	println("eif:", eif)
-	println("err:", err)
-	println("eif = err:", eif == err)
+var a any = []int{1}
+var b any = []int{1}
+fmt.Println(a == nil)       // false：与 nil 比较不需要比较 slice 内容。
+fmt.Println(a == any(1))    // false：动态类型不同。
+fmt.Println(a == b)         // panic：相同动态类型 []int 不可比较。
+```
+
+slice、map、函数都不是可比较类型，即使接口里保存的是 nil slice，与另一个同类型接口值比较也不能借“两个都是 nil”绕过限制；它们不是 nil 接口。数组或结构体字段里含有接口时，比较也可能在遇到这样的动态值时 panic。现行 runtime/alg.go 的 efaceeq、ifaceeq 会检查动态类型的 Equal；为空时触发 comparing uncomparable type 一类的 panic。规范依据见 https://go.dev/ref/spec#Comparison_operators。
+
+<details>
+<summary>选读：把 dump 工具的每一层信息展开</summary>
+
+只看 eface 的第一字和 iface 的第一字，并不能直接看出它们是否保存同一个具体类型。为了进一步观察，可以复制所用工具链的内部布局，再借 unsafe 读取。这个做法刻意突破了正常类型边界，不是业务接口的用法，也没有跨版本兼容保证。TB29 的工具基于 Go 1.17，并明确提示可能只适用该版本。〔TB29 p15–19〕下面给出按 Go 1.26.4 darwin/arm64 当前布局写出的独立观察程序；它仍需在这个指定环境单独复核，不能把“成功编译”当成所有字段都解释正确的证明。
+
+```go
+package main
+
+import (
+    "fmt"
+    "unsafe"
+)
+
+// 仅映射 Go 1.26.4 内部布局；这些名字不是 runtime 的公共类型。
+type typeInfo struct {
+    Size_       uintptr
+    PtrBytes    uintptr
+    Hash        uint32
+    TFlag       uint8
+    Align_      uint8
+    FieldAlign_ uint8
+    Kind_       uint8
+    Equal       func(unsafe.Pointer, unsafe.Pointer) bool
+    GCData      *byte
+    Str         int32
+    PtrToThis   int32
+}
+
+type nameInfo struct {
+    Bytes *byte
+}
+
+type methodInfo struct {
+    Name int32
+    Typ  int32
+}
+
+type interfaceInfo struct {
+    typeInfo
+    PkgPath nameInfo
+    Methods []methodInfo
+}
+
+type itabInfo struct {
+    Inter *interfaceInfo
+    Type  *typeInfo
+    Hash  uint32
+    Fun   [1]uintptr
+}
+
+type efaceInfo struct {
+    Type *typeInfo
+    Data unsafe.Pointer
+}
+
+type ifaceInfo struct {
+    Tab  *itabInfo
+    Data unsafe.Pointer
+}
+
+type T int
+
+func (T) Error() string { return "bad error" }
+
+func dumpData(i any, data unsafe.Pointer) {
+    if data == nil {
+        fmt.Println("\t data: nil")
+        return
+    }
+    switch i.(type) {
+    case int:
+        fmt.Printf("\t data: %d\n", *(*int)(data))
+    case float64:
+        fmt.Printf("\t data: %g\n", *(*float64)(data))
+    case T:
+        // %+v 会调用 Error，显示的是格式化结果，不是 T 的底层整数。
+        fmt.Printf("\t data: %+v; underlying=%d\n", *(*T)(data), int(*(*T)(data)))
+    default:
+        fmt.Println("\t unsupported data type")
+    }
+}
+
+func dumpEface(i any) {
+    p := (*efaceInfo)(unsafe.Pointer(&i))
+    fmt.Printf("eface: %+v\n", *p)
+    if p.Type != nil {
+        fmt.Printf("\t type: %+v\n", *p.Type)
+    }
+    dumpData(i, p.Data)
+}
+
+func dumpItabOfIface(ptr unsafe.Pointer) {
+    p := (*ifaceInfo)(ptr)
+    fmt.Printf("iface: %+v\n", *p)
+    if p.Tab == nil {
+        return
+    }
+    tab := p.Tab
+    fmt.Printf("\t itab: %+v\n", *tab)
+    fmt.Printf("\t inter: %+v\n", *tab.Inter)
+    fmt.Printf("\t type: %+v\n", *tab.Type)
+    fmt.Printf("\t fun: [")
+    base := unsafe.Pointer(&tab.Fun[0])
+    for n := 0; n < len(tab.Inter.Methods); n++ {
+        entry := *(*uintptr)(unsafe.Add(base, uintptr(n)*unsafe.Sizeof(uintptr(0))))
+        fmt.Printf("%#x ", entry)
+    }
+    fmt.Println("]")
+}
+
+func dumpDataOfIface(i any) {
+    // error 传给 any 后是 eface；转换沿用了原具体值的数据字。
+    p := (*efaceInfo)(unsafe.Pointer(&i))
+    dumpData(i, p.Data)
+}
+
+func main() {
+    var eif any = T(5)
+    var err error = T(5)
+    println("eif:", eif)
+    println("err:", err)
+    println("eif = err:", eif == err)
+    dumpEface(eif)
+    dumpItabOfIface(unsafe.Pointer(&err))
+    dumpDataOfIface(err)
 }
 ```
 
-原课运行输出：〔TB29 p14-15〕
+dumpEface 读取两个字，展开具体类型档案，再按 type switch 读取数据；dumpItabOfIface 接收非空接口变量本身的地址，先读 iface，再展开 itab、接口信息、具体类型信息，并按接口方法数量读取变长的 Fun；dumpDataOfIface 则利用非空接口转换到 any 时沿用数据字这一点，统一按空接口读数据。这三个职责对应来源工具的三个主要函数。〔TB29 p16–18〕
 
-```text
-eif: (0x10b3b00,0x10eb4d0)
-err: (0x10ed380,0x10eb4d8)
-eif = err: true
-eif: (0x10b3b00,0x10eb4d0)
-err: (0x10ed380,0x10eb4e0)
-eif = err: false
-```
+这个数据读取器有意只支持 int、float64 和这里的 T；其他类型明确输出 unsupported data type，而不假装已经实现任意类型解码。它不能仅靠拿到一个 data 就推断任意内存是什么，更不应解引用未识别的指针。Fun 中也可能出现包装入口，不能仅打印一个地址就宣称已经验证方法体。
 
-空接口与非空接口的内部表示结构不同（第一字段一个是 `_type`、一个是 tab），似乎永远不可能相等。但 Go 在进行等值比较时，类型比较使用的是 eface 的 `_type` 与 iface 的 `tab._type`：`eif` 与 `err` 都装入 `T(5)` 时，`_type` 与 `tab._type` 一致、data 所指数据一致，两者相等；`err` 改装 `T(6)` 后 data 所指数据不同，比较为 false。〔TB29 p15〕
+来源程序中 eif 的 _type 和 err 的 tab._type 都是 0x10b38c0，帮助解释跨接口相等；它将 T(5) 格式化为 bad error，是 Error 方法的显示结果，不表示底层数据从整数 5 变成了字符串。当前示例额外打印 underlying=5，避免把格式化行为当成存储布局。地址和 Hash 数字随构建、版本变化；比较应关注两份类型信息是否指向同一具体类型，而不是照抄历史哈希 1156555957。〔TB29 p18–19〕
 
-四种情形合起来就是一条规则：接口值的等值比较先比类型信息（空接口看 `_type`，非空接口看 `tab._type`），再比 data 所指的数据内容；两者都一致才算相等。〔TB29 p9-13〕跨空/非空比较时，类型比较用的是 `_type` 对 `tab._type`，这条规则同样成立。〔TB29 p14-15〕顺带一提，`println` 打印接口变量内部表示的两个字段，具体函数是 `$GOROOT/src/runtime/print.go` 的 `printeface`/`printiface`（266-272 行，打印 `(_type, data)`/`(tab, data)` 二元组）；本节开头已交代过这一打印路径，此处不再展开。〔TB29 p10〕
+本章这份镜像程序已在 Go 1.26.4 darwin/arm64 运行核对：空接口与非空接口指向同一份 T 类型信息，类型 Hash 与 itab 中的副本一致，方法入口非零，数据读取显示 underlying=5。这只验证了该程序在指定环境中的观察，不构成跨版本兼容性保证。升级 Go、改变架构或改用其他编译实现时，都应重新检查字段顺序、宽度、对齐、标志语义与直接表示规则；没有这一核对，不应该运行复制来的 unsafe 工具。
 
-比较还有一条边界要注意：如果两个接口的动态类型相同，但该类型不可比较（例如 slice），比较时会 panic；因此不能把任意接口值都当成可安全比较的值。
 
-`returnsError` 陷阱的机制在第四节末尾已经拆过：nil 的 `*MyError` 指针装入接口后得到 `(tab, 0x0)`，`tab` 非空而 `data` 为 nil，与 nil（内部表示 `(0x0,0x0)`）比较自然为 false。〔TB29 p14〕原课的思考题有两问：这个 nil error 值 != nil 的坑你在日常编码中遇到过吗；本讲的 `returnsError` 例子如何修改才能按最初预期输出。正文只提出问题、未给答案，修改方案出自精选留言：Geralt of Rivia 给出两种改法，其一，把 `returnsError()` 里 `p` 的类型改为 `error`；其二，删除 `p`，直接 `return &ErrBad` 或 nil；i6u 用另一种表述点出问题本质：返回的是 `*MyError` 而不是 `error`，应返回接口类型。〔TB29 p24-25〕本机 go1.26.4 工具链复测与上述一致：`(*T)(nil)` 装接口后 `println` 输出 `(0x…,0x0)`，`err != nil` 为 true；`eface` 与 `iface` 同装 `T(5)` 时 `eif == err` 为 true。
-
-**选读：输出接口内部表示的详尽信息。**`println` 只给两个指针值，有时过于简略：仅凭 `eif: (0x10b3b00,0x10eb4d0)` 与 `err: (0x10ed380,0x10eb4d8)`，想不到两个变量相等；若能输出 `tab._type` 一类的详细信息会事半功倍。〔TB29 p15〕eface、iface 与组成它们的 itab、`_type` 都是 runtime 包的非导出结构体，包外不能直接引用；但组成它们的基本数据类型可以复制，所以用“复制代码”的方式把结构定义拿到 runtime 包外，再借 unsafe.Pointer 强转读取内部数据，这就是原课的 dumpinterface.go。〔TB29 p15-16〕三个主要函数各管一段：`dumpEface` 输出空接口的 eface 与 `_type` 信息，data 部分按 type switch 只对 int、float64、T 三种类型读取；`dumpItabOfIface` 输出非空接口的 iface 与整个 itab，并展开 inter、`_type`，以及按接口方法数（mhdr 长度）逐个打印 fun 里的调用地址；`dumpDataOfIface` 输出非空接口的 data 所指内容，靠“eface 与 iface 的 data 部分相同”这一技巧，把参数统一按 eface 读。〔TB29 p16-18〕对同装 T(5) 的 eif 与 err，输出显示 eif 的 `_type`（0x10b38c0）与 err 的 tab._type（0x10b38c0）一致、data 所指内容同为 “bad error”，解释了 `eif == err` 为 true；原课同时说明 data 读取只实现了这三种类型，其余类型要自己补。〔TB29 p18-19〕版本边界：runtime 的 eface、iface 或其组成可能随 Go 版本变化，原课在引入时就说，基于 Go 1.17 复制的代码可能仅适用于 Go 1.17 编译〔TB29 p15〕，结尾又强调这个实现可能仅在 Go 1.17 版本上测试通过〔TB29 p19〕。本机复测中，照书复制的 Go 1.17 结构在 go1.26.4 编译运行成功，hash/kind/fun[0] 输出正确，eface._type.hash 与 iface.tab.hash 同为 0x9eab503f（与原课输出的 1156555957 不同属预期，不同版本哈希不同），但这不构成跨版本兼容性保证。
+</details>
 
 ### 装箱：接口赋值的运行时过程
 
