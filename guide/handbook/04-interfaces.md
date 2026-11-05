@@ -598,259 +598,166 @@ type ResponseWriter interface {
 可以带着两道问题检验这份设计：如果 Go 没有接口，Welcome 怎样同时接收 Email 和 SMS，测试怎样替换发送过程，哪些场景可以改用函数参数而不是接口？再找一份自己熟悉的大接口，按真实使用场合划分方法，说明哪些职责应该保留在一起，哪些可以独立。它们分别对应“没有接口会影响什么”和“怎样定义小接口”这两道思考题；没有唯一标准答案，关键是给出具体依赖与取舍。〔TB28 p16〕
 
 
-## 三、为什么指针能实现接口，值却不行？
+## 三、从参数传递理解方法集合
 
-前面的 `Save(&buf, ...)` 用的是 `&buf`，而不是 `buf`。为什么指针能实现接口、值却不行？回答这个问题需要两步准备：先看清方法的本质，再引入**方法集合**。
+Welcome 可以接受 Email 和 SMS，是因为它们的方法满足 Sender。写入示例中 Save 接受 &buf 而不是 buf，则提醒我们：同一个基类型的值与指针，不一定满足同一个接口。先拆开一次方法调用，就能把“调用方便”与“实现接口”分清。
 
-### 方法的本质：接收者是第一个参数
+### 把接收者放回第一个参数
 
-C++ 的对象调用方法时，编译器自动传入指向对象自身的 `this` 指针作为方法的第一个参数；Go 的原理相似：**将 receiver 参数以第一个参数的身份并入方法的参数列表**。〔TB24 p6-7〕
-
-按这个原理，任何方法都能机械地改写成普通函数。以第一节的 `Counter` 为例，receiver 变成第一个参数，其余参数原样排在后面：
+第一节的 Counter.Value 可以按下面的普通函数理解，Add 也一样。这里沿用 Counter 的定义，两个函数用于展示等价的参数传递关系：
 
 ```go
-// (c Counter) Value() int 的等价函数
 func Value(c Counter) int { return c.value }
-
-// (c *Counter) Add(n int) 的等价函数
 func Add(c *Counter, n int) { c.value += n }
 ```
 
-原课程用 `Get`/`Set` 举的也是同一套改法：`(t T) Get() int` 等价于 `func Get(t T) int`，`(t *T) Set(a int) int` 等价于 `func Set(t *T, a int) int`。〔TB24 p6-7〕
+原来在点号左边的接收者，现在显式排在普通参数之前。c.Value() 对应 Value(c)，c.Add(3) 在 c 可寻址时对应 Add(&c, 3)。这与 C++ 非静态成员调用带有隐含 this 的思路有相似之处，但 Go 的接收者明确写在声明上，既可以是值，也可以是指针，不能一概当成 this 指针。方法仍然绑定到类型，不会因为这种等价分析就失去类型归属。〔TB24 p6-7〕
 
-**等价转换后的函数的类型，就是方法的类型**。这个转换由 Go 编译器在编译和生成代码时自动完成，源码层面看不到它，但它决定了方法调用时参数如何传递。〔TB24 p6-7〕
-
-这套等价关系有一个直接用处：分析"方法会不会修改原实例"时，把方法改写成普通函数，按函数参数值传递的语义推一遍即可。下一节的并发难题会再用一次。
-
-### 方法表达式：把方法当函数用
-
-方法本质上既然是函数，就可以不写 `t.Set(1)`，而是直接以类型名调用：`(*T).Set(&t, 1)`。这种形式叫**方法表达式**：使用时显式补上作为第一个参数的 receiver 实例，类似 C++ 的静态方法。〔TB24 p7-8〕
-
-方法自身的类型就是普通函数类型，所以方法可以像函数值一样赋给变量：
+沿着这个模型，Get 与 Set 的原始例子也能完整保留。下面是一个独立程序，它同时声明方法与等价函数，再把方法表达式赋给变量：
 
 ```go
-var c Counter
-f1 := (*Counter).Add // f1 的类型：func(*main.Counter, int)
-f2 := Counter.Value  // f2 的类型：func(main.Counter) int
-f1(&c, 3)            // 等价于 c.Add(3)
-fmt.Println(f2(c))   // 3
+package main
+
+import "fmt"
+
+type T struct { a int }
+
+func (t T) Get() int { return t.a }
+func (t *T) Set(a int) int { t.a = a; return t.a }
+
+func Get(t T) int { return t.a }
+func Set(t *T, a int) int { t.a = a; return t.a }
+
+func main() {
+    var t T
+    t.Set(1)
+    fmt.Println(t.Get())
+    fmt.Println(T.Get(t))
+    fmt.Println((*T).Set(&t, 2))
+    f1 := (*T).Set
+    f2 := T.Get
+    fmt.Printf("%T\n", f1)
+    fmt.Printf("%T\n", f2)
+    f1(&t, 3)
+    fmt.Println(f2(t))
+}
 ```
 
-用 `%T` 打印 `f1`、`f2`，输出 `func(*main.Counter, int)` 和 `func(main.Counter) int`，receiver 就是函数的第一个普通参数。这是"方法的本质是函数"最直接的证据。〔TB24 p7-8〕
+按这些调用推导，三个数值行先是 1、1、2，接着两个函数类型是 func(*main.T, int) int 和 func(main.T) int，最后的数值是 3。T.Get 与 (*T).Set 叫方法表达式，得到普通函数值，调用时必须显式提供第一个接收者实参。f1、f2 能作为右值赋给变量，也能继续作为回调参数传递。〔TB24 p7-8〕
 
-方法表达式有一个限制：通过它，`Counter` 只能调用 `Counter` 方法集合中的方法，`*Counter` 同理。方法集合正是下一小节的主角。〔TB24 p7-8〕
+Counter 版本完全遵守同样的规则：(*Counter).Add 的类型是 func(*Counter, int)，Counter.Value 的类型是 func(Counter) int。Add 没有返回值，所以它的方法表达式也没有返回值；不能把原来 Set 的 int 返回值照抄过来。这种分析说明的是可观察语义与函数签名，不要求优化后的机器码仍保留某个独立调用，编译器还可能内联。
 
-### 三个 six：用方法本质分析并发难题
+方法表达式不是 C++ 的静态成员方法，也不要求该类型有静态成员。它选择的是某个类型方法集合中已有的方法。(*T).Get 也合法，类型为 func(*T) int：它取出指针所指的 T 值，再按值传入 Get。T.Set 则有意不能编译，因为 T 的方法集合没有指针接收者方法 Set。普通调用 t.Set(1) 可以自动取地址，不代表类型名 T 也能在方法表达式中自动变成 *T。〔TB24 p7-8〕
 
-方法的本质有什么用？看一个真实的并发问题。下面的代码在两个切片上做同样的事，输出却不一样〔TB24 p9〕：
+### 三个 six：先分清传入的是谁的地址
+
+下面保留一个历史问题的完整程序。print 使用指针接收者，两个切片分别保存指针和值。它不仅用于讲 goroutine，也用于观察接收者在启动 goroutine 时怎样变成实参。〔TB24 p9-10〕
 
 ```go
 package main
 
 import (
-	"fmt"
-	"time"
+    "fmt"
+    "time"
 )
 
-type field struct {
-	name string
-}
+type field struct { name string }
 
-func (p *field) print() {
-	fmt.Println(p.name)
-}
+func (p *field) print() { fmt.Println(p.name) }
 
 func main() {
-	data1 := []*field{{"one"}, {"two"}, {"three"}}
-	for _, v := range data1 {
-		go v.print()
-	}
-
-	data2 := []field{{"four"}, {"five"}, {"six"}}
-	for _, v := range data2 {
-		go v.print()
-	}
-
-	time.Sleep(3 * time.Second)
+    data1 := []*field{{"one"}, {"two"}, {"three"}}
+    for _, v := range data1 {
+        go v.print()
+    }
+    data2 := []field{{"four"}, {"five"}, {"six"}}
+    for _, v := range data2 {
+        go v.print()
+    }
+    time.Sleep(3 * time.Second)
 }
 ```
 
-多核 macOS 上的输出是 one、two、three 后面跟着三个 six（行序可能因 goroutine 调度而异）。奇怪的地方在 `data2`：为什么不是 four、five、six？〔TB24 p9-10〕
+末尾的 Sleep 给六个子 goroutine 留出运行时间：main 返回时程序会结束，不会自动等待它们。不过睡三秒不等于等待它们完成，没有完成同步，也不保证输出次序，后面会把它换成明确的等待。课程在旧循环语义下观察到 one、two、three 加三个 six，具体行序依调度变化。这不是当前语言版本下上面这段 := 循环必然具有的结果。〔TB24 p9-11〕
 
-末尾的 `time.Sleep(3 * time.Second)` 不是可有可无的装饰。main goroutine 一退出，整个应用程序就跟着退出〔TB31 p8〕，不给这 3 秒的话，main 大概率等不到那 6 个子 goroutine 被调度执行；它给的是 6 个子 goroutine（data1 三个加 data2 三个）被调度执行的机会。
-
-按方法本质做等价变换，把 `go v.print()` 写成方法表达式形式，参数怎么绑的一目了然（变换前后输出一致）〔TB24 p10〕：
+先不考虑版本，分别把两个循环改写成方法表达式；下列代码替换原程序中的循环部分，依赖原来的类型和切片变量：
 
 ```go
 for _, v := range data1 {
-	go (*field).print(v) // data1 的元素类型是 *field，v 就是元素地址
+    go (*field).print(v)
 }
-
 for _, v := range data2 {
-	go (*field).print(&v) // data2 的元素类型是 field，必须取地址
+    go (*field).print(&v)
 }
 ```
 
-- `data1`：元素类型 `*field` 与 receiver 参数类型一致，`v` 就是各元素的地址，直接传入，延迟执行也能打印各自的 one、two、three。〔TB24 p10〕
-- `data2`：元素类型 `field` 与 receiver 类型不同，必须取地址。每次传入的 `&v` 是**循环变量 `v` 的地址**，不是切片各元素的地址。〔TB24 p11〕
+data1 的 v 已经是 *field，传入的是各元素保存的指针值。data2 的 v 是 field，调用指针方法需要 &v；这个地址属于循环变量，不是 data2 元素的地址。range 把元素复制给 v 后，&v 指向的始终是那份迭代变量。这一差别不随 Go 1.22 改变。go 语句的函数值与实参在启动方求值，接收者也在此时确定；这不是一个“闭包稍后才求值 v”的例子，而是把某个已经算出的指针传给稍后运行的方法。〔TB24 p10-11〕
 
-而 `for range` 的循环变量 `v` 在整个循环过程中只有一个（旧版语义下 for range 声明的循环变量只创建一次、逐轮复用），`data2` 迭代完成后，`v` 是最后一个元素 six 的拷贝。这些子 goroutine 往往要等 main 执行到 `time.Sleep` 才被调度，此刻解引用 `&v`，读到的都是同一个 six。〔TB24 p11〕
+旧语言语义下，:= 声明的 v 在整个循环中复用，第二个循环于是反复传入同一个地址。如果三个 print 都等到循环结束才读它，就会读到最后复制进去的 six。但调度可能让读取更早发生；原程序既没有固定这个时机，也没有同步循环写入与 goroutine 读取，旧语义的第二个循环还存在数据竞争，不能把“三个 six”当成规范保证的唯一输出。〔TB24 p11〕
 
-**版本边界**：上面的分析出自原课程，按 Go 1.21 及更早的循环变量语义讲解〔TB24 p9-11〕。Go 1.22 起，采用相应语言版本的代码里，`for` 用 `:=` 声明的循环变量每轮迭代都新建一份，`&v` 各轮指向不同变量，同样的代码在延迟调度下会输出 four、five、six，而不是三个 six（这是语言规范的修正，原课文本未涉及；本书并发一章 `guide/handbook/06-concurrency-basics.md` 有同样的提醒）。读老资料里的"三个 six"分析时，先确认它写在哪个语义阶段。
+Go 1.22 引入的规则是：采用 Go 1.22 或更新语言版本时，range 子句用 := 声明的迭代变量每轮新建。因此上面 data2 每轮的 &v 指向不同的 field 副本；若六个 goroutine 都完成，应各打印 one 到 six 一次，行序不保证。不能只看安装的工具链版本：模块的 go.mod 中 go 指令等语言版本设置也参与决定采用哪套语义。当前工具链编译旧语言版本的包，不应被描述成“一律已经修好”。依据是现行规范 For statements 与 Go 官方文章 https://go.dev/blog/loopvar-preview，而不是 2021 年课程已经包含了这项变化。
 
-〔实测〕这套新语义的预言可以直接验证：在 go1.26.4 darwin/arm64 上运行上面的原始问题代码，输出是 six、one、four、five、three、two，六个值互不相同，没有出现三个 six，两个循环各打各的元素，这正是每轮新建循环变量的直接结果。
+如果提前声明 v，再写 for _, v = range data2，即使使用新语言版本，仍然是反复赋值给同一个已有变量，不会因 Go 1.22 自动变成各轮新变量。若目标是修改切片里的原元素，&v 在新旧语义下都不是正确地址；应该按下标取 &data2[i]。这与是否避免重复输出是两个不同要求。
 
-### 修法：换接收者类型
+### 改成值接收者，为什么能避开历史问题
 
-课程给的修复方法只有一行：把 `print` 的 receiver 从 `*field` 改成 `field`，程序就输出 one 到 six。〔TB24 p11-12〕修后的完整代码只动 receiver 这一处，其余逐行不变：
+这里 print 只读取 name，不需要修改原 field，可以改成值接收者。课程的修法只改这一行，其余保持前一个完整程序的样子；两个循环的等价调用分别变成 field.print(*v) 与 field.print(v)。go 语句求值时已经复制出本轮的 field，方法稍后运行不再通过 &v 读取那个被复用的变量，因而在旧循环语义下也避开了这个共享地址问题。值接收者的复制是启动时发生，不是“编译时就把运行时数据初始化好”。〔TB24 p11-12〕〔TB24 p14〕
+
+下面给出完整的值接收者版本，同时把等待改成 channel 完成通知。与原版只改接收者的修法相比，这里额外改的是等待方式：每个工作 goroutine 打印后发送一次通知，main 收满六次才结束；输出行序仍不作保证。
 
 ```go
 package main
 
-import (
-	"fmt"
-	"time"
-)
+import "fmt"
 
-type field struct {
-	name string
-}
+type field struct { name string }
 
-func (p field) print() {
-	fmt.Println(p.name)
-}
+func (p field) print() { fmt.Println(p.name) }
 
 func main() {
-	data1 := []*field{{"one"}, {"two"}, {"three"}}
-	for _, v := range data1 {
-		go v.print()
-	}
-
-	data2 := []field{{"four"}, {"five"}, {"six"}}
-	for _, v := range data2 {
-		go v.print()
-	}
-
-	time.Sleep(3 * time.Second)
+    done := make(chan struct{}, 6)
+    data1 := []*field{{"one"}, {"two"}, {"three"}}
+    for _, v := range data1 {
+        // 先复制值，再交给 goroutine；等价于本轮的 field.print(*v)。
+        go func(p field) { p.print(); done <- struct{}{} }(*v)
+    }
+    data2 := []field{{"four"}, {"five"}, {"six"}}
+    for _, v := range data2 {
+        go func(p field) { p.print(); done <- struct{}{} }(v)
+    }
+    for i := 0; i < 6; i++ { <-done }
 }
 ```
 
-修改后程序的输出是 one、two、three、four、five、six（因 Goroutine 调度顺序不同，你机器上的输出顺序可能与这里不同）。〔TB24 p12〕
+另一个历史修法是保留 *field 接收者，只在 data2 循环体内先写 v := v，再 go v.print()。内层声明用本轮值初始化新副本并遮蔽外层变量，传入的是各自副本的地址。这个办法对旧语义或使用 = 赋值的共享循环变量有效；新语义下直接用 := 声明的循环通常无需再加一次遮蔽。〔TB24 p15〕
 
-原因是：receiver 变成 `field` 后，方法表达式的第一个参数类型也是 `field`，两个循环传入的都是**元素的值拷贝**：`data1` 的循环是 `field.print(*v)`，`data2` 的循环是 `field.print(v)`，每个 goroutine 在 go 语句处就拿到了自己那一轮的值，不再依赖循环变量的地址〔TB24 p14〕；这正好绕开了旧语义的循环变量复用问题。原课程把这个修法的原理留作思考题，留言区给出了与分析一致的解释。
+可以做两个观察练习：先把两种循环写法中的 &v 和 &data2[i] 打印出来，解释地址代表哪个对象；再用方法表达式写出两种接收者下 data1 与 data2 的实参。若要稳定重现“共享变量最后都是 six”，先把每轮得到的 &v 保存到指针切片，循环结束后再打印，而不要依赖 Sleep 猜调度时机。这样还能独立比较 := 的新旧语义以及 = 复用变量的情况。
 
-留言区还有另一种不改 receiver 的修法：让每个 goroutine 各拿一份循环变量。迭代 `data2` 时，在循环体开头加一行 `v := v`，用本轮新建的副本遮蔽外层的循环变量，`go v.print()` 捕获的就是这份各轮各自的副本。〔TB24 p15〕
+### 方法集合记录的是类型的能力，不是某一行能否调用
 
-### 方法集合：判断接口实现的唯一手段
-
-先看一个表面矛盾的程序〔TB25 p6-7〕：
+现在用一个同时要求 M1 和 M2 的接口检查值与指针。下面是独立的预期失败程序：i = pt 合法，i = t 有意触发编译错误。删掉失败行后，程序不调用方法，只展示赋值检查；pt 的 nil 状态不影响这个静态结论。〔TB25 p6-7〕
 
 ```go
-type Interface interface {
-	M1()
-	M2()
-}
+package main
 
+type Interface interface { M1(); M2() }
 type T struct{}
-
-func (t T) M1()  {}
+func (t T) M1() {}
 func (t *T) M2() {}
 
 func main() {
-	var t T
-	var pt *T
-	var i Interface
-
-	i = pt
-	i = t // 编译错误：T does not implement Interface（缺 M2）
+    var t T
+    var pt *T
+    var i Interface
+    i = pt
+    i = t // 有意错误：T 缺少接口要求的 M2
+    _ = i
 }
 ```
 
-`i = pt` 编译通过，`i = t` 却报错，编译器的理由是 T 没有实现接口方法列表中的 M2。表面上讲不通：如果说 T 因为"只实现了 M1"而不合格，那 `*T` 不也只实现了 M2、没实现 M1 吗？为什么它能赋值？有些事情并不是表面看起来的样子。〔TB25 p6-7〕
+T 声明了值方法 M1，*T 声明了指针方法 M2。语言规则规定，定义类型 T 的方法集合包含接收者为 T 的方法；指向它的 `*T` 的方法集合同时包含接收者为 T 和 `*T` 的方法，前提是 T 不是指针或接口类型。于是 T 的集合只有 M1，*T 的集合有 M1 与 M2。*T 并不是“只有自己声明的 M2”，所以它可以满足接口。〔TB25 p7-10〕
 
-解开悖论要靠**方法集合**（method set）：它是判断一个类型是否实现了某接口类型的唯一手段，可以说"方法集合决定了接口实现"。〔TB25 p6-7〕
-
-Go 中任何一个类型都有属于自己的方法集合，它是类型的一个"属性"。没有定义方法的类型（比如 `int`）拥有**空方法集合**。接口类型比较特殊：它只列出方法、不定义方法体，接口类型的方法集合就是它方法列表里的所有方法；下面重点讲非接口类型的方法集合。〔TB25 p7〕
-
-想亲眼看一个类型的方法集合，可以用这个工具函数：〔TB25 p7-8〕
-
-```go
-func dumpMethodSet(i interface{}) {
-	dynTyp := reflect.TypeOf(i) // 第一步：取出接口参数的动态类型
-	if dynTyp == nil {
-		fmt.Printf("there is no dynamic type\n") // 为 nil 时打印提示并返回
-		return
-	}
-
-	n := dynTyp.NumMethod() // 第二步：拿到方法个数
-	if n == 0 {
-		fmt.Printf("%s's method set is empty!\n", dynTyp) // 为 0 说明方法集合为空
-		return
-	}
-
-	fmt.Printf("%s's method set:\n", dynTyp)
-	for j := 0; j < n; j++ {
-		fmt.Println("-", dynTyp.Method(j).Name) // 第三步：逐个打印方法名
-	}
-}
-```
-
-拿 `int` 和一个自定义类型试一下〔TB25 p8-9〕：
-
-```go
-type T struct{}
-
-func (T) M1() {}
-func (T) M2() {}
-
-func (*T) M3() {}
-func (*T) M4() {}
-
-func main() {
-	var n int
-	dumpMethodSet(n)
-	dumpMethodSet(&n)
-
-	var t T
-	dumpMethodSet(t)
-	dumpMethodSet(&t)
-}
-```
-
-输出：
-
-```text
-int's method set is empty!
-*int's method set is empty!
-main.T's method set:
-- M1
-- M2
-
-*main.T's method set:
-- M1
-- M2
-- M3
-- M4
-```
-
-`T` 的方法集合包含 M1、M2，符合预期；但 `*T` 的方法集合除了预期的 M3、M4，居然还包含 `T` 定义的方法 M1、M2，一共四个。这不是程序输出错误，而是 Go 语言的规定：**`*T` 类型的方法集合，包含所有以 `*T` 为 receiver 参数类型的方法，以及所有以 `T` 为 receiver 参数类型的方法**；`T` 的方法集合则只包含值接收者方法。〔TB25 p9〕
-
-现在回到悖论。对开头那对 `T`（M1 值接收者、M2 指针接收者）再跑一次 `dumpMethodSet`：
-
-```text
-main.T's method set:
-- M1
-
-*main.T's method set:
-- M1
-- M2
-```
-
-`T` 的方法集合只有 M1，缺接口要求的 M2，所以 `t` 赋给 `Interface` 被拒绝；`*T` 的方法集合是 M1、M2，与 `Interface` 接口类型的方法集合完全一样，所以 `pt` 能赋值。〔TB25 p9-10〕`*T` 从来不是"只实现了 M2"，它的方法集合里本来就有 M1，这就是为什么编译器放行 `i = pt`、拦下 `i = t`。一个把接口方法一部分声明成值接收者、一部分声明成指针接收者的类型，值形式一定无法实现该接口。本章开头的 `Email`、`SMS` 全用值接收者，`Sender` 才同时接受 `Email{}` 和 `&Email{}`。
-
-现在可以给出精确的判定条件：**如果类型 `T` 的方法集合与接口类型 `I` 的方法集合相同，或者 `T` 的方法集合是 `I` 方法集合的超集，就说 `T` 实现了接口 `I`**。方法集合这个概念在 Go 中的主要用途，正是判断某个类型是否实现了某个接口；它像"胶水"一样把自定义类型与接口隐式地粘结在一起，后面讲结构体嵌入时，判断新类型拥有哪些方法还要靠它。〔TB25 p10-12〕
-
-想动手验证，练习包里有现成的矩阵：`exercises/p30/iface_test.go:43` 的 `TestMethodSetMatrix` 枚举 T/`*T` 对同一接口的赋值组合，`exercises/p30/iface.go:40` 用 `var _ Iface = (*Impl)(nil)` 做编译期断言。
+方法集合是类型的属性，每个类型都有，没有方法的 int、*int 就拥有空集合。对这里仅由方法组成的普通接口，实现条件是具体类型的方法集合覆盖接口要求，方法名与签名均须匹配；可以有额外方法，不要求恰好一样。接口嵌入所要求的方法也要计入。泛型约束还可包含类型项，不能把所有约束的满足条件都简化为只看方法名。这个“能力覆盖”的规则把自定义类型与接口隐式连接起来，后面判断嵌入类型能用哪些方法还要继续使用。〔TB25 p7〕〔TB25 p10-12〕
 
 ### 接收者选型的第三原则：先看要不要实现接口
 
