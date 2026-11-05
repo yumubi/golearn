@@ -1718,32 +1718,48 @@ TB29 p1 引述 Russ Cox：“如果要从 Go 语言中挑选出一个特性放�
 
 </details>
 
-## 六、嵌入：复用方法，但不是继承
+## 六、嵌入：让已有能力成为新类型的一部分
 
-除了通过接口替换行为，程序还经常需要复用已有实现。Go 可以在结构体中**嵌入**另一个类型：写类型名而不另起字段名。被嵌入的值仍是一个字段；在没有名称冲突时，外层可以直接访问它的字段和方法。例如 `s.Read` 可以表示 `s.Reader.Read`。这种方法提升方便了访问，但不建立父子类型关系。〔TB26 p9-10〕
+前面的 Welcome 通过 Sender 使用 Email 或 SMS。接口解决了“调用方怎样换实现”，但另一个需求是“新类型怎样复用已有能力”。例如，给邮件发送器加配置，仍希望它能作为 Sender 传给 Welcome。Go 可以把已有类型嵌入结构体，让字段和方法在规则允许时提升到外层；也可以把小接口嵌入大接口，组合行为要求。这两种都叫类型嵌入，前者组合字段与实现，后者组合接口要求。它们都不建立类的父子关系。〔TB26 p2〕〔TB30 p4-6〕
 
-### 接口嵌入：基于已有接口构建新接口
+### 接口嵌入组合的是要求，不是实现
 
-原课把"在一个类型的定义中嵌入其他类型"统称为类型嵌入，并区分两种形式：接口类型的类型嵌入与结构体类型的类型嵌入。上一段说的是结构体一侧，这里先看两种里更简单的一种：接口嵌入接口；结构体一侧随后展开。〔TB26 p2〕
+假设原来的 Sender 只要求 Send(string)，另一段代码还需要关闭发送器。可以保留 Sender，再把两种要求组合起来。下面是依赖前文 Sender 的类型声明片段：
 
-先用一对接口直观感受。`E` 声明两个方法：
+```go
+type CloseSender interface {
+	Sender
+	Close() error
+}
+```
+
+CloseSender 要求同一个实现同时提供 Send(string) 和 Close() error。Sender 的 Send 被并入了它的方法集合，并不是给接口复制了一段发送实现。Welcome 只需要发送，仍接收 Sender，不必因为出现了新接口就承担关闭职责。用抽象的方法名看同一规则，下面的 I 与 FlatI 表达相同的方法要求；参数名不影响签名匹配。〔TB26 p2-3〕
 
 ```go
 type E interface {
 	M1()
 	M2()
 }
+
+type I interface {
+	E
+	M3()
+}
+
+type FlatI interface {
+	M1()
+	M2()
+	M3()
+}
 ```
 
-再定义一个方法集合为 M1、M2、M3 的接口 `I`。平铺的写法是逐个列出三个方法；由于其中的 M1、M2 与 `E` 的方法完全相同，也可以把这两个方法换成嵌入 `E`，写成 `type I interface { E; M3() }`。带嵌入的定义与平铺 M1、M2、M3 的定义等价：接口类型嵌入的语义，就是新接口把嵌入接口的方法集合并入自己的方法集合。〔TB26 p2-3〕
+组合以后，方法要求更多，可满足它的具体类型反而更少：实现 I 的类型必须同时实现 E 和 M3。对本章这种只含方法要求的基本接口，可以说“方法集合取并集”；用 Go 1.18 起的类型集语言描述，则是“能够满足各项要求的类型集合取交集”。这不是两套相反规则，而是在分别数方法和数可用类型。一般接口还可以包含类型项或联合项，用于泛型约束；因此“接口只能嵌入接口”只能作为旧式基本接口的讲法，不能概括现行全部接口语法。泛型约束的展开留在泛型章。〔TB26 p2-3〕现行依据：Go 语言规范 Interface types、Embedded interfaces、General interfaces。
 
-那为什么不在接口里平铺方法列表？按 Go 惯例，接口只包含少量方法，常常只有一个。方法一多，平铺的定义既难读，也无法复用已有接口；嵌入让新接口站在已有接口之上组合而成。这是 Go 基于已有接口类型构建新接口类型的惯用法，也是组合设计哲学的体现。〔TB26 p3-4〕
+那为什么不直接平铺方法列表？按 Go 语言惯例，接口类型只包含少量方法，常常只有一个方法；把已有接口嵌入新接口来实现组合，是 Go 基于已有接口类型构建新接口类型的惯用法，也是 Go 组合设计哲学的一种体现。平铺与嵌入在表达能力上等价，惯例偏好嵌入，是为了让新接口站在已有小接口之上组合而成。〔TB26 p3〕
 
-标准库里最典型的组合在 `io` 包。本章第二节已经用过 `io.Writer`，它就是只含一个方法的基本接口；`io` 包用 Reader、Writer、Closer 这三个单方法接口组合出一系列大接口：〔TB26 p4〕
+小接口容易这样组合。io 包先分别定义 Reader、Writer、Closer，再按实际任务组合成双能力或三能力接口。不需要给每一种设备单独造一棵类型继承树。下面是 io 包这些接口的定义形式，属于声明摘录，不是完整可运行程序。〔TB26 p3-4〕
 
 ```go
-// $GOROOT/src/io/io.go
-
 type Reader interface {
 	Read(p []byte) (n int, err error)
 }
@@ -1778,15 +1794,10 @@ type ReadWriteCloser interface {
 }
 ```
 
-`io.ReadWriter` 由 Reader 和 Writer 嵌入而成，方法集合就是 Read 和 Write 两个方法；要一个同时支持读、写、关闭的接口，就照 `ReadWriteCloser` 的写法把三个基本接口都嵌入进去。
-
-这种组合方式有一段历史约束要交代。Go 1.14 之前，新接口嵌入多个接口类型时有两条限制：各嵌入接口的方法集合不能有交集；嵌入接口方法集合里的方法名，也不能与新接口中其他方法同名。违反任意一条，编译器都报 duplicate method：〔TB26 p5〕
+Go 1.14 之前，嵌入接口之间不能出现同名方法，嵌入方法也不能与外层显式声明的方法重名。下面的 Interface3 和 Interface4 在当时分别因为 M1、M2 重复而被拒绝；TB26 使用 Go 1.12.7 展示了 duplicate method。自 Go 1.14 起，如果同名方法的签名一致，这两种组合都允许。下面的声明是现行合法片段，不应再给它们加上“当前编译错误”的注释。〔TB26 p5〕
 
 ```go
-type Interface1 interface {
-	M1()
-}
-
+type Interface1 interface { M1() }
 type Interface2 interface {
 	M1()
 	M2()
@@ -1794,96 +1805,22 @@ type Interface2 interface {
 
 type Interface3 interface {
 	Interface1
-	Interface2 // Error: duplicate method M1
+	Interface2
 }
 
 type Interface4 interface {
 	Interface2
-	M2() // Error: duplicate method M2
-}
-
-func main() {
-}
-```
-
-这段代码在 Go 1.12.7 下无法编译。两处报错的原因不同：Interface3 是因为嵌入的 Interface1 与 Interface2 方法集合有交集，交集是 M1；Interface4 是因为它自己的方法 M2，与嵌入接口 Interface2 里的方法 M2 重名。自 Go 1.14 起，这些约束被去除了：原作者用 Go 1.17 运行同一示例不再得到编译错误；本机 go1.26.4（darwin/arm64）也实测复核过，Interface1 与 Interface2 这两个都含 M1 的接口嵌入后编译通过，没有 duplicate method 报错。约束解除放松的是编译检查，"方法集合并入"的语义本身没有变化。原课收束说，接口类型的类型嵌入比较简单，把握好"方法集合并入"这个语义即可。〔TB26 p5〕
-
-关键差别要用代码看：
-
-```go
-package main
-
-import "fmt"
-
-type Base struct{ Name string }
-
-func (b Base) Hello() string { return "hi " + b.Who() }
-func (b Base) Who() string   { return b.Name }
-
-type Child struct{ Base }
-
-func (c Child) Who() string { return "child" }
-
-// 想要"子类重写生效"：把可变部分作为接口参数传进去
-type Whoer interface{ Who() string }
-
-func Hello(w Whoer) string { return "hi " + w.Who() }
-
-func main() {
-	c := Child{Base{"base"}}
-	fmt.Println(c.Hello(), "|", c.Who())
-	fmt.Println(Hello(c))
-}
-```
-
-```text
-hi base | child
-hi child
-```
-
-`c.Hello()` 实际调用 `Base.Hello`，接收者是 `c.Base`。因此，方法内部的 `b.Who()` 调用的是 `Base.Who`；外层定义的 `Child.Who` 不会改变它。相比之下，独立函数 `Hello` 接受 `Whoer` 接口，传入 `c` 后调用的是 `Child.Who`。接口调用可以实现多态，嵌入本身不提供继承式重写。
-
-方法调用的绑定不受嵌入影响，方法集合却会因嵌入而扩充。嵌入对类型的要求两边不一样：接口类型只能嵌入接口类型，结构体则既可以嵌入自定义类型，也可以嵌入接口类型。用本章第三节定义过的 `dumpMethodSet` 看看结构体嵌入接口类型后会发生什么，其中 `T` 自身只声明了方法 M3：〔TB26 p10-11〕
-
-```go
-type I interface {
-	M1()
 	M2()
 }
-
-type T struct {
-	I
-}
-
-func (T) M3() {}
-
-func main() {
-	var t T
-	var p *T
-	dumpMethodSet(t)
-	dumpMethodSet(p)
-}
 ```
 
-```text
-main.T's method set:
-- M1
-- M2
-- M3
+放宽不等于允许重载。如果把 Interface4 的 M2() 改成 M2(string)，同名方法的签名不一致，仍然非法；在同一个接口里直接写两遍 M2()，也不是这次放宽的范围。嵌入解决重复契约的组合，不负责在两个不同签名间挑选一个。现行依据：Go 语言规范 Embedded interfaces；这里的历史版本条件见〔TB26 p5〕。
 
-*main.T's method set:
-- M1
-- M2
-- M3
-```
+### 结构体嵌入首先仍是字段
 
-`T` 原本只有 M3，嵌入 `I` 后，`I` 的方法集合并入了 `T` 的方法集合；又因为 `*T` 的方法集合包括 `T` 的方法集合（第三节刚得出的规则），所以 `T` 与 `*T` 的方法集合都包含 M1、M2、M3。结论：**结构体类型的方法集合，包含嵌入的接口类型的方法集合**。按第三节的判定条件，`T` 和 `*T` 便都实现了要求这三个方法的接口，尽管 `T` 对 M1、M2 一行实现代码都没写。本机 go1.26.4 实测输出与上面一致，两个类型各 3 个方法。〔TB26 p11〕那如果嵌入的多个接口方法集合出现交集、结构体自己又没实现交集里的方法，调用时会怎样？这个问题留到后面展开。
+接口没有要保存的发送实现，结构体则需要真实的数据。把 Email 写进另一个结构体而不另起字段名，得到的是名为 Email、类型为 Email 的嵌入字段。对带包名的类型，只取不带包限定符的类型名作字段名；io.Reader 的字段名是 Reader，*strings.Reader 的字段名也叫 Reader。字段是否导出看这个名字的首字母，不能把“嵌入”当作突破包可见性的办法。〔TB26 p6-8〕
 
-### 结构体嵌入：字段、提升与代理
-
-接口嵌入把方法集合并入新接口，接口自身不需要任何实现；结构体嵌入则把一个既有类型整个装进结构体。与只能嵌入接口类型的接口嵌入不同，结构体可以嵌入任意自定义类型或接口类型〔TB26 p10〕，实现层面的复用正是从这里开始的。
-
-**嵌入字段怎么声明？**把类型名、类型的指针类型名或接口类型名直接写进结构体定义，不另起字段名，这个标识符就既是字段名，也是字段类型，这样的字段叫嵌入字段（Embedded Field）〔TB26 p6-7〕：
+先把几种字段放在一起看。T1 是整数定义类型，t2 是结构体，I 是接口；结构体不只可以嵌入结构体。下面是独立的声明片段，I 只需要 M1，与上一小节的三方法 I 分属不同示例文件。〔TB26 p6-7〕
 
 ```go
 type T1 int
@@ -1893,31 +1830,20 @@ type t2 struct {
 	m int
 }
 
-type I interface {
-	M1()
-}
+type I interface { M1() }
 
 type S1 struct {
-	T1  // 字段名 T1，类型为自定义类型 T1
-	*t2 // 字段名 t2，类型为 *t2
-	I   // 字段名 I，类型为接口类型 I
+	T1
+	*t2
+	I
 	a int
 	b string
 }
 ```
 
-`S1` 的前三个字段没有自己的名字：`T1` 表示字段名为 `T1`、类型为 `T1`；`*t2` 表示字段名为 `t2`、类型为 `*t2`；`I` 表示字段名为 `I`、类型为接口 `I`。后面的 `a`、`b` 是普通命名字段，放在一起作对照。现行语言规范把这两种合法写法固定成了规则：嵌入字段要么写成类型名 `T`，要么写成指向非接口类型名的指针 `*T`，且 `T` 自身不能是指针类型（本机 go1.26.4 工具链 `doc/go_spec.html:1082-1086`）。
+S1 的三个嵌入字段分别叫 T1、t2、I，类型分别是 T1、*t2、I。后面的 a、b 是普通命名字段。嵌入字段的合法声明形式是类型名 T，或指向非接口类型名的 `*T`；T 本身不能是指针类型或类型参数。因此 `type P *t2` 后不能嵌入 P，也不能嵌入接口指针 `*I`。这里禁止的是这种指针定义类型和接口指针，不是禁止正常的 `*t2` 嵌入。所有直接字段名仍须唯一；同时嵌入 T1 和 `*T1` 都会生成字段名 T1，因此不能出现在同一个结构体中。〔TB26 p8〕现行依据：Go 语言规范 Struct types。
 
-嵌入类型来自其他包时，字段名取类型名本身、去掉包限定符：嵌入 `io.Reader` 的字段名是 `Reader` 而不是 `io.Reader`，它代表的类型才是 `io.Reader`；嵌入 `*strings.Reader` 的字段名同样是 `Reader`，本机实测用 `%T` 打印 `s.Reader`，输出 `*strings.Reader`〔TB26 p8〕。嵌入字段的可见性与类型的可见性一致：嵌入类型名字首字母大写，这个嵌入字段就是可导出的〔TB26 p8〕。
-
-声明之后，嵌入字段在初始化和访问上与普通字段同法，马上用例子验证。不过先看两条硬约束，违反了编译器会直接报错〔TB26 p8〕：
-
-- 嵌入字段类型的底层类型不能为指针类型。原课把它与 Go 方法 receiver 的基类型约束并提：`type P *T` 之后，`P` 不能写进结构体定义。本机 go1.26.4 实测报错 `embedded field type cannot be a pointer`，检查位于编译器源码 `src/cmd/compile/internal/types2/struct.go:160`。
-- 嵌入字段的名字在结构体定义内必须唯一，因此两个名字相同的类型无法同时作为嵌入字段放进同一个结构体：`T1` 与 `*T1` 的嵌入字段名都是 `T1`，同时嵌入会报 `T1 redeclared`（实测报错位于 `src/cmd/compile/internal/types2/struct.go:204`）。
-
-原课对这两条的定位是“了解一下就可以”：它们都是编译期检查的硬约束，一旦违反编译器会提示，不涉及运行期行为。
-
-现在看完整的用法。`MyInt` 在 `*MyInt` 上声明了 `Add` 方法，结构体 `t` 有两个 `int` 字段，`S` 把它们连同 `io.Reader` 一起嵌入（为能独立运行，补全了 `package main` 与 import，原课文清单只展示了类型定义与 `main` 函数）：
+初始化也照字段规则进行：使用嵌入字段名作键，访问时仍然可以显式写出字段路径。下面保留一个同时嵌入指针、值、接口的完整程序。strings.Reader 在这里是确定的内存输入，但程序仍检查 Read 返回的错误，并只打印读到的 n 个字节。〔TB26 p7-8〕
 
 ```go
 package main
@@ -1930,9 +1856,7 @@ import (
 
 type MyInt int
 
-func (n *MyInt) Add(m int) {
-	*n = *n + MyInt(m)
-}
+func (n *MyInt) Add(m int) { *n += MyInt(m) }
 
 type t struct {
 	a int
@@ -1949,49 +1873,144 @@ type S struct {
 
 func main() {
 	m := MyInt(17)
-	r := strings.NewReader("hello, go")
 	s := S{
-		MyInt:  &m,
-		t:      t{
-			a: 1,
-			b: 2,
-		},
-		Reader: r,
-		s:      "demo",
+		MyInt: &m,
+		t: t{a: 1, b: 2},
+		Reader: strings.NewReader("hello, go"),
+		s: "demo",
 	}
-
-	var sl = make([]byte, len("hello, go"))
-	s.Reader.Read(sl)
-	fmt.Println(string(sl))
+	buf := make([]byte, len("hello, go"))
+	n, err := s.Reader.Read(buf)
+	if err != nil && err != io.EOF {
+		panic(err)
+	}
+	fmt.Println(string(buf[:n]))
 	s.MyInt.Add(5)
-	fmt.Println(*(s.MyInt))
+	fmt.Println(*s.MyInt)
 }
 ```
 
-运行输出：
+按代码推导，先读出 hello, go，再把 17 加到 22。MyInt: &m 让结构体保存了指向外部变量 m 的指针，Add 的指针接收者修改的正是 m；不是结构体把 m 的数值复制后单独修改。Reader 是 io.Reader 生成的字段名，所以字面量使用 Reader: 而不是 io.Reader:。普通字段 n 未初始化，保持零值；t 的 a、b 用嵌套字面量初始化，仍属于那个 t 字段。〔TB26 p7-8〕
 
 ```text
 hello, go
 22
 ```
 
-`S` 有三个嵌入字段 `MyInt`、`t`、`Reader` 和两个普通字段 `s`、`n`。定义里没有出现 `Reader` 这个名字，但复合字面量里却写了 `Reader: r`：这正是上面说的跨包命名规则，`io.Reader` 嵌入后的字段名就是 `Reader`。初始化直接用嵌入字段名作 field，与普通字段的 `s: "demo"` 写法完全一样；没有列出的 `n` 保持零值。访问也相同：`s.Reader`、`s.MyInt` 就是变量加选择符 `.` 加嵌入字段名。`s.Reader.Read(sl)` 把 `r` 里的字符串读进 `sl`，打印 `hello, go`；`s.MyInt.Add(5)` 之后 `*(s.MyInt)` 打印 `22`，`m` 的值从 17 变成了 22。注意 `Add` 声明在 `*MyInt` 上，所以必须经由嵌入的指针字段 `s.MyInt` 调用：`S` 内部持有指向 `m` 的指针，`Add` 修改的正是外部变量 `m` 所指的值〔TB26 p7-8〕。
+保持同一个程序，只把 s.Reader.Read(buf) 改成 s.Read(buf)，把 s.MyInt.Add(5) 改成 s.Add(5)，结果不变。选择符 s.Read 在没有遮蔽或歧义时找到嵌入字段 Reader 的 Read，调用效果就是 s.Reader.Read；s.Add(5) 同样交给 s.MyInt.Add(5)。这叫方法提升。s.a 也可以找到嵌入 t 的 a 字段，但提升字段不能直接当作外层复合字面量的键：go1.26 及之前要求字面量的键是结构体直接声明的字段名，S{a: 1} 不合法，仍须写 S{t: t{a: 1}}；Go 1.27 起键放宽为任意合法的字段选择符，允许提升字段作键，条件是该字段所经过的嵌入字段不是指针、且那个嵌入结构体没有被另一个键同时指定。〔TB26 p9〕现行字面量规则见 Go 语言规范 Struct types（Go 1.27 起）。
 
-到这里，嵌入字段的用法和普通字段看起来差别不大。真正的差别在调用上：把 `main` 里的显式调用换成直接通过 `s` 调用，只列变化的部分：
+这条转发路径可以理解为代理或委派：外层公开一个可用入口，实际工作由内层字段保存的值完成。编译器根据选择符规则确定路径；它可以为需要的方法集合、方法表达式或接口调用生成包装入口，但语言规则并没有要求“把内层方法体复制到外层”。接口字段参与转发时，最终行为还由该接口字段里的动态值决定。〔TB26 p9-10〕
 
-```go
-var sl = make([]byte, len("hello, go"))
-s.Read(sl)
-fmt.Println(string(sl))
-s.Add(5)
-fmt.Println(*(s.MyInt))
+```mermaid
+flowchart LR
+    A["调用 s.Read(buf)"] --> B["选择器解析到嵌入字段 Reader"]
+    B --> C["调用 s.Reader.Read(buf)"]
+    C --> D["接口字段中的具体 Reader 实现"]
 ```
 
-类型 `S` 自己并没有声明 `Read` 和 `Add`，直觉上这段代码应该无法通过编译。实际恰恰相反：它不但没有编译错误，还能正常运行，输出与显式调用版本完全相同的 `hello, go` 和 `22`〔TB26 p8-9〕。
+### 提升以后，值和指针各有哪些方法
 
-原因是编译器在背后做了一次转换。通过 `S` 的变量 `s` 调用 `Read` 时，Go 先发现类型 `S` 自身没有定义 `Read` 方法，于是查看 `S` 的嵌入字段对应的类型是否定义了 `Read`；找到 `Reader` 字段后，`s.Read` 的调用就被转换为 `s.Reader.Read`。`Add` 同理，`s.Add(5)` 等价于 `s.MyInt.Add(5)`。本机 go1.26.4（darwin/arm64）实测，`s.Read(sl)` 与 `s.Add(5)` 编译运行正常，输出与显式版本一致。这样一来，嵌入字段 `Reader` 的 `Read` 方法就被提升为 `S` 的方法，放进类型 `S` 的方法集合；`*MyInt` 的 `Add` 方法同理也被提升放进 `S` 的方法集合。〔TB26 p9〕从外部看，这种提升给人一种 `S` “继承”了 `io.Reader` 的 `Read` 实现、`*MyInt` 的 `Add` 实现的错觉。注意“继承”要加引号：这不是真正的继承，只是 Go 语言的一种“障眼法”〔TB26 p9〕。
+是否可以简写调用，和是否实现某接口，仍然需要分开。若结构体 S 嵌入值 T，S 与 `*S` 都提升 T 接收者方法，只有 `*S` 还提升 `*T` 接收者方法。若 S 嵌入 `*T`，S 与 `*S` 都提升 T 和 `*T` 接收者方法。前提始终是相应方法没有被更浅的同名字段或方法遮蔽，也没有同层冲突；不能不加条件地把所有嵌入字段的方法集合相加。〔TB26 p15-17〕
 
-这层障眼法的实质，是组合思想中的代理（delegate）模式：`S` 只是一个代理，对外提供它能代理的所有方法，比如例子里的 `Read` 和 `Add`；外界对 `S` 的 `Read` 方法发起调用后，`S` 把调用委派给它内部的 `Reader` 实例实际执行〔TB26 p10〕。嵌入字段的类型不同，`S` 能代理的方法就不同，这就引出一个更实用的问题：嵌入字段对结构体的方法集合究竟有哪些影响。
+把规则用两种内层类型同时展开，四种方法的来源就能在同一个程序里看清。这里的方法体不读接收者，是为了观察方法集合，而不是依赖零值嵌入指针能完成业务。完整程序使用 reflect 只列出这些导出方法，不会调用它们。〔TB26 p15-17〕
+
+```go
+package main
+
+import (
+	"fmt"
+	"reflect"
+)
+
+type T1 int
+func (T1) T1M1() {}
+func (*T1) PT1M2() {}
+
+type T2 int
+func (T2) T2M1() {}
+func (*T2) PT2M2() {}
+
+type T struct {
+	T1
+	*T2
+}
+
+func names(v any) []string {
+	typ := reflect.TypeOf(v)
+	var result []string
+	for i := 0; i < typ.NumMethod(); i++ {
+		result = append(result, typ.Method(i).Name)
+	}
+	return result
+}
+
+func main() {
+	fmt.Println(names(T{}))
+	fmt.Println(names(&T{}))
+}
+```
+
+按方法集合规则，T 应有 PT2M2、T1M1、T2M1；`*T` 还多 PT1M2。嵌入的 T1 以值保存，所以 T 的方法集合只得到它的值方法；`*T` 可以沿字段取到 `*T1`，于是再得到指针方法。另一个字段本来就是 `*T2`，外层无论值还是指针都已经持有它的地址，因此两边都得到 T2 的两种方法。〔TB26 p16-17〕
+
+```text
+[PT2M2 T1M1 T2M1]
+[PT1M2 PT2M2 T1M1 T2M1]
+```
+
+如果另有接口要求 PT1M2，T 的值不能赋给它，`*T` 可以。可寻址变量 t 却可以直接调用 t.PT1M2()，因为直接调用允许自动取地址；T{}.PT1M2() 以及从 map 取出的不可寻址 T 值没有这个保证。可寻址的语法便利没有给 T 的方法集合增添方法。“T 与 `*T` 变量都能调用”必须带上这项条件。另一个独立问题是字段能否使用：上面 T{} 的 `*T2` 是 nil，观察方法集合无妨，调用某个需要解引用它的方法可能 panic，尤其经 nil `*T2` 调用值接收者方法需要先取得一个 T2 值。
+
+把同样规则用到接口字段：结构体 T 嵌入 I，I 要求 M1、M2，T 再声明值方法 M3；在无冲突时，T 与 *T 的方法集合都包含这三个方法。下面是声明及观察片段；可以复用上个完整程序的 names，替换原来的 T1、T2、T 声明与 main，不要将两个 T 同放一个文件。〔TB26 p10-11〕
+
+```go
+type I interface {
+	M1()
+	M2()
+}
+type T struct { I }
+func (T) M3() {}
+
+func main() {
+	fmt.Println(names(T{}))
+	fmt.Println(names((*T)(nil)))
+}
+```
+
+两行都应列出 [M1 M2 M3]。这是类型层面的结论，不要求这里的 I 字段已初始化；但 var t T 的 I 是 nil，真正调用提升的 t.M1() 会尝试通过 nil 接口分派而 panic。声明了入口和准备好了接收调用的对象，是两件不同的事。〔TB26 p11〕
+
+### 嵌入不是继承，内层的自调用不会变成外层重写
+
+回到复用的边界。下面保留 Base、Child 这个小例子，因为它能把“直接调用外层同名方法”和“内层方法调用自己的另一个方法”放在同一行比较。独立函数 Hello 接受接口，展示另一条明确选择行为的路径。
+
+```go
+package main
+
+import "fmt"
+
+type Base struct { Name string }
+func (b Base) Hello() string { return "hi " + b.Who() }
+func (b Base) Who() string { return b.Name }
+
+type Child struct { Base }
+func (c Child) Who() string { return "child" }
+
+type Whoer interface { Who() string }
+func Hello(w Whoer) string { return "hi " + w.Who() }
+
+func main() {
+	c := Child{Base: Base{Name: "base"}}
+	fmt.Println(c.Hello(), "|", c.Who())
+	fmt.Println(Hello(c))
+}
+```
+
+第一行按语言规则是 hi base | child，第二行是 hi child。c.Hello() 找到的是 c.Base.Hello()，进入方法的接收者 b 是一个 Base 值。b.Who() 因而调用 Base.Who，它不知道哪个外层结构体保存着自己。直接写 c.Who() 则先找到 Child 自己的方法，遮住提升的 Base.Who。Hello(c) 是另一种设计：接口 Whoer 保存的具体值是 Child，所以接口调用选择 Child.Who。
+
+```text
+hi base | child
+hi child
+```
+
+在熟悉 Java 的读者看来，Child 这个名字很容易让人联想到 extends 与 override，但这里没有那条父子关系。不能把 Child 自动当成 Base 传参；需要 Base 时显式取 c.Base。外层同名方法不会改写 Base.Hello 的自调用，也不会让 Base 获得一个指向外层的隐含 this。若算法需要可替换步骤，就像 Hello(w Whoer) 这样明确传入所需行为，也可以使用函数参数等设计；接口是本章采用的一条多态路径，不是 Go 唯一可以表达多态或可替换行为的机制。嵌入委派的边界见〔TB26 p9-10〕〔TB30 p4-5〕。
 
 ### 冲突、歧义与测试伪对象
 
