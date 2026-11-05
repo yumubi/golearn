@@ -1547,112 +1547,171 @@ dumpEface 读取两个字，展开具体类型档案，再按 type switch 读取
 
 </details>
 
-### 装箱：接口赋值的运行时过程
+### 装箱保存的是值，但不是深拷贝
 
-装箱（boxing）是编程语言领域的基础概念，一般指把一个值类型转换成引用类型；原课给出的类比是 Java 中把 int 变量转换成 Integer 对象，这也是原课全文唯一一处 Java 内容。〔TB29 p20〕在 Go 语言中，将任意类型赋值给接口类型变量同样是装箱操作；有了前面对内部表示的学习，这一过程实际就是创建一个 eface 或 iface。〔TB29 p20〕类比边界要说清：Java 的 Integer 是带对象头与身份语义的完整对象，Go 的装箱只是为接口值准备运行时所需的两份信息，即类型信息与 data 指针；两者只在“值类型转向引用类型”这个方向上相似，不要把 Java 自动装箱的细节直接搬进 Go。
+具体值放入接口时，需要准备类型信息和数据表示，这个过程常被称为装箱。可以借 Java 把 int 转成 Integer 来理解“从直接的具体值转成可通过统一抽象使用的值”这个方向，但 Go 并没有因此构造一个 Java Integer 对象；不能把 Java 对象头、身份语义或缓存范围直接搬进 Go。Go 这里讨论的是怎样形成 eface 或 iface。〔TB29 p20〕
 
-用原课的例子看两次装箱：
+先看赋值语义，不猜测它落在堆还是栈。下面片段放在 main 并导入 fmt：
 
 ```go
-// interface_internal.go
+var n int = 61
+var ei any = n
+n = 62
+fmt.Println("data in box:", ei) // 预期 data in box: 61
+```
+
+ei 保存的是装入时的整数值 61，后来改 n 不会回头修改它。这是值复制语义，不以“每次必然分配堆内存”为前提；61 还可能走静态小值数据路径。〔TB29 p22〕
+
+复制也不是深拷贝。若装入的是指针，复制的是指针值，两个地方仍可指向同一对象；若装入的是 slice，复制的是切片描述符，底层数组仍可能共享；map 也不会因此复制整张映射。以下片段把这种边界接着展示出来：
+
+```go
+n = 61
+var pointerBox any = &n
+n = 62
+fmt.Println(*pointerBox.(*int)) // 62
+
+s := []int{1}
+var sliceBox any = s
+s[0] = 2
+fmt.Println(sliceBox.([]int)[0]) // 2
+
+m := map[string]int{"x": 1}
+var mapBox any = m
+m["x"] = 2
+fmt.Println(mapBox.(map[string]int)["x"]) // 2
+```
+
+sliceBox 的接口值没有被重新赋值，但它保存的切片描述符仍引用原数组；mapBox 也仍访问同一映射。装入包含这些字段的结构体同样如此。应把“原整数变量修改不影响整数副本”和“副本内部的引用仍共享对象”同时记住，不能把“装箱后与原变量无瓜葛”理解为递归复制所有可达数据。
+
+### 编译器准备类型字，运行时按需准备数据
+
+回到带 n、s 字段的 T。下面是一份独立的装箱观察程序，它和前面 type T int 的比较程序分别保存：
+
+```go
+package main
+
+import "fmt"
 
 type T struct {
-	n int
-	s string
+    n int
+    s string
 }
 
 func (T) M1() {}
 func (T) M2() {}
 
 type NonEmptyInterface interface {
-	M1()
-	M2()
+    M1()
+    M2()
 }
 
 func main() {
-	var t = T{
-		n: 17,
-		s: "hello, interface",
-	}
-	var ei interface{}
-	ei = t
-
-	var i NonEmptyInterface
-	i = t
-	fmt.Println(ei)
-	fmt.Println(i)
+    t := T{n: 17, s: "hello, interface"}
+    var ei any
+    ei = t
+    var i NonEmptyInterface
+    i = t
+    fmt.Println(ei)
+    fmt.Println(i)
 }
 ```
 
-此例的 `T` 是带 `M1`/`M2` 方法的结构体，与比较、dump 例子里带 `Error` 方法的 `type T int` 不是同一个类型。`ei = t` 与 `i = t` 两个赋值都会触发装箱。〔TB29 p20〕
+ei = t 需要形成空接口，类型字是 T 的类型信息；i = t 需要形成非空接口，类型字是 NonEmptyInterface × T 的 itab。两者都保存 T 的值；预期两行都打印 {17 hello, interface}。编译器已知源类型 fromType 与目标接口 toType，能够准备相应元数据，并选择数据部分的实现路径。这里 T 含有字符串字段，所以数据复制既要保留字段值，又要让 GC 正确知道哪些部分可能含指针。〔TB29 p20–23〕
 
-想知道 Go 在背后做了什么，把代码“下沉”一层看汇编。原课用 `go tool compile -S interface_internal.go` 输出汇编：`ei = t` 一行的关键指令是 `LEAQ type."".T(SB), AX`（把 T 的类型信息地址装入 AX）与 `CALL runtime.convT2E(SB)`；`i = t` 一行是 `LEAQ go.itab."".T,"".NonEmptyInterface…(SB)`（装入 itab 地址）与 `CALL runtime.convT2I(SB)`。〔TB29 p21〕两条语句各自先把常量 17、字符串地址与长度 MOVQ/LEAQ 进栈上的临时位置（autotmp_15），再把这个临时位置取地址作为第二参数传入：常量输入在编译期就被静态化到临时对象里。〔TB29 p21〕
+想知道 Go 在背后做了什么，可以把代码“下沉”一层看汇编。原课用 `go tool compile -S interface_internal.go` 输出汇编：`ei = t` 一行的关键指令是 `LEAQ type."".T(SB), AX`（把 T 的类型信息地址装入 AX）与 `CALL runtime.convT2E(SB)`；`i = t` 一行是 `LEAQ go.itab."".T,"".NonEmptyInterface…(SB)`（装入 itab 地址）与 `CALL runtime.convT2I(SB)`。〔TB29 p21〕两条语句还各自先把常量 17、字符串地址与长度 MOVQ/LEAQ 写入栈上的临时对象 autotmp_15（偏移 104、112、120(SP)），再用 `LEAQ ""..autotmp_15+104(SP), BX` 取这个临时对象的地址作为第二参数传入转换函数；可见元数据与输入值都由编译器在编译期安排，但栈临时对象本身不应被误说成“一定在只读区静态化的常量对象”。〔TB29 p21〕现行含 import 的完整程序通常用 `go build -gcflags=-S` 观察更方便。
 
-convT2E/convT2I 是 Go 1.15 时代的 runtime 符号，现行工具链已移除：本机 go1.21.5、go1.26.4、go1.27.3 的 runtime 全树都搜不到这两个函数。这一符号归属来自对工具链源码的核对，不是原课内容；原课全文未标版本号，唯二的版本提法是 dump 工具处的 Go 1.17。现行 `iface.go`（行号取自本机 go1.26.4 源码）提供的是另一组函数：`convT`（334 行，`mallocgc` 加 `typedmemmove`）、`convTnoptr`（348 行，`mallocgc` 加 `memmove`，不含指针的类型免指针扫描）、`convT16`（365 行）、`convT32`（378 行）、`convT64`（400 行）、`convTstring`（419 行）、`convTslice`（438 行），都在 `$GOROOT/src/runtime/iface.go`。
+在现行 Go 编译器中，构造类型字与准备数据字是分开的。直接表示的类型可以把自身表示放入 data；零大小值、某些零值、布尔与单字节整数、只读全局数据可以使用静态存储；适合且未逃逸的值可以放在栈临时变量；需要运行时帮助时，再选择转换函数。因此从“源码发生接口赋值”不能推导出“必定调用一个完整转换函数、必定堆分配”。相应实现可读 Go 1.26.4 的 cmd/compile/internal/walk/convert.go 的 walkConvInterface、dataWord 与 dataWordFuncName。
 
-原课贴出两个转换函数的实现（Go 1.17 时代源码），convT2E 用于把任意类型转成一个 eface，convT2I 用于转成一个 iface：
+确实选择通用分配路径时，runtime.convT 根据类型大小分配存储，用 typedmemmove 按类型复制值，返回可作为接口数据字的指针；不含指针的类型可走 convTnoptr，用不扫描指针的分配方式加 memmove。类型字仍由编译器构造接口时配上。对于整数、字符串、slice，还有专用数据转换函数：convT16、convT32、convT64、convTstring、convTslice。调用哪个函数取决于源类型的大小、对齐、是否含指针和具体形状等条件，并不是见到名字里有 64 就只有 int64 才能使用。〔TB29 p23〕
+
+<details>
+<summary>选读：历史 convT2E、convT2I 如何完成四步装箱</summary>
+
+前面正文引用的历史汇编出自原课对 interface_internal.go 的 go tool compile -S 观察；下面保留两份历史函数的源码逻辑，用于阅读旧资料，不是 Go 1.26.4 可直接调用的 API，也不是这版工具链生成代码时必须出现的符号。原文的 dump 工具标了 Go 1.17，不能因此把同讲中的所有历史汇编与 helper 也一律归入 Go 1.17。〔TB29 p21–22〕
 
 ```go
-// $GOROOT/src/runtime/iface.go
-
+// 历史 runtime 内部源码；仅供阅读。
 func convT2E(t *_type, elem unsafe.Pointer) (e eface) {
-	if raceenabled {
-		raceReadObjectPC(t, elem, getcallerpc(), funcPC(convT2E))
-	}
-	if msanenabled {
-		msanread(elem, t.size)
-	}
-	x := mallocgc(t.size, t, true)
-	typedmemmove(t, x, elem)
-	e._type = t
-	e.data = x
-	return
+    if raceenabled {
+        raceReadObjectPC(t, elem, getcallerpc(), funcPC(convT2E))
+    }
+    if msanenabled {
+        msanread(elem, t.size)
+    }
+    x := mallocgc(t.size, t, true)
+    typedmemmove(t, x, elem)
+    e._type = t
+    e.data = x
+    return
 }
 
 func convT2I(tab *itab, elem unsafe.Pointer) (i iface) {
-	t := tab._type
-	if raceenabled {
-		raceReadObjectPC(t, elem, getcallerpc(), funcPC(convT2I))
-	}
-	if msanenabled {
-		msanread(elem, t.size)
-	}
-	x := mallocgc(t.size, t, true)
-	typedmemmove(t, x, elem)
-	i.tab = tab
-	i.data = x
-	return
+    t := tab._type
+    if raceenabled {
+        raceReadObjectPC(t, elem, getcallerpc(), funcPC(convT2I))
+    }
+    if msanenabled {
+        msanread(elem, t.size)
+    }
+    x := mallocgc(t.size, t, true)
+    typedmemmove(t, x, elem)
+    i.tab = tab
+    i.data = x
+    return
 }
 ```
 
-按顺序拆 convT2E 的四个步骤：第一步 `mallocgc(t.size, t, true)` 按类型信息 t 分配一块大小为 t.size 的内存；第二步 `typedmemmove(t, x, elem)` 把 elem 指向的数据按类型 t 拷贝进这块新内存；第三步 `e._type = t` 填入 eface 的类型信息；第四步 `e.data = x` 让 data 指向新分配的内存。开头的 raceenabled/msanenabled 检查只在相应检测工具开启时读一次对象内存，不在装箱主路径上。〔TB29 p21-22〕convT2I 与它只有两点差别：类型信息不直接传入，而是先 `t := tab._type` 从 itab 里取；返回时填 `i.tab = tab` 与 `i.data = x`。分配与拷贝的思路完全一致。〔TB29 p22〕
+convT2E 的主过程有四步：按 t.size 分配 x；从 elem 按类型复制数据到 x；把 t 填进 e._type；把 x 填进 e.data。convT2I 同样分配与复制，只是先从 tab._type 取得具体类型，返回时填 i.tab 而非 e._type。开头 raceenabled、msanenabled 分支用于相应检测工具的读内存检查，不负责决定接口动态类型；未启用时不执行这些检查。〔TB29 p21–22〕
 
-装箱后，箱内数据存放在新分配的内存里，与原变量再无瓜葛。原课例子：
+Go 1.26.4 中的通用帮助函数是 convT、convTnoptr，以及若干专用数据转换函数，不应继续把旧符号 convT2E、convT2I 当成现代运行时接口。新 convT 仍有 mallocgc 与 typedmemmove 这条具体路径，但其返回的是数据指针，不是填好两字的完整 eface。新源码还包括 ASan 检查。历史代码把“分配、复制、填两个字”放在一个函数里，现代代码把职责拆开，不影响前面的接口赋值语义。
+
+
+</details>
+
+### 小整数与零值为什么有时不需要新内存
+
+专用函数不仅减少通用复制工作，还能复用静态数据。Go 1.26.4 的 runtime 声明 staticuint64s [256]uint64，内容是 0 到 255，由 runtime/ints.s 的 DATA 指令提供，并用 RODATA 标成只读。历史版本将同样内容写成 Go 数组字面量；变的是初始化表达方式，不是这里的小整数范围。〔TB29 p23〕
+
+以 convT64 为例，它先判断传入的 uint64 值是否小于 len(staticuint64s)，也就是严格小于 256。值为 0 至 255 时返回对应静态元素地址，不再新分配；值为 256 或更大时，走 mallocgc(8, uint64Type, false)，再把值写入这八字节。范围不是“所有绝对值小于 256 的有符号整数”：负数转换成这条路径所使用的无符号表示后，不在该范围内；其他编译器优化仍可能另行避免分配。不能把这一条件当作 Java Integer 缓存范围的复制品。
 
 ```go
-func main() {
-	var n int = 61
-	var ei interface{} = n
-	n = 62       // n的值已经改变
-	fmt.Println("data in box:", ei) // 输出仍是61
+// Go 1.26.4，runtime 内部源码片段，不是应用层可调用 API。
+func convT64(val uint64) (x unsafe.Pointer) {
+    if val < uint64(len(staticuint64s)) {
+        x = unsafe.Pointer(&staticuint64s[val])
+    } else {
+        x = mallocgc(8, uint64Type, false)
+        *(*uint64)(x) = val
+    }
+    return
 }
 ```
 
-`n = 62` 改的是 n 自己那块内存；`ei` 的 data 指向装箱时新分配的另一块内存，里面仍是 61，所以打印 `data in box: 61`。〔TB29 p22〕本机 go1.26.4 工具链复测：n 改为 62 后箱内仍是 61，与原课一致。
+convT16 与 convT32 也使用同一静态区，小值路径在大端平台上分别偏移六字节、四字节，以读取正确宽度的值；本章的 darwin/arm64 是小端，不需要这项调整。convTstring 对空字符串直接返回 zeroVal 的地址，否则分配并复制字符串描述符；convTslice 检查切片底层数组指针，指针为空时复用 zeroVal，否则分配并复制切片描述符。后者不是“长度为零就免分配”：非 nil 的空切片底层数组指针仍可能非空。专用函数不使用通用 typedmemmove，不代表它们会深拷贝字符串内容或 slice 底层数组。
 
-那么这些转换函数的类型信息从何而来？依赖编译器：编译器知道每个要转换为的接口类型（toType）与动态类型变量的类型（fromType）这一对类型，并根据它们选择适当的 convT2X 函数参与装箱操作。〔TB29 p23〕换句话说，具体调用哪个转换函数在编译期就已定好，运行时只负责执行。
+<details>
+<summary>选读：观察装箱路径时怎样控制结论范围</summary>
 
-### 装箱的成本与优化（选读）
+在需要单独观察帮助函数的实验中，可以依次让动态 int64、含指针结构体、无指针数组、uint16、string 逃逸到接口保存位置，再阅读 go build -gcflags=-S 的输出。它们可能分别走 convT64、convT、convTnoptr、convT16、convTstring；但常量输入、未逃逸输入或被优化掉的转换可能不出现这些调用。旧手册记录过一组这样的 Go 1.26.4 arm64 观察，不能将那次选择当作所有程序的固定映射。
 
-Go 对装箱的优化主要体现在转换函数与静态数据上。本机复测（arm64，go1.26.4，`go build -gcflags=-S`）：int64 装箱走 `CALL runtime.convT64`，含指针的结构体走 `CALL runtime.convT`，无指针的数组走 `CALL runtime.convTnoptr`，uint16 走 `CALL runtime.convT16`，string 走 `CALL runtime.convTstring`；常量输入在编译期被静态化为 `.stmp_0`。这正是编译器按 toType/fromType 挑选转换函数的体现。〔TB29 p23〕
+如果只是想验证 255 与 256 的边界，除了观察 helper 源码，还要确保实验确实走到相应 helper，不能让常量静态化或栈分配把待观察路径消掉。把构建条件、输入如何取得、接口值是否逃逸与实际观察到的调用一起记录，才能解释结果。数据表示路径和方法调用的去虚拟化是两项不同优化，不要用“没看见间接调用”证明“没有发生任何复制”。
 
-对常见类型如整型、字符串、切片等，runtime 提供系列快速转换函数，原课列出五个：`convT16`（val must be uint16-like）、`convT32`（val must be uint32-like）、`convT64`（val must be uint64-like）、`convTstring`（val must be a string）、`convTslice`（val must be a slice）；相比 convT2E/convT2I，它们去除了 typedmemmove 操作，增加了零值快速返回等特性。〔TB29 p23〕
 
-零值与小整数是优化重点。原课引文里 staticuint64s 是字面量数组：`var staticuint64s = [...]uint64{0x00, 0x01, ...}`，注释 “staticuint64s is used to avoid allocating in convTx for small integer value”，作用是对 255 以内的小整数值装箱时不再分配新内存，直接利用这片区域的内存空间。〔TB29 p23〕这一字面量形态对应更早版本，如本机 go1.21.5 的 `iface.go:493-494` 仍是同样的字面量；现行形态已变：go1.26.4 的 `iface.go:696-697` 声明 `var staticuint64s [256]uint64`，注释保留原句并追加 “It is defined in assembler code so that it is read-only”，数据由 `runtime/ints.s` 的 DATA 指令填入，GLOBL 行把它标记为 RODATA 只读段。
+</details>
 
-以 convT64 为例看分支（go1.27.3 的 `iface.go:418-425`；go1.21.5 的对应实现在 379-386，分支行为一致）：val 小于 256（即 `len(staticuint64s)`）时，直接返回 `&staticuint64s[val]`，免分配完成装箱；否则走 `mallocgc(8, uint64Type, false)` 分配 8 字节再写入 val。convT16 与 convT32 同思路，大端平台上另有偏移调整（16 位加 6、32 位加 4）；convTstring 对空串、convTslice 对 nil 数组都直接返回 `&zeroVal[0]`，这就是零值快速返回。
+接口赋值可能复制数据，也可能需要分配；接口调用可能保留间接分派，也可能被去虚拟化、内联。两者都不能从源码关键字单独判定，更不能凭小整数的一条快速路径断言接口没有成本。性能敏感路径应先通过基准测试与性能分析定位，再决定是否减少装箱、改变值的传递方式或使用更合适的具体类型和泛型。接口带来的解耦收益也要计入设计，而不是为省一个猜测中的分配放弃本来需要的契约。〔TB29 p23–24〕
 
-最后核算成本：接口赋值可能发生复制或堆分配，具体取决于类型、使用方式与编译器优化，不能仅凭“用了接口”断定一定分配；装箱由 Go 编译器和运行时共同完成，有一定的性能开销，对性能敏感的系统应尽量避免或减少这类装箱操作，动手前先用基准测试和性能分析确认。〔TB29 p21-24〕
+最后可以把开头的返回值例子作为练习：先写出 p 和返回接口各自的静态类型、动态类型与 nil 状态，再分别用“直接分支返回”和“局部变量声明为 error”修复；除了 bad 为 false 时输出 ok，也检查 bad 为 true 时仍能进入错误分支。然后给四种比较情形逐一解释类型与值，并指出 slice 反例为什么不是第五种“返回 false”的普通情况，而是运行时 panic。再回想自己的错误返回代码里，是否曾把具体 nil 指针作为 error 返回。〔TB29 p24–25〕
+
+<details>
+<summary>来源与实现边界</summary>
+
+TB29 p1 引述 Russ Cox：“如果要从 Go 语言中挑选出一个特性放入其他语言，我会选择接口。”同页作者将接口与并发原语列为偏爱的两类特性，并用“动静兼备”描述接口。这里沿用静态检查加动态实现替换这一解释，不把“唯一动静兼备”扩张成 Go 中其他机制都没有任何动态行为的严格结论。
+
+本部分的接口布局、现代转换函数与比较实现按 Go 1.26.4 源码说明；旧 helper、旧字段名与 Go 1.17 dump 工具作为历史背景保留。语言规则可由规范确认，具体地址、哈希、方法入口、寄存器、分配位置属于实现与构建结果。独立示例在本章指定工具链中运行核对，不把一组输出或一次构建推广为所有实现的固定行为。
+
+
+</details>
 
 ## 六、嵌入：复用方法，但不是继承
 
