@@ -5,7 +5,7 @@ title: 02 工程骨架：包、module、启动次序与工具链
 # 02 工程骨架：包、module、启动次序与工具链
 
 
-> 详细程度：速通 · 约 35 分钟
+> 详细程度：速通 · 约 65 分钟
 > 材料：TB02、TB04 到 TB08、TB35b、TBX02、TBX11 · 旧长版：`notes/p1-toolchain.md`、`notes/p22-toolchain-docs.md`
 > 前置：01 Go 的世界观
 
@@ -312,17 +312,270 @@ pprof 采集有两条路：在线服务 `import _ "net/http/pprof"` 再开一个
 
 ### TB27 函数调用链跟踪:defer、runtime 与 AST 注入
 
-- 最简实现三行:`Trace(name string) func()` 打印 enter 后返回一个打印 exit 的闭包,`defer Trace("foo")()` 利用 defer 注册时求值、返回前执行的 LIFO 机制,得到 main→foo→bar→exit bar→exit foo→exit main 的完整链路。四个不足:函数名要手动传、多 goroutine 输出混杂、没有缩进层次、每个函数要手工加。〔TB27 p2-3〕
-- 自动取函数名靠 runtime:`runtime.Caller(1)` 取调用者栈帧,返回 pc/文件/行号/ok 四值。参数是栈帧号,传 0 拿到的是 Caller 的调用者即 Trace 自己,要拿"谁调了 Trace"必须传 1。〔实测〕go1.26 下传 0 输出 main.Trace,传 1 才是 main.foo。〔TB27 p4-6〕
-- `runtime.FuncForPC(pc).Name()` 把 pc 转成含包名的完整函数名(main.foo)。这个"统一的无参调用形式 defer Trace()()"正是后面自动注入能成立的前提:注入器往任何函数里塞同一行代码就行,不用关心函数名。〔TB27 p4-6〕
-- Go 核心团队为防滥用故意不暴露 goroutine ID,但标准库 `net/http/h2_bundle.go` 里藏着取法。`runtime.Stack(b, false)` 拿当前栈,栈首行是 `goroutine 4707 [` 格式,TrimPrefix 后取第一个空格前的数字再 ParseUint。复制品改造两处:直接 make byte 切片替代从 pool 取,用 `strconv.ParseUint` 替代私有的 `http2parseUintBytes`。〔TB27 p6-7〕〔实测〕go1.26 上 main goroutine 取到 1,新 goroutine 取到 7,解析仍成立。依赖栈首行格式属实现细节,只在调试工具里用。〔TB27 p6-7〕
-- 输出格式用 `fmt.Printf("g[%05d]: enter: [%s]\n", gid, name)`,%05d 左补零把 ID 对齐成 5 位。多 goroutine 交织时,把输出重定向到文件,按 gid grep 就能抽出单条调用链。〔TB27 p7-10〕
-- 缩进层次用 `map[uint64]int` 存,以 gid 为 key:进入时取值输出 "->" 再 +1 存回,defer 闭包退出时取值输出 "<-" 再 -1。这张 map 会被多个 goroutine 同时读写,必须配 sync.Mutex(03 节讲过 map 并发写直接 fatal error)。〔TB27 p10-11〕
-- trace 包独立成 module(go mod init github.com/bigwhite/instrument_trace)供外部导入。example_test.go 里 `ExampleTrace` 函数加 `// Output:` 注释,go test 扫描 Example 前缀函数、执行并比对注释里的预期输出。示例即单元测试,也是可执行的文档。〔TB27 p12-14〕
-- AST 注入五步:go/parser 把源码解析成 AST,astutil.AddImport 加导入,遍历 f.Decls 逐个类型断言 *ast.FuncDecl,注入 defer 语句节点,最后 format.Node 转回源码。Go 把 ast 相关包随语言开放,这是官方标准库直接支持的源码改写路径。〔TB27 p17-18〕
-- 注入必须幂等,否则工具跑两遍就把 defer 语句插两遍。addDeferStmt 先遍历函数体,对每条语句做类型断言链 DeferStmt→CallExpr→SelectorExpr→Ident,匹配 tracePkg+traceFunc 已存在就跳过。不存在才构造 DeferStmt 节点插到函数体首部。〔TB27 p18-20〕
-- 工程结构按 03 节的布局惯例:cmd/instrument 放 main 包(flag 解析 -w,os.Args 取文件路径,校验 .go 扩展名),注入逻辑放 instrumenter 包。接口只声明一个方法 `Instrument(string) ([]byte, error)`,为换注入方式(注释指令、代码生成)预留。`-w` 写回原文件,不带则输出 stdout。〔TB27 p14-16〕
-- 两条生产边界:注入跟踪代码只用于调试和阅读理解,不上生产,Trace 会被编译进产物。goroutine ID 同为核心团队不建议依赖的设施。手工删 Trace 繁琐易错,正解是思考题的 build tag 开关:config 目录下 dev.go 带 `//go:build dev` 实现真 Trace,prod.go 空实现,`go build -tags dev` 切换。〔TB27 p23-26〕
+- 引子与最简版:第 23 讲思考题(除捕捉 panic、延迟释放资源外,defer 还有哪些技巧)的留言区里,有同学回复"用 defer 可以跟踪函数的执行过程",作者由此展开本讲。最简实现只有几行:`func Trace(name string) func()` 进门用内置 println 打印 "enter: name",并返回一个打印 "exit: name" 的闭包;被跟踪函数入口写 `defer Trace("foo")()`,示例中 main 调 foo、foo 调 bar 三层嵌套。运行输出为 enter: main、enter: foo、enter: bar、exit: bar、exit: foo、exit: main:入口日志按调用发生次序出现,出口日志按函数返回次序(与入口相反)出现。〔TB27 p2-3〕
+- 求值时序(05 节 defer 一节讲过:参数在注册时求值,函数体在退出时执行):Go 在执行 defer 语句设置 deferred 函数时,先对 defer 后面的表达式求值;Trace("foo") 是该表达式的一部分,因此此刻被真正调用,打印 enter 并返回闭包;返回的闭包才是被注册的 deferred 函数,等到 foo 返回时才执行,打印 exit。main→foo→bar 三层嵌套时,返回次序是 bar、foo、main(后进先出),所以 exit 行与 enter 行次序相反。〔TB27 p3〕
+- 四点不足:①调用 Trace 时需手动显式传入要跟踪的函数名;②并发应用中不同 Goroutine 的调用链输出混在一起无法分辨;③输出缺少层次感,调用关系不易识别;④对要跟踪的函数,需手动添加 Trace 调用。本讲的任务就是逐一解决这四点,把粗糙版本演进成自动注入跟踪代码、输出有层次感的命令行工具。〔TB27 p3〕
+- 自动取函数名:目标是让所有被跟踪函数统一写成 defer Trace()(),不再手动传函数名;这个统一的无参调用形式正是后面自动注入能成立的前提,注入器往任何函数里塞同一行代码就行,不用关心函数名。实现借助 runtime 包:`pc, _, _, ok := runtime.Caller(1)`。Caller 的参数指定取调用栈上哪一帧:传 0 返回的是 Caller 自己的调用者(在这里就是 Trace 函数)的信息,而需要的是 Trace 的调用者(被跟踪函数)的信息,所以必须传 1。〔TB27 p4-5〕〔实测〕go1.26 下传 0 输出 main.Trace,传 1 才是 main.foo。
+- Caller 有四个返回值:第一个是程序计数器 pc;第二个和第三个是对应函数所在的源文件名与行号,这一版用 _ 丢弃;第四个 ok 表示是否成功获取这些信息,失败时这版直接 panic("not found caller")。再用 runtime.FuncForPC(pc).Name() 从 pc 得到函数名,返回的名字不只含函数名,还含所在包名,运行输出为 enter: main.main、main.foo、main.bar,exit 反序;示例 trace1/trace.go 中 foo、bar、main 三个函数都写 defer Trace()()。〔TB27 p5-6〕
+- Goroutine ID:单 Goroutine 时上一版够用,多 Goroutine 并发时各调用链的出入口输出混杂;方案是给每行输出带上每次执行都能唯一区分 Goroutine 的 ID。障碍:Go 核心团队为了避免 Goroutine ID 被滥用,故意没有把它暴露给开发者(08 节 goroutine 生命周期也提过这一点)。标准库 `$GOROOT/src/net/http/h2_bundle.go` 里有现成做法 http2curGoroutineID,但它不是导出函数,无法直接使用,只能复制出来改造。〔TB27 p6-7〕
+- 解析流程:从 http2littleBuf 这个 pool 取 []byte;`b = b[:runtime.Stack(b, false)]` 取当前 Goroutine 的栈,第二参数 false 表示不输出所有 Goroutine 的栈;栈首行形如 "goroutine 4707 [",注释明说 Parse the 4707 out of;先 bytes.TrimPrefix 去掉 "goroutine ",再 bytes.IndexByte 找第一个空格并截断;剩余字节用私有函数 http2parseUintBytes(b, 10, 64) 转成 uint64,找不到空格或解析失败都会 panic。〔TB27 p6〕
+- 文中复制品 curGoroutineID(trace2/trace.go)只改两处:直接 make([]byte, 64) 创建切片,替代原函数从 pool 池获取切片的方式;用公开的 strconv.ParseUint(string(b), 10, 64) 替代私有的 http2parseUintBytes。〔TB27 p7〕〔实测〕go1.26 上 main goroutine 取到 1,新 goroutine 取到 7,解析仍成立。依赖栈首行格式属实现细节,只在调试工具里用。
+- 带 gid 的输出:Trace 在取到函数名后调用 curGoroutineID(),用 `fmt.Printf("g[%05d]: enter: [%s]\n", gid, name)` 输出,exit 闭包同格式。%05d 让 ID 不足 5 位时左补零,目的有两个:位数对齐、输出格式一致;如果程序中 Goroutine 数量超过 5 位数字能表示的范围,可自行调整格式控制串。〔TB27 p7-8〕
+- 双 Goroutine 验证:main Goroutine 直接调用 A1,调用链 A1→B1→C1→D;另一个由 go func 启动(执行 A2 后 wg.Done),调用链 A2→B2→C2→D;main 用 sync.WaitGroup 等待新 Goroutine 结束。示例输出中 main 链的 gid 是 00001、新 Goroutine 是 00018,两链的行相互交织,如 g[00018]: enter: [main.A2] 插在 B1 与 C1 的 enter 之间;有了 gid 才能确认每行输出属于哪个 Goroutine。〔TB27 p8-9〕
+- 交织无法避免:运行时对 Goroutine 调度顺序不确定。原文技巧:把程序输出重定向到本地文件,再用 grep 按 Goroutine ID 过滤,即可提取某个 Goroutine 的全部函数跟踪信息。〔TB27 p10〕
+- 缩进层次:目标是入口打 "->函数名"、出口打 "<-函数名",并按调用深度逐级缩进,缩进是体现层次感的手段。数据结构(trace3/trace.go)是包级 `var mu sync.Mutex` 和 `var m = make(map[uint64]int)`,key 为 Goroutine ID,value 为该 Goroutine 当前缩进层次。加锁依据:Trace 可能在并发环境中运行,而 map 不支持并发写(03 节讲过:运行时检测到并发写会直接 fatal error),所以对 m 的每次读写都包在 mu.Lock/mu.Unlock 中。〔TB27 p10-11〕
+- 进入路径:锁内读出 `indents := m[gid]`,把 indents+1 存回 map,解锁;随后 printTrace(gid, name, "->", indents+1),入口打印用加一后的层次。出口闭包:锁内读出当前 indents,把 indents-1 存回 map,解锁;printTrace(gid, name, "<-", indents),出口打印用减一前的值,与该函数入口处于同一层次;闭包捕获了外层的 gid 和 name。〔TB27 p11〕
+
+```go
+// trace3/trace.go 中 Trace 的缩进层读写部分,头部(取函数名、取 gid)与上一版相同
+mu.Lock()
+indents := m[gid]    // 获取当前 gid 对应的缩进层次
+m[gid] = indents + 1 // 缩进层次+1 后存入 map
+mu.Unlock()
+printTrace(gid, name, "->", indents+1)
+return func() {
+	mu.Lock()
+	indents := m[gid]
+	m[gid] = indents - 1
+	mu.Unlock()
+	printTrace(gid, name, "<-", indents)
+}
+```
+
+- 输出被提取到独立函数 `printTrace(id uint64, name, arrow string, indent int)`:循环 indent 次拼接空格串,再按 `fmt.Printf("g[%05d]:%s%s%s\n", id, indents, arrow, name)` 的格式输出。运行结果与目标形式一致,每个 Goroutine 各自链的缩进层次清晰,如 D 的 -> 与 <- 同层、逐层回退。〔TB27 p11-12〕
+- 抽包动机:Trace 已支持多 Goroutine 和缩进输出,但使用者仍要手工在每个函数里加 Trace 调用;下一步是自动注入,前提是先把 Trace 代码打包成可被其他 module 导入的独立 module。步骤:创建 instrument_trace 目录并进入,执行 `go mod init github.com/bigwhite/instrument_trace` 生成 go.mod;把最新版 trace.go 放入该目录,包名改为 trace;只保留 Trace 函数、Trace 使用的辅助函数以及包级变量,其他函数一律删除,得到独立的 trace 包。〔TB27 p12-13〕
+- Example 机制:作为包作者用 example_test.go 演示用法,文件属于 package trace_test,以别名 trace 导入 module,内部 a→b→c→d 四个函数逐层 defer trace.Trace()()。以 Example 为前缀的函数(如 ExampleTrace)会被 go test 扫描并执行;预期输出写在函数尾部注释中,从 // Output: 的下一行开始;go test 将实际输出与预期对比,不一致则报测试错误。因此 example_test.go 也是 trace 包单元测试的一部分,示例本身就是可执行的验证。预期输出中的函数名是完整导入路径形式,例如 github.com/bigwhite/instrument_trace_test.a。〔TB27 p13-14〕
+- 自动注入要解决的是四点不足的第④点:Trace 已抽成独立 module 并自带 Example(见上两条),但使用者仍要手工往每个函数里写 defer trace.Trace()()。instrument 工具以一个 Go 源文件为单位,自动向文件里的所有函数注入 Trace;它不编译、也不运行目标程序,整条链路是纯源码级的四阶段变换:先用 go/parser 把源码解析成抽象语法树(AST),再用 astutil.AddImport 在树上补 import,接着遍历并修改树节点注入 defer 语句,最后用 format.Node 把改完的树转回 Go 源码。AST 是源代码抽象语法结构的树状表现形式,树上每个节点对应源码中的一种结构;注入发生在树上,不是拿字符串做文本替换。之所以普通开发者能这么干,是因为 Go 语言开源,ast 操作包随语言一起开放:标准库和 Go 实验工具库都提供 ast 相关包(astutil 不在标准库,属于原课所说的实验工具库一侧,原课正文未给出具体仓库路径),足以构建基于 AST 的应用,这里的 ast.instrumenter 就是典型例子。〔TB27 p17-18〕
+
+先看注入入口 Instrument 的代码:
+
+```go
+// instrument_trace/instrumenter/ast/ast.go
+func (a instrumenter) Instrument(filename string) ([]byte, error) {
+	fset := token.NewFileSet()
+	curAST, err := parser.ParseFile(fset, filename, nil, parser.ParseComments)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing %s: %w", filename, err)
+	}
+
+	if !hasFuncDecl(curAST) { // 如果整个源码都不包含函数声明，则无需注入操作，直接返回
+		return nil, nil
+	}
+
+	// 在AST上添加包导入语句
+	astutil.AddImport(fset, curAST, a.traceImport)
+
+	// 向AST上的所有函数注入Trace函数
+	a.addDeferTraceIntoFuncDecls(curAST)
+
+	buf := &bytes.Buffer{}
+	err = format.Node(buf, fset, curAST) // 将修改后的AST转换回Go源码
+	if err != nil {
+		return nil, fmt.Errorf("error formatting new code: %w", err)
+	}
+	return buf.Bytes(), nil // 返回转换后的Go源码
+}
+```
+
+- Instrument 从收到文件路径到返回 []byte 共七步:①token.NewFileSet() 建文件集;②parser.ParseFile(fset, filename, nil, parser.ParseComments) 解析出 AST,选项带 parser.ParseComments 保留注释,出错时返回 fmt.Errorf 包装的错误;③hasFuncDecl(curAST) 为假,即整个源码不含任何函数声明时,直接 return nil, nil,无需注入;④astutil.AddImport(fset, curAST, a.traceImport) 在 AST 上添加导入;⑤addDeferTraceIntoFuncDecls 向所有函数注入;⑥format.Node(buf, fset, curAST) 把修改后的 AST 转回 Go 源码写入 bytes.Buffer,出错返回包装错误;⑦返回 buf.Bytes()。〔TB27 p17-18〕
+
+- 三个方法的分工与调用关系:Instrument 调 addDeferTraceIntoFuncDecls,后者对每个函数声明调 addDeferStmt。三个方法都定义在 instrumenter/ast/ast.go,接收者都是 ast 包内的 instrumenter 类型,它实现了外层 instrumenter.Instrumenter 接口(main.go 里 ast.New 返回的就是这个类型,外层目录和内层类型恰好同名,读代码时注意区分)。addDeferTraceIntoFuncDecls 只做筛选:for 遍历 f.Decls 即文件顶层全部声明,fd, ok := decl.(*ast.FuncDecl) 类型断言,是函数声明才注入,import、全局变量这类非函数声明直接跳过。〔TB27 p18〕
+
+```go
+// instrument_trace/instrumenter/ast/ast.go
+func (a instrumenter) addDeferTraceIntoFuncDecls(f *ast.File) {
+	for _, decl := range f.Decls { // 遍历所有声明语句
+		fd, ok := decl.(*ast.FuncDecl) // 类型断言：是否为函数声明
+		if ok {
+			// 如果是函数声明，则注入跟踪设施
+			a.addDeferStmt(fd)
+		}
+	}
+}
+```
+
+- 幂等判断全在 addDeferStmt 里做。注入必须幂等,否则工具跑两遍,同一个函数里就被插两遍 defer。判定手段:取 fd.Body.List 遍历函数体既有语句,对每条做四层连续类型断言,任一层失败就 continue 看下一条;四层全过再比对名字。〔TB27 p19-20〕
+
+```go
+// instrument_trace/instrumenter/ast/ast.go
+func (a instrumenter) addDeferStmt(fd *ast.FuncDecl) (added bool) {
+	stmts := fd.Body.List
+
+	// 判断"defer trace.Trace()()"语句是否已经存在
+	for _, stmt := range stmts {
+		ds, ok := stmt.(*ast.DeferStmt)
+		if !ok {
+			// 如果不是defer语句，则继续for循环
+			continue
+		}
+
+		// 如果是defer语句，则要进一步判断是否是defer trace.Trace()()
+		ce, ok := ds.Call.Fun.(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+
+		se, ok := ce.Fun.(*ast.SelectorExpr)
+		if !ok {
+			continue
+		}
+
+		x, ok := se.X.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if (x.Name == a.tracePkg) && (se.Sel.Name == a.traceFunc) {
+			// defer trace.Trace()()已存在，返回
+			return false
+		}
+	}
+
+	// 没有找到"defer trace.Trace()()"，注入一个新的跟踪语句
+	// 在AST上构造一个defer trace.Trace()()
+	ds := &ast.DeferStmt{
+		Call: &ast.CallExpr{
+			Fun: &ast.CallExpr{
+				Fun: &ast.SelectorExpr{
+					X: &ast.Ident{
+						Name: a.tracePkg,
+					},
+					Sel: &ast.Ident{
+						Name: a.traceFunc,
+					},
+				},
+			},
+		},
+	}
+
+	newList := make([]ast.Stmt, len(stmts)+1)
+	copy(newList[1:], stmts)
+	newList[0] = ds // 注入新构造的defer语句
+	fd.Body.List = newList
+	return true
+}
+```
+
+推演一遍各层语义:第二层之所以要再断言一次 CallExpr,是因为目标是双括号的 defer trace.Trace()():DeferStmt 的 Call 是外层那次调用,而外层 CallExpr 的 Fun 不是选择器,是内层调用 trace.Trace() 这个 CallExpr,所以链要按 DeferStmt → CallExpr → SelectorExpr → Ident 走满四层。普通表达式语句(如 bar())在第一层就断言失败;defer bar() 这种单括号形态在第二层失败;就算某处恰好写了 defer other.Trace()(),四层都能走通,但最后 x.Name == a.tracePkg && se.Sel.Name == a.traceFunc 不成立,同样不命中。四层全过且名字匹配,说明 defer trace.Trace()() 已存在,直接 return false 跳过注入;整遍遍历没有命中,才构造新节点:嵌套两层 CallExpr,外层 Call 的 Fun 是内层 CallExpr,对应双括号形态,选择器左端 X 是包名 trace、Sel 是函数名 Trace,这两个名字来自 ast.New 的参数。插入方式是整体后移一位:newList 比 stmts 多一个元素,copy(newList[1:], stmts) 把原语句顺延,newList[0] 放新语句,即插到函数体首部,再回写 fd.Body.List。命名返回值 added 的语义:false 表示已存在 defer trace.Trace()(),本次未注入;true 表示本次成功插入一条。作者的概括:先判断函数是否已注入 Trace,有则略过;没有则构造 Trace 语句节点插入 AST。〔TB27 p19-20〕
+
+- 工程结构按本节"三、项目布局"的惯例:在 instrument_trace module 下增加 cmd/instrument 目录放工具的 main 包,真正实现自动注入的代码放 instrumenter 目录。〔TB27 p14〕
+
+```text
+$tree ./instrument_trace -F
+./instrument_trace
+├── Makefile
+├── cmd/
+│   └── instrument/
+│       └── main.go             # instrument命令行工具的main包
+├── example_test.go
+├── go.mod
+├── go.sum
+├── instrumenter/               # 自动注入逻辑的相关结构
+│   ├── ast/
+│   │   └── ast.go
+│   └── instrumenter.go
+└── trace.go
+```
+
+- main.go 的执行流:①fmt.Println(os.Args) 先回显参数,所以工具输出第一行总是参数列表的样子;②init 里用标准库 flag 包注册 -w 布尔标志(flag.BoolVar(&wrote, "w", false, ...)),main 里 flag.Usage = usage 绑定帮助函数后 flag.Parse() 解析;③len(os.Args) < 2 时打印 usage 并返回;2 个参数时 file = os.Args[1],3 个参数时(-w 占掉一个)file = os.Args[2];④filepath.Ext(file) != ".go" 时打印 usage 并返回,所以敲 instrument version 这种参数也会落进 usage:version 的扩展名不是 .go;⑤声明 instrumenter.Instrumenter 接口类型变量 ins,赋值为 ast.New("github.com/bigwhite/instrument_trace", "trace", "Trace") 创建的实例,三个参数分别是包的导入路径、包名与函数名,对应实现里的 traceImport、tracePkg、traceFunc;⑥newSrc, err := ins.Instrument(file),出错 panic;⑦newSrc == nil(源码没有函数声明、无变化)时打印 no trace added for %s 并返回;⑧!wrote 时把 string(newSrc) 打到 stdout,否则写回原文件并打印 instrument trace for %s ok。usage 函数先打印 instrument [-w] xxx.go,再调 flag.PrintDefaults() 输出 -w 的说明。〔TB27 p15-16〕
+
+- 一个版本注记:原课写回用的是 ioutil.WriteFile(file, newSrc, 0666),io/ioutil 包自 Go 1.16 起废弃,现行写法是 os.WriteFile。〔TB27 p16〕
+
+- Instrumenter 接口声明在 instrumenter/instrumenter.go,方法列表只有一个:接受一个 Go 源文件路径,返回注入后的新源文件内容([]byte)和作为错误状态标识的 error。只有 ast 一种实现也抽成接口,作者给出的理由:注入 Trace 函数的实现方法不止一种,为后续扩展做好预留(比如换成注释指令或代码生成的方式)。〔TB27 p16〕
+
+```go
+// instrument_trace/instrumenter/instrumenter.go
+type Instrumenter interface {
+	Instrument(string) ([]byte, error)
+}
+```
+
+- 本地验证注入效果:在 instrument_trace 的 examples 目录下建 demo 项目,demo.go 极简:foo 调 bar,bar 是空函数,main 调 foo。步骤是先构建工具,自检一下 usage 输出,再用 -w 注入:〔TB27 p20-21〕
+
+```sh
+cd instrument_trace
+go build github.com/bigwhite/instrument_trace/cmd/instrument
+instrument version
+instrument -w examples/demo/demo.go
+```
+
+```text
+[instrument version]
+instrument [-w] xxx.go
+      -w    write result to (source) file instead of stdout
+[instrument -w examples/demo/demo.go]
+instrument trace for examples/demo/demo.go ok
+```
+
+两行方括号输出是 main 开头 fmt.Println(os.Args) 回显的参数列表;instrument version 因为 version 不是 .go 文件而落入 usage。
+
+- 注入前后 demo.go 的逐行对比:文件头部新增 import "github.com/bigwhite/instrument_trace";foo、bar、main 三个函数的首行各多出 defer trace.Trace()(),原有语句顺延。注意 import 路径以 instrument_trace 结尾,调用却写 trace.Trace():用的是包名,呼应本节"一、包"里导入路径和包名是两回事。〔TB27 p20-22〕
+
+```go
+// instrument_trace/examples/demo/demo.go,注入前
+package main
+
+func foo() {
+	bar()
+}
+
+func bar() {
+}
+
+func main() {
+	foo()
+}
+```
+
+```go
+// instrument_trace/examples/demo/demo.go,注入后
+package main
+
+import "github.com/bigwhite/instrument_trace"
+
+func foo() {
+	defer trace.Trace()()
+	bar()
+}
+
+func bar() {
+	defer trace.Trace()()
+}
+
+func main() {
+	defer trace.Trace()()
+	foo()
+}
+```
+
+- 幂等再执行:对已注入 Trace 的 demo.go 再执行一次 instrument,由于 instrument 会判断各个函数已注入 Trace,demo.go 的内容将保持不变,靠的正是 addDeferStmt 的四层断言链。〔TB27 p22〕
+
+- demo/go.mod 四要素:module demo;go 1.17;require github.com/bigwhite/instrument_trace v1.0.0;replace github.com/bigwhite/instrument_trace v1.0.0 => ../../。replace 是必须的:github.com/bigwhite/instrument_trace 并没有真正上传到 github.com,而 import 路径形如 github.com/...,replace 把这个依赖解析到本地 module 根目录(../../,即 instrument_trace),go run demo.go 才不会因找不到 module 而失败。这与本节"二、module"讲的 replace 本地联调是同一机制。〔TB27 p22〕
+
+```go
+// instrument_trace/examples/demo/go.mod
+module demo
+
+go 1.17
+
+require github.com/bigwhite/instrument_trace v1.0.0
+
+replace github.com/bigwhite/instrument_trace v1.0.0 => ../../
+```
+
+- go run demo.go 输出六行,单 Goroutine 的缩进调用链(缩进宽度按层级示意,机制见上面"缩进层次"与 printTrace 两条):
+
+```text
+g[00001]: ->main.main
+g[00001]:     ->main.foo
+g[00001]:         ->main.bar
+g[00001]:         <-main.bar
+g[00001]:     <-main.foo
+g[00001]: <-main.main
+```
+
+enter 三行按调用次序逐层加深,exit 三行按 defer 后进先出逐层回退,与 main→foo→bar 的调用和返回顺序吻合;g[00001] 是 main Goroutine,%05d 补零格式来自带 gid 的输出方案。〔TB27 p22〕
+- 两条生产边界。其一,注入后 defer trace.Trace()() 会成为 Go 源码的一部分,被编译进最终可执行文件,所以被注入跟踪设施的代码只适用于日常调试和阅读理解,不适合上生产环境。其二,本实战用到了 Go 核心团队不推荐使用的 Goroutine ID,这是由项目性质决定的;代码要上生产,建议听从核心团队的建议,不要依赖 Goroutine ID。〔TB27 p23〕
+- 手工删 Trace 繁琐易错,正解是思考题的 build tag 开关:config 目录下 dev.go 带 `//go:build dev` 实现真 Trace,prod.go 空实现,`go build -tags dev` 切换,生产编译出的程序虽包含 Trace 但不真正起作用。该开关属思考题方向,留作练习。〔TB27 p23-26〕
 
 以上省去的:TB03 的三系统安装逐步命令与截图(照官方文档走即可,选读条目只留了目录与 PATH 两条要点)、用 go help 总结命令用法的思考题方向。TB27 的逐版完整源码清单(五版演进只讲机制与坑)与 ioutil.WriteFile 写回(该函数自 Go 1.16 起废弃,现行写法 os.WriteFile)。两单元其余必读条目均已融入本块。
 
