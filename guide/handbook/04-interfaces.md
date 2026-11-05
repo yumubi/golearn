@@ -933,180 +933,268 @@ type S T 创建了新定义类型，不继承直接绑定到 T 的 M1、M2；本
 
 “新类型不继承原类型的方法”指的是原类型直接绑定的方法，并不抹掉底层结构里的字段类型。如果原来的结构体含有嵌入字段，新类型保留这些字段，其方法仍可能按嵌入规则被提升。因而不能把本例的“集合为空”推广到所有 type S T。下一部分会从嵌入字段继续推导这个边界，而不是把它叫作类继承。
 
-## 四、接口值和 nil：动静兼备的接口，内部如何表示
+## 四、接口值：编译期保证什么，运行时又保存什么
 
-上一节的 `Sender`、`error` 都是接口类型，接口变量可以先后保存不同具体类型的值。Go 是一门静态语言，接口却是这门静态语言中唯一“动静兼备”的语法特性：静态的一面在编译期，动态的一面在运行时。Russ Cox 说过：“如果要从 Go 语言中挑选出一个特性放入其他语言，我会选择接口。”〔TB29 p1〕接口与并发原语，正是作者最喜欢的两类 Go 语法元素，这个特性的地位可见一斑。〔TB29 p1〕也正因为它动静兼备，初学者常在接口上遇到困惑；要解开困惑，必须深入到运行时层面，看接口类型的运行时表示。〔TB29 p1〕
-
-先看静态的一面。接口变量有静态类型：`var err error` 中 `err` 的静态类型是 `error`。编译器在编译阶段对所有接口类型变量的赋值操作做类型检查，检查右值的类型是否实现了该接口方法集合中的所有方法，不满足就报错：
+前面已经解决“Email 能不能作为 Sender 使用”：编译器用方法集合检查实现关系。现在沿同一个 Welcome 往下走，解释另一件事：Welcome 的参数明明一直是 Sender，为什么先执行 Email.Send，后来又执行 SMS.Send？这要区分变量的静态类型与接口值保存的动态类型。〔TB29 p1–4〕
 
 ```go
-var err error = 1
+// 沿用前面的 Sender、Email、SMS 和 Welcome。
+var sender Sender = Email{}
+Welcome(sender)
+sender = SMS{}
+Welcome(sender)
 ```
 
-原课示例的报错是：cannot use 1 (type int) as type error in assignment，即把 `int` 赋给 `error` 接口类型变量时编译失败。〔TB29 p2〕
+sender 的静态类型是声明写下的 Sender，不会在第二次赋值后变成 SMS。编译器据此决定哪些赋值合法、能调用哪些方法，以及 Send 的参数和返回值怎样检查。动态类型则随当前保存的值变化：先是 Email，后是 SMS；动态值分别是相应的具体值。接口赋值并没有把具体类型改名为 Sender，而是保留了具体类型的信息。〔TB29 p2〕
 
-再看动态的一面。接口变量在运行时还存储了右值的真实类型信息，称为动态类型：
+error 也一样。以下片段放进 main 并导入 errors、fmt，%T 预期打印 *errors.errorString，但 err 的静态类型始终是 error：
 
 ```go
 var err error
 err = errors.New("error1")
-fmt.Printf("%T\n", err) // *errors.errorString
+fmt.Printf("%T\n", err) // 当前标准库实现：*errors.errorString
 ```
 
-`err` 的静态类型始终是 `error`，`%T` 打印的却是它运行时保存的动态类型 `*errors.errorString`。〔TB29 p2〕运行时接口变量可以被赋值为不同动态类型的变量，每次赋值后其中存储的动态类型信息都会变化。〔TB29 p2〕
+*errors.errorString 是 errors 包当前实现选择的具体类型，不是 error 接口要求使用的唯一类型。反过来，var err error = 1 会在编译期失败，int 没有 Error() string。接口让运行时可以替换不同实现，同时用静态类型检查拦截这类不合法赋值；它并没有取消 Go 的静态类型系统。〔TB29 p2–4〕
 
-关于“类型靠行为决定”的思想，第二节“这和鸭子类型有什么关系？”已经讲过：Duck/Dog/Bird 没有共同的父类型，只凭各自实现了 `Quack` 就都能赋给 `QuackableAnimal`。这里补一层运行时的视角：某类型能否作为某接口类型的右值，不由它的“基因”（如 C++ 中的父类）决定，而由它表现出的行为（拥有的方法）决定；每次赋值后接口变量里存的动态类型不同，`a.Quack()` 的执行结果就由这份动态类型信息决定。〔TB29 p2-4〕与动态语言不同，编译器在编译期就能捕捉把 `int` 变量传给 `QuackableAnimal` 这类明显错误，决不会让错误遗漏到运行时才被发现：Python 式的灵活与编译期安全并存。〔TB29 p2-4〕
+### 保留接口分派时，Send 是怎样被找到的
 
-有了这些铺垫，本节开头的问题可以回答得更透。看一个改编自 Go FAQ 的例子：
+一个普通的带方法接口值，可以先按两部分理解：一部分记录“当前是哪一种类型，怎样满足这份接口”，另一部分保存具体值所需的数据表示。这里先看 Sender，不把没有方法的 any 混进来。现行 Go 运行时用 iface 表示这样的接口值：
 
 ```go
+// Go 1.26.4，src/runtime/runtime2.go 的内部定义。
+type iface struct {
+    tab  *itab
+    data unsafe.Pointer
+}
+```
+
+tab 指向一份 itab。它不是 Email 单独的一张通用表，而是“接口类型与具体类型这一对”的实现记录：Sender × Email 与 Sender × SMS 是不同的配对。记录中同时包含 Sender 的类型信息、当前具体类型的信息，以及按接口方法顺序安排的调用入口。data 则承载这次传入的具体值。〔TB29 p5–7〕Email 这里恰好是零大小结构体，不能用它来推断所有 data 都另有一份堆内存；后面会分开解释数据表示与分配。
+
+```mermaid
+flowchart LR
+    W["Welcome(sender Sender)"] --> I["接口值 sender"]
+    I --> TAB["tab：Sender × Email 的 itab"]
+    I --> DATA["data：当前具体值的数据表示"]
+    TAB --> IT["Inter：Sender 的类型与方法要求"]
+    TAB --> CT["Type：Email 的类型信息"]
+    TAB --> FUN["Fun：Send 对应的调用入口"]
+    FUN --> SEND["Email.Send 或衔接它的包装函数"]
+    DATA --> SEND
+```
+
+编译器看到 sender.Send，已经知道这是 Sender 中的哪一个方法，因此知道使用表里的哪个位置。在仍然保留接口分派的机器代码里，调用方从 tab 取出那个位置的入口，准备接收者所需的数据及 message 参数，再通过入口调用。入口可能是编译器生成的包装函数，由它衔接到具体方法，不必假定它总是源码方法直接编译后的入口。传入 Sender × Email 这份表时最终执行 Email.Send，换成 Sender × SMS 时最终执行 SMS.Send；Welcome 的函数体不需要改变。
+
+所以，这条调用路径不是每次拿字符串 "Send" 遍历全部方法，也不是每调用一次就重新验证“Email 是否实现 Sender”。实现关系已经在编译期得到保证，运行时按已确定的位置使用入口。itab 的创建、查找或缓存可能发生在建立某些接口值、转换接口或类型断言时，不能把“调用不按方法名搜索”扩张成“运行时任何阶段都不查表”。〔TB29 p7〕
+
+也不能反过来断言，源码里每次接口调用最终都保留间接调用。如果编译器能确定某个调用点的具体类型，它可能去虚拟化，直接调用 Email.Send，甚至继续内联方法体。编译期保证“可以调用”和机器代码选择“如何调用”是两层问题；内联、去虚拟化改变实现路径，不改变接口语义。
+
+<details>
+<summary>选读：在汇编中识别这条分派路径</summary>
+
+为了观察独立的 Welcome，可以暂时在其声明前加 //go:noinline，使用本章的完整通知程序构建。这个指令只用于观察，不是业务代码应该禁用优化的建议。
+
+```go
+//go:noinline
+func Welcome(sender Sender) {
+    sender.Send("欢迎注册")
+}
+```
+
+Go 1.26.4、darwin/arm64 下，已批准样稿的观察记录中，Welcome 从表中取入口的关键指令为 MOVD 24(R0), R3，随后 CALL (R3)。R0 当时保存 tab，R1 保存 data；main 中能识别 Sender 与 Email、SMS 配对的 itab 符号。24 这个偏移来自该工具链与架构的布局，不是 Go 语言保证的常量。本候选不把历史观察写成新的实测，复核时应以当前构建输出为准。
+
+现行编译器 src/cmd/compile/internal/devirtualize/devirtualize.go 明确区分静态去虚拟化与基于 profile 的条件直接调用优化。是否保留间接调用要看具体调用点与构建条件，不由“用了 interface”四个字决定；本章也不据一段汇编推断性能快慢。
+
+
+</details>
+
+### nil 指针装入接口，为什么不等于 nil
+
+接口保存了具体类型信息，这正是 nil 陷阱的关键。下面是一份改编自 Go FAQ 的完整程序。MyError 嵌入 error，借此拥有 Error 方法；ErrBad 内部保存一个实际错误。bad 固定返回 false，方便只观察“没有出错”的路径。〔TB29 p4–5〕
+
+```go
+package main
+
+import (
+    "errors"
+    "fmt"
+)
+
 type MyError struct {
-	error
+    error
 }
 
 var ErrBad = MyError{
-	error: errors.New("bad things happened"),
+    error: errors.New("bad things happened"),
 }
 
 func bad() bool {
-	return false
+    return false
 }
 
 func returnsError() error {
-	var p *MyError = nil
-	if bad() {
-		p = &ErrBad
-	}
-	return p
+    var p *MyError = nil
+    if bad() {
+        p = &ErrBad
+    }
+    return p
 }
 
 func main() {
-	if err := returnsError(); err != nil {
-		fmt.Printf("error occur: %+v\n", err)
-		return
-	}
-	fmt.Println("ok")
+    if err := returnsError(); err != nil {
+        fmt.Printf("error occur: %+v\n", err)
+        return
+    }
+    fmt.Println("ok")
 }
 ```
 
-初学者预期 `bad()` 恒为 false，`p` 保持为 nil，`main` 输出 ok 后退出；真实输出却是：
+p 的值确实为 nil，但函数的返回类型是 error，因此 return p 还要把 *MyError 指针放进 error 接口。返回后的接口保存了“具体类型是 `*MyError`，具体指针值是 nil”两份信息。它不是“没有保存任何具体类型和值”的 nil 接口，所以 err != nil 成立，进入错误分支。这个程序的来源输出是 error occur: <nil>，而不是 ok；格式化时看到 <nil> 不代表接口自身等于 nil。〔TB29 p5,14〕
 
-```text
-error occur: <nil>
+```mermaid
+flowchart TB
+    P["p：*MyError，指针值 nil"] --> R["return p：转换为 error 接口"]
+    R --> E["err：iface"]
+    E --> T["tab 非 nil：error × *MyError"]
+    E --> D["data = nil：保存的具体指针为空"]
+    N["nil 接口：没有动态类型，也没有动态值"] --> NT["tab = nil"]
+    N --> ND["data = nil"]
+    T --> C["类型信息不同，所以 err != nil"]
+    NT --> C
 ```
 
-程序进入了错误处理分支。〔TB29 p4-5〕为什么 `err != nil` 会成立？要解释这个问题，必须换一个视角：接口值在运行时如何表示。先记住结论：返回的 `error` 接口变量 `err` 的数据指针虽为空，但类型信息 `iface.tab` 并不为空，而是 `*MyError` 对应的类型信息，因此 `err` 与 nil（内部表示 `(0x0,0x0)`）相比自然不相等。〔TB29 p14〕下面把这个结论拆开讲。
+这还不能推出“nil 指针的方法总能安全调用”。接口中保存 nil 指针时，是否可以调用具体方法，取决于方法和包装过程是否解引用它。这里的 MyError.Error 来自嵌入字段，不能把这个格式化现象当成通用的 nil 安全约定。真正应该修的是返回路径，让“没有错误”返回 nil 接口。
 
-### 内部表示：eface 与 iface
-
-在运行时，Go 用两个结构体表示接口变量，定义在 `$GOROOT/src/runtime/runtime2.go`：
+最直接的写法是删掉中间的具体指针变量，按分支返回。替换原函数，其余代码不变：
 
 ```go
-// iface 表示拥有方法的非空接口类型变量
-type iface struct {
-	tab  *itab
-	data unsafe.Pointer
+func returnsError() error {
+    if bad() {
+        return &ErrBad
+    }
+    return nil
 }
+```
 
-// eface 表示没有方法的空接口类型变量
+bad 为 false 时，return nil 直接产生 error 的零值，调用方走到 ok；bad 为 true 时返回实际的 *MyError，接口非 nil，调用方仍能处理“bad things happened”。另一种修法是保留局部变量，但把它声明成 error：
+
+```go
+// 这是另一种替换方案，不和上一个同名函数同时声明。
+func returnsError() error {
+    var p error
+    if bad() {
+        p = &ErrBad
+    }
+    return p
+}
+```
+
+未进入分支时，p 从始至终是 nil 接口，返回时不会凭空带上 *MyError 类型信息。这里的修复点不是“函数签名改成 error”（原函数签名本来就是 error），而是不要让无错误路径返回一个带具体类型的 nil 指针。这两种修法来自读者讨论，保留了异常路径，不是把函数无条件改成 return nil。〔TB29 p24–25〕
+
+### 空接口为什么使用另一种表示
+
+Sender 需要方法入口，any 没有任何方法要求，因此不需要“某具体类型如何实现这份方法列表”的记录。Go 运行时用 eface 表示空接口：
+
+```go
+// Go 1.26.4，src/runtime/runtime2.go 的内部定义。
 type eface struct {
-	_type *_type
-	data  unsafe.Pointer
+    _type *_type
+    data  unsafe.Pointer
 }
 ```
 
-〔TB29 p5-6〕两个结构都有两个指针字段，第二个字段功能相同：指向当前赋给该接口类型变量的动态类型变量的值。〔TB29 p6〕区别在第一个字段。空接口没有方法列表，`eface` 的第一字段直接指向动态类型的类型信息 `_type`；非空接口除了动态类型信息，还要存储接口自身的信息（接口类型信息、方法列表）以及动态类型所实现方法的信息，所以第一字段指向 `itab`。〔TB29 p6〕
+两个表示都是两字结构。eface 的第一字直接指向具体类型信息 _type；iface 的第一字指向同时记录接口类型、具体类型和方法入口的 itab。第二字都用于具体值的数据表示，不能把它一概理解为“指向新分配堆对象的指针”：具体指针等直接表示的类型可以直接放入 data，其他值可能引用栈上的副本、只读静态数据或堆上的副本。nil 接口则是两字都为空。〔TB29 p5–9〕
 
-这一双表示至今未变。本机 go1.26.4 源码 `$GOROOT/src/runtime/runtime2.go:184-192` 中，`iface{tab *itab; data unsafe.Pointer}` 与 `eface{_type *_type; data unsafe.Pointer}` 的布局与书中完全一致；不过 `itab` 与 `_type` 现在都是别名（`runtime2.go:1129` 的 `type itab = abi.ITab`、`runtime/type.go:25` 的 `type _type = abi.Type`），物理定义移到了 `internal/abi` 包，见后文。
-
-### 动态类型的统一档案：_type
-
-`_type` 定义于 `$GOROOT/src/runtime/type.go`，描述一个类型的元信息：
-
-```go
-type _type struct {
-	size       uintptr // 大小
-	ptrdata    uintptr // 内含指针的内存前缀大小
-	hash       uint32  // 类型哈希
-	tflag      tflag   // 额外的类型信息标志
-	align      uint8   // 该类型变量对齐
-	fieldAlign uint8   // 结构体字段对齐
-	kind       uint8   // 类型种类
-	// function for comparing objects of this type
-	// (ptr to object A, ptr to object B) -> ==?
-	equal func(unsafe.Pointer, unsafe.Pointer) bool  // 比较函数指针
-	gcdata  *byte // GC 类型数据
-	str     nameOff // 类型名字符串的偏移
-	ptrToThis typeOff // 指向该类型的指针的类型信息的偏移
-}
-```
-
-〔TB29 p6〕各字段的职责：`size` 是该类型值的大小；`ptrdata` 是含指针的内存前缀的大小；`hash` 是类型哈希；`tflag` 存放额外的类型信息标志；`align` 与 `fieldAlign` 分别是该类型变量、结构体字段的对齐；`kind` 标记类型种类；`equal` 是比较函数指针，比较两个对象指针是否相等；`gcdata` 存 GC 类型数据，`kind` 设置 `KindGCProg` 位时是 GC program，否则是 ptrmask 位图（见 `runtime/mbitmap.go`）；`str` 与 `ptrToThis` 是偏移量，分别对应类型名字符串与“指向该类型的指针”的类型信息。〔TB29 p6〕
-
-运行时还有一个关键事实：Go 中每种类型，无论内置原生类型还是自定义类型，都有唯一的 `_type` 信息；运行时会为程序内全部类型建立只读的共享 `_type` 信息表。因此，拥有相同动态类型的同类接口变量，其 `_type`/`tab` 信息是相同的。〔TB29 p9〕据此，每个接口变量运行时表示的两部分可以统一记作 `eface(_type, data)` 与 `iface(tab, data)`：虽然第一字段有差别，但 `tab` 与 `_type` 都可统一看作动态类型的类型信息。〔TB29 p9〕
-
-本机 go1.26.4 源码中，`runtime/type.go:25` 声明 `type _type = abi.Type`，物理定义移到了 `$GOROOT/src/internal/abi/type.go:20-45`。字段顺序与语义和书中 Go 1.17 版本一致，但字段名改为导出形式：`Size_`、`PtrBytes`（即书中 `ptrdata`，注释是 "number of (prefix) bytes in the type that can contain pointers"）、`Hash`（注释 "hash of type; avoids computation in hash tables"）、`TFlag`、`Align_`、`FieldAlign_`、`Kind_`、`Equal`、`GCData`、`Str`（类型 `NameOff`）、`PtrToThis`（类型 `TypeOff`）。GCData 的注释还新增了一种按需模式：设置 `TFlagGCMaskOnDemand` 位时 GCData 是 `**byte`，位图按需构建。内存布局与书中描述一致。
-
-### itab：非空接口的“实现档案”
-
-`iface.tab` 指向的 `itab` 定义同样在 `$GOROOT/src/runtime/runtime2.go`：
-
-```go
-type itab struct {
-	inter *interfacetype // 接口类型自身信息
-	_type *_type         // 动态类型信息
-	hash  uint32         // copy of _type.hash; used for type switches
-	_     [4]byte
-	fun   [1]uintptr     // variable sized；fun[0]==0 表示动态类型未实现该接口
-}
-```
-
-〔TB29 p7〕四个关键部分：`inter` 指向 `interfacetype`，存储接口类型自身的信息；`_type` 存储该接口变量的动态类型信息；`hash` 是 `_type.hash` 的副本，用于 type switch 快速分派；`fun` 是动态类型已实现的接口方法的调用地址数组，方法调用直接走这里预存的地址，无需运行时查表，`fun[0]==0` 则表示未实现。〔TB29 p7〕
-
-`interfacetype` 由三部分组成，定义在 `$GOROOT/src/runtime/type.go`：
-
-```go
-type interfacetype struct {
-	typ     _type   // 类型信息
-	pkgpath name    // 包路径名
-	mhdr    []imethod // 接口方法集合切片
-}
-```
-
-〔TB29 p7〕本机 go1.26.4 源码中，`runtime2.go:1129` 声明 `type itab = abi.ITab`，物理定义在 `$GOROOT/src/internal/abi/iface.go:14-19`：`ITab{Inter *InterfaceType; Type *Type; Hash uint32; Fun [1]uintptr}`。显式的 `_ [4]byte` 填充字段消失了，`Hash` 之后的 4 字节对齐填充改由 `Fun` 的 8 字节对齐隐式保证，内存布局不变；注释保留 `fun[0]==0 means Type does not implement Inter` 的语义，`Hash` 的注释是 "copy of Type.Hash. Used for type switches."。`interfacetype` 同样是别名：`runtime/type.go:403` 声明 `type interfacetype = abi.InterfaceType`，定义在 `internal/abi/type.go:447-451`：`{Type; PkgPath Name; Methods []Imethod}`，书中 `mhdr` 改名为 `Methods`。
-
-### 两幅“指向图”
-
-看两个例子，把上面的结构画成指向图。第一个是空接口：
+用带整数与字符串字段的结构体来画图更直观。下面声明供接下来的两幅图和装箱例子使用，不是之前断言例子中的 type T int：
 
 ```go
 type T struct {
-	n int
-	s string
+    n int
+    s string
 }
 
-var ei interface{} = t
-```
-
-运行时用 `eface` 表示：`_type` 字段指向动态类型 T 的类型信息，`data` 指向一个 T 类型的实例值。〔TB29 p7-8〕第二个例子给 T 增加两个方法，并定义一个含这两个方法的接口：
-
-```go
-func (t T) M1() {}
-func (t T) M2() {}
+func (T) M1() {}
+func (T) M2() {}
 
 type NonEmptyInterface interface {
-	M1()
-	M2()
+    M1()
+    M2()
 }
-
-var i NonEmptyInterface = t
 ```
 
-这次运行时用 `iface` 表示，结构比 `eface` 复杂：`tab` 指向的 `itab` 里同时存着接口自身的信息（`interfacetype`：类型信息、包路径、方法集合）、动态类型的类型信息（`_type`）、哈希，以及 `fun` 数组中动态类型所实现方法的地址；`data` 依旧指向 T 的实例值。〔TB29 p8-9〕
+若 t := T{n: 17, s: "hello, interface"}，再令 var ei any = t，ei 的类型字指向 T 的类型信息，数据字指向保存这份 T 值的存储。〔TB29 p7–8〕
 
-统一到记法上：每个接口变量的运行时表示由两部分组成，即 `eface(_type, data)` 与 `iface(tab, data)`。`data` 指向一块动态分配的内存空间，存储赋给接口变量的动态类型变量的值；未显式初始化的接口变量值为 nil，即 `_type`/`tab` 和 `data` 都为 nil。〔TB29 p9〕
+```mermaid
+flowchart LR
+    EI["ei：eface"] --> ET["_type → T 的类型信息"]
+    EI --> ED["data → T 值的存储"]
+    ED --> EV["n = 17，s = hello, interface"]
+```
 
-理解了内部表示，回头看 `returnsError` 陷阱：`p` 是值为 nil 的 `*MyError` 指针，装入 `error` 接口后得到一个 `iface`，`tab` 指向 `*MyError` 的类型信息（非空），`data` 为 nil。所以 `err` 不是“两个字段都为空”的 nil 接口，与 nil 比较自然为 false。修复办法也不止一种：让 `returnsError` 直接返回 nil 接口，或把 `p` 的类型改为 `error`，删除 `p`，按需 `return &ErrBad` 或 nil。不要把一个 nil 的具体类型指针装进接口再返回。
+如果另取 t := T{n: 18, s: "hello, interface"}，令 var i NonEmptyInterface = t，数据部分仍承载 T 值，但第一字换成这一接口与 T 的 itab。表中列出 M1、M2 的入口，以及接口本身的方法要求。〔TB29 p8–9〕
+
+```mermaid
+flowchart LR
+    I["i：iface"] --> TAB["tab → NonEmptyInterface × T"]
+    I --> ID["data → T 值的存储：n = 18"]
+    TAB --> INTER["Inter：接口类型、包路径、M1/M2"]
+    TAB --> TYPE["Type：T 的类型信息"]
+    TAB --> HASH["Hash：具体类型哈希副本"]
+    TAB --> FUN["Fun：M1、M2 的调用入口"]
+```
+
+类型信息是可以共享的元数据，不为每个接口值重新完整复制一份 T 的描述。对于同一动态类型，可以复用其类型信息；对于相同的接口与动态类型配对，可以复用相应 itab。这里“相同动态类型”不能扩大成“任何接口里的 tab 都相同”：同一个 T 分别作为两个不同接口使用时，接口要求和方法槽位可能不同，itab 也对应不同配对。〔TB29 p9〕
+
+### 类型档案与实现档案分别装了什么
+
+_type 用来描述一种具体类型，itab 用来描述具体类型实现某个接口的那份关系。Go 1.26.4 中 runtime._type 是 internal/abi.Type 的别名，runtime.itab 是 internal/abi.ITab 的别名，runtime.interfacetype 是 internal/abi.InterfaceType 的别名。理解下面这些职责，比背旧字段名更重要。
+
+类型档案记录值大小、含指针内存前缀、类型哈希、额外标志、值与字段的对齐、类型种类，还保存比较函数、GC 数据、类型名字与指向该类型的指针类型的偏移信息。比较函数的两个参数是对象地址，函数按该类型的规则比较对象的值；不是简单比较这两个地址是否相同。类型不可比较时，这个比较函数可以为空，稍后接口比较就用它识别非法情况。〔TB29 p6〕
+
+实现档案里的 Inter 指向接口自身的信息，Type 指向动态类型信息，Hash 是 Type.Hash 的副本，服务于 type switch，Fun 保存动态类型对接口方法的调用入口。Fun 在源码里声明为 [1]uintptr，是变长尾部的表示方式，不意味着任何接口都只有一个入口。有效实现的各方法入口按接口方法位置安排；Fun[0]==0 在运行时内部表示该类型不实现该接口的记录，不是可以拿来正常调用的实现。〔TB29 p7〕
+
+<details>
+<summary>选读：Go 1.26.4 的字段与历史字段怎样对照</summary>
+
+以下是 internal/abi 中的源码声明片段，依赖同包定义，不是可以从应用中直接导入 internal/abi 的代码。运行时内部结构不是稳定公共 API。
+
+```go
+type Type struct {
+    Size_       uintptr
+    PtrBytes    uintptr
+    Hash        uint32
+    TFlag       TFlag
+    Align_      uint8
+    FieldAlign_ uint8
+    Kind_       Kind
+    Equal       func(unsafe.Pointer, unsafe.Pointer) bool
+    GCData      *byte
+    Str         NameOff
+    PtrToThis   TypeOff
+}
+
+type ITab struct {
+    Inter *InterfaceType
+    Type  *Type
+    Hash  uint32
+    Fun   [1]uintptr
+}
+
+type InterfaceType struct {
+    Type
+    PkgPath Name
+    Methods []Imethod
+}
+```
+
+旧资料中的 size、ptrdata、hash、tflag、align、fieldAlign、kind、equal、gcdata、str、ptrToThis，分别对应上面的 Size_、PtrBytes、Hash、TFlag、Align_、FieldAlign_、Kind_、Equal、GCData、Str、PtrToThis。`PtrBytes` 表示类型中可能包含指针的内存前缀字节数；`Align_` 是值的对齐，`FieldAlign_` 是作为结构体字段时的对齐；`Kind_` 表示 string、int 等种类；Str 与 PtrToThis 是元数据偏移，后者允许为零。
+
+历史 GCData 说明中，kind 的 KindGCProg 位区分 GC program 和指针位图；不能把这段历史规则原样解释成现行实现。Go 1.26.4 的 GCData 通常指向描述指针布局的位图；若设置 TFlagGCMaskOnDemand，则将这一字段按 **byte 解释，位图可按需构建。应按当前字段注释与 runtime/type.go 的实现阅读，而不是只因字段还是一个指针就假定语义未变。
+
+旧 itab 的 inter、_type、hash、fun 对应 Inter、Type、Hash、Fun；旧定义里显式写出的四字节填充，在当前 darwin/arm64 上由 Fun 的对齐要求形成隐式填充，不能把“四字节”当作所有架构的固定规则。旧 interfacetype 的 typ、pkgpath、mhdr 对应嵌入的 Type、PkgPath、Methods。定义位置分别为 runtime/runtime2.go:184–192、1129，runtime/type.go:25、403，internal/abi/type.go:20–45、447–451，以及 internal/abi/iface.go:14–18。
+
+
+</details>
 
 ## 五、接口值的比较和成本
 
