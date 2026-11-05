@@ -42,8 +42,8 @@ ln -s ../golearn-state/audit audit
 - 台账/场景更新**先查再写**:mirror-scen.py 出现过两次张冠李戴(热榜写成 SC-pay、24 节写成不存在的 SC-dnsproxi),都是先写后查导致。
 - 每批 commit 后如果台账也改了,状态仓同步 commit,两边 commit 信息互相引用 runId。
 
-## 当前欠账快照(2026-10-18)
+## 当前欠账快照(2026-11-05)
 
-- 台账 3713 条:已落盘 117、有理由省略 182、待清点 591、待审 2823。
-- 场景表:已落盘 11,待独立复核 12(auth/post/comment/cache/mq/tolerance/pay/ledger/search/disc-lb/deploy/lang)。
+- 台账 3713 条:已落盘 432、有理由省略 182、待清点 557、待审 2542。
+- 场景表:TB29 接口章 K1-K14 全部落盘(批1 49425ca / 批2 6dd4ac8,run mw32ryu8 一轮双审 0 issue);SC-ledger 的 W16-2#K15/K18 仍未进过任何批次。
 - `audit/phase1-report.md` 有各批 runId 与提交对照表。
