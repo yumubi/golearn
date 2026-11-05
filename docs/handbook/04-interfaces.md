@@ -2012,9 +2012,9 @@ hi child
 
 在熟悉 Java 的读者看来，Child 这个名字很容易让人联想到 extends 与 override，但这里没有那条父子关系。不能把 Child 自动当成 Base 传参；需要 Base 时显式取 c.Base。外层同名方法不会改写 Base.Hello 的自调用，也不会让 Base 获得一个指向外层的隐含 this。若算法需要可替换步骤，就像 Hello(w Whoer) 这样明确传入所需行为，也可以使用函数参数等设计；接口是本章采用的一条多态路径，不是 Go 唯一可以表达多态或可替换行为的机制。嵌入委派的边界见〔TB26 p9-10〕〔TB30 p4-5〕。
 
-### 冲突、歧义与测试伪对象
+### 同名方法怎样消歧，测试替身又怎样使用提升
 
-接口嵌入小节已经实测过单个嵌入接口的情形：`T` 嵌入只声明 M1、M2 的接口 `I`，自身只定义值接收者的 M3，`dumpMethodSet` 显示 `T` 与 `*T` 的方法集合都包含 M1、M2、M3，结论是结构体类型的方法集合包含嵌入接口类型的方法集合。〔TB26 p11〕那如果嵌入的多个接口方法集合出现交集、结构体自身又没实现交集里的方法，调用会发生什么？这正是接口嵌入小节末尾留下的问题，现在兑现。回答它要用到刚讲完的代理机制：经提升的方法被调用时，Go 先查看结构体自身是否实现了该方法，实现了就优先使用自身实现；没有实现，才去查找各嵌入字段的方法集合。若多个嵌入字段的方法集合都包含这个方法，编译器无法确定究竟代理给谁，就会报 `ambiguous selector` 编译错误。〔TB26 p12〕原课的例子：`E1` 声明 M1、M2、M3，`E2` 声明 M1、M2、M4，`T` 同时嵌入两者：
+提升的查找由浅到深进行。外层直接声明同名字段或方法时，优先使用较浅的名字；同一最浅深度出现两个候选时，编译器不能随意挑一个。这个问题不仅发生在接口，也可能发生在多个嵌入具体类型之间。下面是有意不能编译的独立示例：E1、E2 都有 M1、M2，而 T 没有自己的实现。〔TB26 p12-13〕
 
 ```go
 package main
@@ -2024,13 +2024,11 @@ type E1 interface {
 	M2()
 	M3()
 }
-
 type E2 interface {
 	M1()
 	M2()
 	M4()
 }
-
 type T struct {
 	E1
 	E2
@@ -2038,200 +2036,165 @@ type T struct {
 
 func main() {
 	t := T{}
-	t.M1()
-	t.M2()
+	t.M1() // 有意错误：ambiguous selector t.M1
+	t.M2() // 有意错误：ambiguous selector t.M2
 }
 ```
 
-```text
-main.go:22:3: ambiguous selector t.M1
-main.go:23:3: ambiguous selector t.M2
-```
+同名同签名能在接口嵌入中合成一个要求，却不能让结构体替我们决定把调用交给 E1 字段还是 E2 字段。Go 1.14 的放宽只针对前一种情况。类型声明本身可以存在；使用 t.M1、t.M2 这样的歧义选择符或要求相应接口实现时才会遭遇问题。若确实要选择 E1，可显式写 t.E1.M1()，不过此示例中 E1 为 nil，显式路径只解决编译期的歧义，不能解决运行期缺少实现。
 
-成因在于 E1 与 E2 的方法集合交集是 M1、M2，而 T 自身没有实现它们，编译器无法做出选择。报错行号取决于文件的排布，本机 go1.26.4（darwin/arm64）实测同样得到两行 `ambiguous selector`。修复有两种：一是消除交集，让 E1 与 E2 的方法集合不再重叠；二是为 T 自身增加 M1、M2 的实现。〔TB26 p13〕采用第二种，E1、E2 的定义沿用上一个例子：
+还可以重新划分两个字段的接口，消除职责交集；或给外层提供明确实现，决定要做自己的工作还是显式转发到哪一边。沿用上一段 E1、E2、T，给 T 添加下面的方法，原 main 的两次调用就会命中外层实现，而不是在两个字段之间选择。〔TB26 p13〕
 
 ```go
-type T struct {
-	E1
-	E2
-}
-
-func (T) M1() {
-	println("T's M1")
-}
-
-func (T) M2() {
-	println("T's M2")
-}
-
-func main() {
-	t := T{}
-	t.M1() // T's M1
-	t.M2() // T's M2
-}
+func (T) M1() { println("T's M1") }
+func (T) M2() { println("T's M2") }
 ```
 
-```text
-T's M1
-T's M2
-```
+这里应打印 T's M1、T's M2。若把外层方法改成 *T 接收者，可寻址 t 的直接调用仍能经自动取地址命中外层；这不表示 T 的值也实现要求这些方法的接口，更不表示被遮住的内层方法会补回 T 的方法集合。
 
-自身实现命中了查找顺序的第一步，根本轮不到在嵌入字段之间做选择。本机实测还确认：自身实现写成指针接收者同样生效，值类型变量调用指针接收者的自身方法时，经自动取地址的语法糖照样成立，自身方法始终优先于嵌入代理。版本边界也要分清：前面接口嵌入小节提到的 Go 1.14 放宽，仅限于接口类型中嵌入接口类型；在结构体类型中嵌入方法集合有交集的接口类型，仍然会碰到上面的 `ambiguous selector`。〔TB26 p12-13〕
-
-结构体嵌入接口类型在日常编码中还有一个妙用：简化单元测试的编写。原课的场景在 employee 包：Stmt 接口声明 Close、NumInput、Exec、Query 四个方法，MaleCount(s Stmt) 查询男性员工数，只用到其中的 Exec。如果每个测试伪对象都要实现这四个方法，工作量有些大；惯例是使用"伪对象（fake object）"来冒充真实的 Stmt 接口实现。〔TB26 p13-14〕
-
-做法是让伪对象嵌入 Stmt 接口：嵌入之后，这个结构体的方法集合就包含了 Stmt 的全部四个方法，即便自身一个方法都不实现，编译期也算实现了 Stmt。因此伪对象只需覆写 MaleCount 用到的 Exec，返回 (Result{Count: 5}, nil) 即可满足测试。〔TB26 p14-15〕原例是 employee 包的测试 TestEmployeeMaleCount：构造 f := fakeStmtForMaleCount{}，调用 c, _ := MaleCount(f)，断言 c != 5 时调用 `t.Errorf("want: %d, actual: %d", 5, c)`。为能独立运行，下面放进 main 包，用 useStmt(s Stmt) int 承担 MaleCount 的角色，并补全原课在 gender=? 处被截断的 Exec 变参：
+外层自己实现一部分、其余由接口字段提供入口的特点，有时能减少旧式大接口的测试样板。下面保留员工查询的例子：Stmt 有 Close、NumInput、Exec、Query 四个方法，MaleCount 实际只使用 Exec。伪对象嵌入 Stmt，并为要测的 Exec 提供明确行为。为使错误路径也可见，例子让一个字段决定 Exec 是否失败；这不是连接数据库的实现。〔TB26 p13-15〕
 
 ```go
 package main
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
-type Result struct {
-	Count int
-}
-
+type Result struct { Count int }
 func (r Result) Int() int { return r.Count }
-
 type Rows []struct{}
 
 type Stmt interface {
-	Close()
+	Close() error
 	NumInput() int
 	Exec(stmt string, args ...string) (Result, error)
 	Query(args []string) (Rows, error)
 }
 
-// useStmt 承担原例 MaleCount 的角色：查询男性员工数，只用到 Exec。
-func useStmt(s Stmt) int {
+func MaleCount(s Stmt) (int, error) {
 	result, err := s.Exec("select count(*) from employee_tab where gender=?", "M")
 	if err != nil {
-		return 0
+		return 0, err
 	}
-	return result.Int()
+	return result.Int(), nil
 }
 
 type fakeStmtForMaleCount struct {
-	Stmt // 嵌入接口，方法集合即覆盖 Stmt 的全部四个方法
+	Stmt
+	err error
 }
 
-func (fakeStmtForMaleCount) Exec(stmt string, args ...string) (Result, error) {
+func (f fakeStmtForMaleCount) Exec(_ string, _ ...string) (Result, error) {
+	if f.err != nil {
+		return Result{}, f.err
+	}
 	return Result{Count: 5}, nil
 }
 
 func main() {
-	var f fakeStmtForMaleCount
-	fmt.Println(useStmt(f)) // 5
+	fmt.Println(MaleCount(fakeStmtForMaleCount{}))
+	fmt.Println(MaleCount(fakeStmtForMaleCount{err: errors.New("query failed")}))
 }
 ```
 
-运行输出 5，来自被覆写的 Exec；Close、NumInput、Query 一个都没写，照样通过编译，因为接口满足是编译期检查，看的是方法集合。但编译期满足不等于运行期一切可用：把 useStmt 改成调用未覆写的 s.Query，编译照样通过，运行即 panic，因为嵌入字段 Stmt 是接口类型，零值为 nil，代理调用没有真正的接收者可去。本机 go1.26.4（darwin/arm64）实测报 panic: runtime error: invalid memory address or nil pointer dereference。〔TB26 p13-15〕用伪对象的边界由此清楚：用不到的方法可以不写，可能被调到的方法一定要自己实现。后面还有一段"实用技巧"会从测试角度点到这个用法。
-
-方法提升也影响接口实现，但要注意遮蔽和同层名称冲突。在不存在冲突时，结构体 `S` 嵌入 `T`：`S` 提升 `T` 的值接收者方法，`*S` 还提升 `*T` 的指针接收者方法；如果嵌入的是 `*T`，两者都提升 `T` 和 `*T` 的方法。〔TB26 p15-20〕
-
-上一段给的是嵌入单个类型时的提升规则；嵌入多个类型时，方法集合就是各嵌入字段方法集合的合并。原课的例子让 T 同时嵌入 T1 与 *T2：T1 声明了值接收者的 T1M1 和指针接收者的 PT1M2，T2 同理有 T2M1 和 PT2M2。先列出前提：T1 的方法集合包含 T1M1，*T1 的方法集合包含 T1M1、PT1M2；T2 的方法集合包含 T2M1，*T2 的方法集合包含 T2M1、PT2M2。〔TB26 p15-16〕T1、T2 仍按本章惯例定义为 int 的命名类型，底层类型不影响方法集合的结论。用本章开头定义过的 dumpMethodSet 验证：
+成功分支按代码应打印 5 <nil>，错误分支打印 0 query failed，错误没有被吞成“查到了零人”。成功测试可以断言 err == nil 且 count == 5；失败测试检查原错误被返回，而不是继续读取空 Result。嵌入提供完整方法集合，使这个类型能作为 Stmt 实参；真正被调用的 Exec 则由自己的方法接住。〔TB26 p14-15〕
 
 ```go
-type T1 int
-
-func (T1) T1M1() {}
-func (*T1) PT1M2() {}
-
-type T2 int
-
-func (T2) T2M1() {}
-func (*T2) PT2M2() {}
-
-type T struct {
-	T1
-	*T2
-}
-
-func main() {
-	dumpMethodSet(T{})
-	dumpMethodSet(&T{})
+// 放在与上段类型同包的 _test.go 中，需 import "testing"。
+func TestEmployeeMaleCount(t *testing.T) {
+	count, err := MaleCount(fakeStmtForMaleCount{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 5 {
+		t.Errorf("want: %d, actual: %d", 5, count)
+	}
 }
 ```
 
-```text
-main.T's method set:
-- PT2M2
-- T1M1
-- T2M1
+没有实现的 Close、NumInput、Query 依赖那个零值为 nil 的 Stmt 字段。只要被测代码开始调用它们，就会发生 nil 接口调用 panic。编译期满足接口，不等于每条运行路径都可用。这种技巧适合范围明确、你能控制调用面的测试替身；若生产函数本来只需要 Exec，更直接的长期设计是让参数接收只含 Exec 的小接口。测试里的意外调用也可以通过显式失败方法给出更清楚的诊断，不应把嵌入 nil 接口当成完整可用的通用实现。
 
-*main.T's method set:
-- PT1M2
-- PT2M2
-- T1M1
-- T2M1
-```
+### 普通字段、新定义类型和别名不是同一种复用
 
-输出与两条规则表达式一致：**类型 T 的方法集合 = T1 的方法集合 + `*T2` 的方法集合；类型 `*T` 的方法集合 = `*T1` 的方法集合 + `*T2` 的方法集合**。〔TB26 p17〕尤其要注意 *T 的方法集合：它包含的不是 T1 而是 `*T1` 的方法集合，PT1M2 就是这么进来的，道理和第三节"结构体指针类型的方法集合包含结构体类型的方法集合"一样：指针在手，值接收者与指针接收者的方法都够得着。调用面不受影响：无论是 T 类型变量实例还是 `*T` 类型变量实例，都可以调用所有提升上来的方法。〔TB26 p15-17〕本机 go1.26.4（darwin/arm64）实测输出与上面一致。
-
-方法提升只认"裸类型名"，原课的一道思考题专门检验这一点。S1 就是本章前面介绍嵌入字段时用过的那个结构体：裸写 `T1`、`*t2`、`I`，另有普通字段 a、b；S2 把同样的类型一个一个写成普通命名字段，类型完全相同。T1 无方法，t2 只有 n、m 两个字段，I 只声明 M1()，定义都同前。原课正文没有给答案，请先自己分析：S1 与 `*S1`、S2 与 `*S2` 的方法集合各包含什么？两者等价吗？如不等价，区别在哪里？〔TB26 p21〕
+回看前面的 S1。把它的类型逐个加上显式字段名，即使字段名刚好与类型同名，也会得到不同的结果。下面沿用 T1、t2、I、S1 的声明，另加 S2；观察片段可复用 names，并导入 fmt。〔TB26 p21-24〕
 
 ```go
 type S2 struct {
 	T1 T1
 	t2 *t2
-	I  I
-	a  int
-	b  string
+	I I
+	a int
+	b string
 }
 
 func main() {
-	dumpMethodSet(S1{})
-	dumpMethodSet(&S1{})
-	dumpMethodSet(S2{})
-	dumpMethodSet(&S2{})
+	fmt.Println(names(S1{}), names(&S1{}))
+	fmt.Println(names(S2{}), names(&S2{}))
 }
 ```
 
-```text
-main.S1's method set:
-- M1
+在 T1、t2 没有方法，I 只有 M1 的前提下，S1 与 `*S1` 都有 [M1]，S2 与 `*S2` 都是空集合。S2.I.M1() 仍然是合法的显式字段访问，但 S2 自身没有提升的 M1；两者既不是同一个类型，也不具有相同的接口实现关系。如果给 S1 的 `*t2` 也加上 M1，同层的 t2 与 I 会冲突，原先提升的 M1 也就不能再不加限定地使用。〔TB26 p21-24〕
 
-*main.S1's method set:
-- M1
-
-main.S2's method set is empty!
-*main.S2's method set is empty!
-```
-
-答案是两者不等价。本机 go1.26.4 实测与原课留言区的结论一致：S1 与 `*S1` 的方法集合都只有 M1 一项，S2 与 `*S2` 打印的都是空方法集合。〔TB26 p22-24〕原因是方法提升只发生在裸类型名写的嵌入字段上：S1 嵌入的接口 I 把 M1 并入了方法集合，*S1 也包含它；而 S2 的 T1、t2、I 只是恰好与类型同名的普通命名字段，命名字段不参与提升，所以 S2 与 `*S2` 的方法集合都是空的。再补一个同层冲突的实测：若让 S1 中的 `*t2` 与 `I` 同层都提供 M2，调用 s.M2 会报 `ambiguous selector`，机制与前面"冲突、歧义与测试伪对象"小节的交集歧义一致，编译器同样无法在两个同层候选之间做选择。〔TB26 p21-24〕它与下文 type S T 与别名的对照互为补充：那里看定义方式，这里看字段写法，结论都落在方法集合上。
-
-另一个容易混淆的语法是 `type S T`：它定义新类型，而不是嵌入。对于普通非接口类型，新类型不会继承 `T` 的已声明方法；其底层结构若含嵌入字段，仍可能有提升的方法。`type S = T` 则是别名，与 `T` 是同一类型。
-
-用原课的一道思考题把这个规则完整推一遍。先定义 `T`，给它声明两个方法，再基于 `T` 定义新类型 `S`：
+另一种容易被当作复用的写法是 type S T。它定义一个与 T 不同的新类型，不会把直接绑定在 T 上的已声明方法带过来。下面是完整程序，对照新类型与别名；方法都补上了方法体，而不是把只有声明的示意代码当作可独立运行代码。〔TB25 p12-13〕〔TB26 p17-20〕
 
 ```go
-type T struct{}
+package main
 
-func (T) M1()
-func (T) M2()
+import (
+	"fmt"
+	"reflect"
+)
+
+type T struct{}
+func (T) M1() {}
+func (*T) M2() {}
 
 type S T
+
+type Alias = T
+
+func names(v any) []string {
+	typ := reflect.TypeOf(v)
+	var result []string
+	for i := 0; i < typ.NumMethod(); i++ {
+		result = append(result, typ.Method(i).Name)
+	}
+	return result
+}
+
+func main() {
+	fmt.Println(names(S{}), names(&S{}))
+	fmt.Println(names(Alias{}), names(&Alias{}))
+	fmt.Printf("%T\n", Alias{})
+	var s S
+	T(s).M1()
+}
 ```
 
-两个方法只写声明、不写方法体，这是原课的示意写法，表示 `T` 拥有 `M1` 和 `M2`；动手验证时补上空方法体即可。问题是：`S` 类型包含哪些方法？`*S` 类型又包含哪些？原课把这道题当作嵌入话题的预习题：方法集合是重要且实用的概念，马上要用来理解具体问题。请先自行分析，再借助本章开头定义过的 `dumpMethodSet` 验证：〔TB25 p12〕
+对照程序里 M1 是值接收者、M2 是指针接收者，套用第三节讲过的规则：定义类型 T 的方法集合只含值接收者方法，`*T` 的方法集合同时含两者。由定义规则可得，第一行 S 与 `*S` 都是空集合；第二行别名值是 [M1]，别名指针是 [M1 M2]，类型名打印 main.T。S.M1 不存在，需要自己为 S 声明方法，或像最后一行那样在允许的情况下显式转换为 T 再调用；T 先前满足的接口不会仅因 type S T 自动归到 S 头上。Alias 则根本不是第二个类型，它与 T 是同一个类型，所以有相同方法、相同接口实现关系，反射也没有另一个“别名动态类型”可报告。〔TB25 p7-10〕〔TB25 p12-13〕〔TB26 p18-20〕
+
+原课用本章开头定义过的 dumpMethodSet 观察同一组变量，两个程序的输出可以这样对应：type T1 T 版本中，main.T1's method set is empty! 与 `*main.T1`'s method set is empty! 两行，正是新类型不继承方法的直接证据；type T1 = T 版本中，对 t1、pt1 的四次调用全部打印 main.T 或 *main.T 的方法集合，dumpMethodSet 甚至无法识别出类型别名：别名与原类型同集合。〔TB26 p18-20〕
+
+这里的“新类型方法集合为空”有明确前提：原例是没有嵌入字段的非接口结构体。若原来的底层结构含嵌入字段，这些字段仍在，新类型仍可有提升方法；若基于接口 I 定义 type NI I，新接口的行为要求也仍然与 I 一致。下面是另一个声明片段，不能和上段同名类型混放。〔TB26 p17〕现行依据：Go 语言规范 Type definitions。
 
 ```go
-dumpMethodSet(S{})
-dumpMethodSet(&S{})
+type E struct{}
+func (E) Promoted() {}
+
+type Original struct { E }
+func (Original) Own() {}
+
+type Defined Original
+// Defined 没有 Own，但仍能沿其嵌入字段 E 提升 Promoted。
+
+type I interface { M1() }
+type NI I
+// NI 与 I 是不同的定义接口类型，具有相同的方法要求。
 ```
 
-```text
-main.S's method set is empty!
-*main.S's method set is empty!
-```
-
-`S` 和 `*S` 的方法集合都是空的。原因在定义方式本身：方法要用接收者声明才能挂在类型上，`type S T` 造出的是全新类型，`S` 自己没有任何方法声明，`T` 的已声明方法也不会自动跟过来。本章前面说过，方法集合是判断接口实现的唯一手段，空方法集合意味着 `T` 能满足的接口不会自动算到 `S` 头上，需要的话只能为 `S` 重新声明方法；同样地，`S` 的值不能直接调用 `M1`，必须先显式转换，例如 `T(s).M1()`。〔TB25 p12-13〕
-
-把定义换成别名，结论立刻反过来：`type S = T` 之后 `S` 与 `T` 是同一个类型，方法集合原样随 `T`，`S` 和 `*S` 都包含 `M1`、`M2` 两个方法。〔TB25 p13〕两种写法的本质区别是：`type S T` 定义新类型，方法集合从零开始；`type S = T` 只给既有类型换名字，类型的任何属性都不增不减。
-
-以上结论经过实测（go1.26.4，darwin/arm64）：新类型 `S` 与 `*S` 打印的都是空方法集合；别名与原类型的方法集合完全相同，对别名值取 `reflect.TypeOf`，打印出的动态类型仍是原类型名（实测输出 `main.T0`），看不出别名痕迹。
-
-还有一个实用技巧：测试里伪造依赖时，可以在结构体里嵌入接口，只覆写用到的方法，其余方法不实现也能编译；但未覆写的方法被调用时会 nil 解引用 panic，所以只适合你确定不会调到的场合。〔TB26 p13-15〕
+这几种写法解决的是不同问题：普通字段让依赖与调用路径显式；嵌入让某些字段和方法参与外层选择符与方法集合；新类型建立独立类型身份；别名给同一个类型增加一个名字。选择时应先问是否确实要把内层方法作为外层 API 公开。若只是保存一个依赖，写成命名字段并手动实现少量转发，常常更清楚，也避免内层新增方法意外扩张外层 API。
 
 ## 七、水平组合三式：包装器、适配器、中间件
 
