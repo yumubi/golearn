@@ -367,6 +367,200 @@ fmt.Println(c) // 13
 
 显式哲学的第二落点是错误处理，它直接决定了 Go 错误处理方案的形态。这个方案有三个要素：错误在函数/方法中通过 return 语句显式地返回；方案基于值比较，错误就是一个普通的返回值，不是隐藏的控制流；调用方通常不能忽略对返回的错误的处理。〔TB02 p5〕错误摆在你眼前，处理不处理、在哪处理都是明面上的决定，没有 throw 那种隐式向上传播的控制流。这种有悖于主流语言潮流的机制一度被开发者诟病，社区提出过多个新错误处理方案，但或多或少都包含隐式成分，被 Go 开发团队一一否决，否决与显式的设计哲学不无关系。〔TB02 p5〕错误处理的具体写法，见 05 节。
 
+### switch：把穿透做成显式动作
+
+显式哲学在控制流上的另一处落地，是 switch 的穿透语义。写惯 C 的人有一段肌肉记忆：匹配到某个 case，执行完它的分支代码，如果没写 `break`，就顺势滑进下一个 case 接着跑。原课把这种隐式语义点名为 C 的一个缺陷：它不符合日常算法的常规逻辑，所以 C 程序员的补救办法是给每个 case 都补上 `break`，原课前面用 C 写的 check_work_day 示例就是这样做的。〔TB20 p9〕Go 把这条默认语义整个取消：每个 case 对应的分支代码执行完后，switch 语句就结束了。多数时候这正是想要的行为，"一个 case 一件事"，少写一个 `break` 就少一类事故。确实需要延续到下一个 case 时，Go 提供显式关键字 `fallthrough`：要不要穿透，写出来让读代码的人看见，原课把这一改动归到"显式"设计哲学名下。〔TB20 p9〕
+
+`fallthrough` 到底做了什么，直接看原课的完整程序：
+
+```go
+package main
+
+func case1() int {
+	println("eval case1 expr")
+	return 1
+}
+
+func case2() int {
+	println("eval case2 expr")
+	return 2
+}
+
+func switchexpr() int {
+	println("eval switch expr")
+	return 1
+}
+
+func main() {
+	switch switchexpr() {
+	case case1():
+		println("exec case1")
+		fallthrough
+	case case2():
+		println("exec case2")
+		fallthrough
+	default:
+		println("exec default")
+	}
+}
+```
+
+```text
+eval switch expr
+eval case1 expr
+exec case1
+exec case2
+exec default
+```
+
+三个函数各打印一行求值日志再返回一个值：switchexpr 作 switch 表达式，case1、case2 作 case 表达式。逐行读输出：先求值 switch 表达式，得到 eval switch expr；再按书写顺序求值 case1 的表达式并匹配成功，执行 case1 分支，得到 exec case1。关键在下一行：case1 写了 `fallthrough`，执行流并不离开 switch 语句，而是直接落到下一个 case 的分支代码，打出 exec case2。输出里没有 eval case2 expr，因为 `fallthrough` 不对下一个 case 的表达式求值，直接执行它的分支代码。case2 分支里同样写了 `fallthrough`，于是最后一个分支 default 也被执行，打出 exec default：`fallthrough` 可以连续穿透，一直穿到 default。〔TB20 p9-10〕
+
+还有一条边界：如果某个 case 已经是 switch 中最后一个 case，且它后面没有 default 分支，这个 case 里就不能再写 `fallthrough`，否则编译器报错。〔TB20 p9-10〕
+
+Go 的 switch 还支持一种专属写法：type switch，用类型信息当分支条件，等价于一组类型断言的紧凑写法，代价是只能用于接口变量（断言本身的规则在 04 节讲）：
+
+```go
+package main
+
+func main() {
+	var x interface{} = 13
+	switch x.(type) {
+	case nil:
+		println("x is nil")
+	case int:
+		println("the type of x is int")
+	case string:
+		println("the type of x is string")
+	case bool:
+		println("the type of x is string")
+	default:
+		println("don't support the type")
+	}
+}
+```
+
+```text
+the type of x is int
+```
+
+switch 后面的 `x.(type)` 是 switch 语句专有的表达式形式，离开 switch 语句就用不了；x 必须是接口类型的变量，表达式的求值结果是这个接口变量当前的动态类型。动态类型可以先借这行声明建立直觉：x 的静态类型是 interface{}，把整型值 13 赋给它之后，x 的动态类型就是 int。接口值在内部怎么同时装下静态类型与动态类型，04 节有完整展开，这里先记住分支怎么写。〔TB20 p10-11〕case 后面接的不再是普通表达式，而是一个个具体的类型：Go 拿 x 的动态类型与各 case 的类型匹配，命中哪支就执行哪支，之后的逻辑与普通 switch 一致。Go 中所有类型都实现了 interface{}，所以当 switch 变量是 interface{} 类型时，case 后面可以写任意类型。〔TB20 p11-12〕
+
+原文这个示例里埋了一处笔误，正好当练习：case bool 分支的 println 文案写成了 the type of x is string，应为 bool。因为 bool 没被匹配，这行文案不执行，运行结果不受影响。〔TB20 p11〕
+
+只拿类型还不够，多数场景还想要值。把 `x.(type)` 换成 `v := x.(type)`：
+
+```go
+package main
+
+func main() {
+	var x interface{} = 13
+	switch v := x.(type) {
+	case nil:
+		println("v is nil")
+	case int:
+		println("the type of v is int, v =", v)
+	case string:
+		println("the type of v is string, v =", v)
+	case bool:
+		println("the type of v is bool, v =", v)
+	default:
+		println("don't support the type")
+	}
+}
+```
+
+```text
+the type of v is int, v = 13
+```
+
+千万不要认为变量 v 存储的是类型信息：v 存的是 x 的动态类型对应的值信息，这样 case 执行路径里就可以直接使用 v。x 为 13 时命中的是 case int，v 的类型是 int、值是 13。顺带一个形式辨析：`v := x.(type)` 看似带初始化语句的 switch 写法（`switch initStmt; expr` 那种），但它后面没有分号，这种形式叫 type guard。〔TB20 p12〕
+
+type switch 对 case 还有一层静态约束。switch 变量是 interface{} 时 case 随便写；换成某个特定接口类型 I，case 后面就只能写实现了 I 的类型：
+
+```go fail
+package main
+
+type I interface {
+	M()
+}
+
+type T struct{}
+
+func (T) M() {}
+
+func main() {
+	var t T
+	var i I = t
+	switch i.(type) {
+	case T:
+		println("it is type T")
+	case int:
+		println("it is type int")
+	case string:
+		println("it is type string")
+	}
+}
+```
+
+```text
+19:2: impossible type switch case: i (type I) cannot have dynamic type int
+21:2: impossible type switch case: i (type I) cannot have dynamic type string
+```
+
+这段代码编译不过。例子中只有自定义类型 T 实现了接口 I（它提供了 M 方法），Go 原生类型 int 与 string 都没有实现 I。编译器的两条报错都叫 impossible type switch case，直译是"不可能的 type switch 分支"：静态类型为 I 的变量 i，其动态类型必须实现 I，所以 case int 和 case string 从类型系统上就站不住，这层约束把 type switch 的合法分支收紧到接口的能力范围内。（报错行号对应原课程序的行位置，代码贴进自己的文件时行号会随代码位置变化。）〔TB20 p13〕
+
+最后一个坑来自 `break` 和 switch 的组合。本章"循环"一节给过规则：嵌套循环里不带 label 的 `break` 只跳出最内层循环，跳外层要带 label。把找第一个偶数的例子从 if 换成 switch，这条规则就换了个埋伏位置：
+
+```go
+package main
+
+func main() {
+	var sl = []int{5, 19, 6, 3, 8, 12}
+	var firstEven int = -1
+
+	// 找出整型切片sl中的第一个偶数
+	for i := 0; i < len(sl); i++ {
+		switch sl[i] % 2 {
+		case 0:
+			firstEven = sl[i]
+			break
+		case 1:
+			// do nothing
+		}
+	}
+
+	println(firstEven)
+}
+```
+
+切片里第一个偶数是 6，程序却输出最后一个偶数 12。原因在 Go 语言规范的定义：不带 label 的 `break` 语句中断执行并跳出的，是同一函数内 break 所在的最内层的 for、switch 或 select。上面代码里的 `break` 坐在 switch 里，它只跳出 switch，外层 for 根本没停。于是循环继续跑：下标走到 2 时 firstEven 先被赋成 6，随后被 8 覆盖，最后被 12 覆盖，循环结束后 println 打出 12。修正用带 label 的 `break`：
+
+```go
+package main
+
+func main() {
+	var sl = []int{5, 19, 6, 3, 8, 12}
+	var firstEven int = -1
+
+loop:
+	for i := 0; i < len(sl); i++ {
+		switch sl[i] % 2 {
+		case 0:
+			firstEven = sl[i]
+			break loop
+		case 1:
+			// do nothing
+		}
+	}
+
+	println(firstEven) // 6
+}
+```
+
+label loop 写在 for 语句前面，指代这个 for 循环的执行。代码执行到 `break loop` 时，程序停止 loop 所指代的 for 循环，firstEven 停在第一个赋进来的 6，println 输出 6。〔TB20 p14-15〕
+
+select 语句和 switch 一样会阻拦不带 label 的 `break` 跳出，具体例子留到 06 节讲并发时再展开。〔TB20 p15〕
+
 ## 三、组合：没有继承，靠什么扩展
 
 Java/Kotlin 程序员建模的第一反应是定义基类，然后继承。Go 里没有 `extends`，找不到经典的面向对象语法元素、类型体系和继承机制，类型之间没有父子关系，每个类型都是一座孤岛。〔TB02 p5-6〕扩展能力的办法是把这些孤岛"拼"起来：结构体里嵌入别的类型做垂直扩展，函数参数写成接口类型做水平扩展。〔TB02 p6-7〕
