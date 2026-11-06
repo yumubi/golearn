@@ -1,6 +1,6 @@
 # 01 Go 的世界观与差异总表
 
-> 详细程度：标准 · 约 80 分钟
+> 详细程度：标准 · 约 115 分钟
 > 材料：TB00、TB01、TB02、TBX01、TB19、TB20、TB21、TBX08 · 旧长版：`notes/p1-toolchain.md`、`notes/p2-lang-core.md`
 > 前置：任意一门主流语言
 
@@ -653,7 +653,153 @@ woof, I'm Rex
 
 这两个签名在现行源码里有一处要更正：io/ioutil 自 Go 1.16 起废弃，现行 src/io/ioutil/ioutil.go 里 ReadAll 的文档标注 `Deprecated: As of Go 1.16, this function simply calls [io.ReadAll]`，函数体也只剩一行 `return io.ReadAll(r)`；ReadAll 本体已迁入 io 包（src/io/io.go，内部以 512 字节容量起步、按指数扩容读取，读完再拼成精确大小的切片返回），io.Copy 的签名未变。教学引用应写 io.ReadAll。〔1.26 修正〕〔实测：/Users/akka/Toolchain/go/current/src/io/ioutil/ioutil.go:26-31、/Users/akka/Toolchain/go/current/src/io/io.go:709-712、:387-389〕
 
-水平组合的模式不止这一种，原课还点名了点缀器、中间件等，声明留到接口类型章节详细展开；此外，Go 内置的并发能力也能拿来组合，通过 goroutine+channel 可以实现类似 Unix Pipe 的能力。〔TB02 p7〕这就是组合加接口的用法，第 04 节要展开的全部内容。
+水平组合的模式不止这一种，原课还点名了点缀器、中间件等，声明留到接口类型章节详细展开；此外，Go 内置的并发能力也能拿来组合，通过 goroutine+channel 可以实现类似 Unix Pipe 的能力。〔TB02 p7〕
+
+### 函数是一等公民：从值到方法
+
+"组合"至今拿出的证据都在数据侧：类型嵌入把已有能力搬进新类型，接口参数让函数只认能力不认类型。这条哲学还有行为侧的证据：在 Go 里，一段行为本身也能当成值来对待。本小节从"把一段行为存进变量"出发，先讲清函数的类型从哪来、传参时拷贝什么，再走进标准库里最著名的一个函数类型适配器 http.HandlerFunc，把这条证据链走完。
+
+**从把一段行为存进变量说起。** 原课的例子（原文片段补上 package 与 import 后可独立运行）：
+
+```go
+package main
+
+import (
+	"fmt"
+	"io"
+	"os"
+)
+
+var (
+	myFprintf = func(w io.Writer, format string, a ...interface{}) (int, error) {
+		return fmt.Fprintf(w, format, a...)
+	}
+)
+
+func main() {
+	fmt.Printf("%T\n", myFprintf) // func(io.Writer, string, ...interface {}) (int, error)
+	myFprintf(os.Stdout, "%s\n", "Hello, Go") // 输出 Hello, Go
+}
+```
+
+var 块里没有函数名：等号右边是一个新创建的匿名函数，整个被赋给了变量 myFprintf。行为存进变量之后，这个变量就能像函数一样调用：第二行传入 os.Stdout、格式串和实参 "Hello, Go"，屏幕上打出 Hello, Go。第一行用 %T 打印 myFprintf 的类型，与预期的函数类型相符：func(io.Writer, string, ...interface {}) (int, error)。原课该行注释在原文里右缘截断到 ...interface {})，返回值部分按 digest K14 记录的完整类型 func(io.Writer, string, ...interface{}) (int, error) 补全，两者是同一个类型，差别只是类型字符串里 interface{} 显示为带空格的 interface {}。先存、用 %T 验证类型、再按函数类型调用，三步就是"函数可以存储在变量中"的最小演示。〔TB21 p9-10〕
+
+一处现行源码对照：标准库现行签名是 `func Fprintf(w io.Writer, format string, a ...any) (n int, err error)`，any 是 interface{} 的别名（"equivalent to interface{} in all ways"），所以 ...any 与 ...interface{} 是同一个类型，例子在今天照样成立。〔实测：/Users/akka/Toolchain/go/current/src/fmt/print.go:222、/Users/akka/Toolchain/go/current/src/builtin/builtin.go:96-97〕
+
+**把函数声明读成变量声明。** myFprintf 的写法为什么合法？回到普通函数声明。一个 Go 函数声明由五部分组成：func 关键字、函数名、参数列表、返回值列表、函数体。原课做了一次等价变换，把函数声明改写成完全合乎语法的变量声明：函数名就是变量名，func 关键字、参数列表和返回值列表共同构成函数类型。原课的变换图在文本版没有保留，用最小例子复原这个对照（教学复原，非原课代码）：
+
+```go
+// 写法一：传统函数声明
+func Add(a, b int) int { return a + b }
+```
+
+```go
+// 写法二：等价的变量声明形式，函数名的位置换成变量名，右边整个是函数字面值
+var add = func(a, b int) int { return a + b }
+```
+
+原课对这次变换的评语是："这不就是在声明一个类型为函数类型的变量吗"。参数列表与返回值列表的组合有一个专门的名字：函数签名，它是决定两个函数类型是否相同的决定因素，函数类型可以看成由 func 关键字与函数签名组合而成。表述函数类型时通常省略签名里的参数名和返回值变量名，比如 fmt.Fprintf 的类型写作 func(io.Writer, string, ...interface{}) (int, error)。〔TB21 p4〕
+
+签名判定有一个直接推论：func(a int, b string) (results []string, err error) 与 func(c int, d string) (sl []string, err error) 的参数名和返回值名都不同，但省去名字后都是 func(int, string) ([]string, error)，所以它们是同一个函数类型。〔TB21 p4-5〕由此得到原课的结论：每个函数声明所定义的函数，仅仅是对应函数类型的一个实例，就像 var a int = 13 里 a 是 int 类型的一个实例。原课还把两种形式并排放进最简对照：s := T{} 是用复合类型字面值初始化结构体变量，f := func(){} 里同样位置的 func(){} 叫函数字面值，由函数类型与函数体组成，像一个没有函数名的函数声明，所以也叫匿名函数。〔TB21 p5〕
+
+有一条边界要划清：等价变换只为理解函数声明，日常定义函数仍用传统函数声明，原课的原话是"万万不可"改用变量声明形式。〔TB21 p5〕
+
+**存进变量的行为，传参时怎么拷贝。** 行为能存进变量，就逃不开传参时的拷贝规则。Go 的参数传递恒为值传递：把实际参数在内存中的表示逐位拷贝（Bitwise Copy）到形式参数。整型、数组、结构体的内存表示就是自身的数据内容，值传递拷贝的就是它们自身，开销与自身大小成正比。string、切片、map 不同：它们的内存表示是数据内容的"描述符"，值传递只拷贝描述符、不含数据内容本身，开销固定、与数据内容大小无关，这种只拷描述符的过程称为浅拷贝。Go 用统一的值传递换简单的心智模型，代价是大结构体的拷贝开销，需要时用显式传指针优化；还有一条推论要记牢（digest 易错点，03 章"值语义"一节有完整展开）：描述符的副本与原描述符指向同一份底层数据，函数内经描述符修改底层数据，对调用者可见。〔TB21 p6〕
+
+两条例外由编译器介入，触发条件是"形参为接口类型"或"形参为变长参数"，此时简单的值传递不能满足要求：形参为接口类型时，编译器把传递的实参赋值给对应的接口类型形参（作者在留言区把这步补称为"装箱"，由编译器植入的代码完成）；形参为变长参数时，编译器把零个或多个实参按一定形式转换为对应的变长形参，"零个"也在转换范围内，原课 myAppend(sl) 的无实参调用就是零实参的例子，转换的目标形式是切片（变长参数 elems 的 %T 打出来是 []int）。〔TB21 p6-7〕〔TB21 p20〕回看 myFprintf 的调用：os.Stdout 要先赋值给接口形参 io.Writer，实参 "Hello, Go" 被打包成切片传给变长形参 a，一条调用语句把两条例外都凑齐了。
+
+**判定标准：什么算一等公民。** "把一段行为存进变量"这件事有正式的名字。业界和教科书都没有给出"一等公民"的精准定义，原课引用 wiki 发明人、C2 站点作者沃德·坎宁安（Ward Cunningham）的解释作为工作定义：如果一门编程语言对某种语言元素的创建和使用没有限制，我们可以像对待值（value）一样对待这种语法元素，那么我们就称这种语法元素是这门编程语言的"一等公民"；拥有"一等公民"待遇的语法元素可以存储在变量中，可以作为参数传递给函数，可以在函数内部创建并可以作为返回值从函数返回。〔TB21 p9〕
+
+Go 函数这四条全部满足，原课按特征一到特征四逐一展开：特征一"存储在变量中"就是开头的 myFprintf；特征二"在函数内创建并通过返回值返回"，例证是 setup(task) 返回一个做上下文拆除的匿名函数，这种引用了包裹函数局部变量的匿名函数就是闭包（defer 与闭包的求值规则见 05 章，闭包捕获循环变量的坑，本章"循环"一节刚用 for range 讲过）；特征三"作为参数传入函数"，例证是 time.AfterFunc(time.Second*2, func() { println("timer fired") })，定时器到点执行传入的函数。〔TB21 p9-12〕特征二、三本小节不展开，落点是特征四：函数拥有自己的类型，它是把"函数"和"组合"连起来的那根线。
+
+**特征四：函数拥有自己的类型。** 推理链原课给得很直白：作为一等公民的整型值拥有自己的类型 int，且只是 int 的一个实例，字符串值、布尔值同理；前面刚得到过"每个函数声明只是对应函数类型的一个实例"，所以每个函数都和整型值一样拥有自己的类型，也就是函数类型。〔TB21 p11〕再进一步：可以像基于整型、字符串类型自定义类型那样，基于函数类型自定义类型，标准库里现成的两例：
+
+```go
+// $GOROOT/src/net/http/server.go
+type HandlerFunc func(ResponseWriter, *Request)
+
+// $GOROOT/src/sort/genzfunc.go（2021 年课程引用时的版本）
+type visitFunc func(ast.Node) ast.Visitor
+```
+
+〔TB21 p12〕版本边界要交代：HandlerFunc 在现行 go1.26.4 源码中原样可见，定义未变，注释为 godoc 链接格式加了方括号；visitFunc 出自当年版本的 sort 包，现行源码里已没有 genzfunc.go 这个文件，全树也搜不到 type visitFunc。今天要找同结构的样本，go/ast 包的 inspector 是一个：type inspector func(Node) bool，配一个 Visit 方法，同样是"函数类型加方法"的组合。〔实测：/Users/akka/Toolchain/go/current/src/net/http/server.go:2278-2287、/Users/akka/Toolchain/go/current/src/go/ast/walk.go:357-363〕
+
+最后一块拼图：整型、字符串等所有类型都能做的操作，比如显式转型，同样可以用在函数类型上，函数可以被显式转型，这个能力在特定领域有典型应用。〔TB21 p12〕
+
+**应用：http.HandlerFunc(greeting)。** 最典型的应用就是标准库 http 包的 HandlerFunc，先看原课的完整例程：
+
+```go
+func greeting(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "Welcome, Gopher!\n")
+}
+
+func main() {
+	http.ListenAndServe(":8080", http.HandlerFunc(greeting))
+}
+```
+
+角色分工：greeting 是业务函数，往 ResponseWriter 写一行欢迎语；ListenAndServe 是服务入口，监听 8080 端口；http.HandlerFunc(greeting) 是两者之间的适配层。运行后用户通过浏览器或类似 curl 的命令行工具访问 8080 端口，会收到 "Welcome, Gopher!" 的文字应答，原课说这是日常最常见的用 Go 构建 Web Server 的例子。原课 09 讲只讲了怎么写、没讲原理，这一讲把原理补上；手册里最小服务的对应落点在 11 章。〔TB21 p12-13〕
+
+为什么不能直接写 http.ListenAndServe(":8080", greeting)？ListenAndServe 会把来自客户端的 http 请求交给第二个参数 handler 处理，而 handler 参数的类型 http.Handler 是一个接口类型，只有一个方法：〔TB21 p13〕
+
+```go
+// $GOROOT/src/net/http/server.go
+type Handler interface {
+	ServeHTTP(ResponseWriter, *Request)
+}
+```
+
+〔实测：/Users/akka/Toolchain/go/current/src/net/http/server.go:88-90〕greeting 的函数类型 `func(http.ResponseWriter, *http.Request)` 与 ServeHTTP 方法的签名完全一致，但直接传编译不过：原课记录的报错是 `func(http.ResponseWriter, *http.Request) does not implement http.Handler`，原文在括号处右缘截断，现行工具链会补全括号里的细节 (missing method ServeHTTP)，这是编译器缺方法报错的固定模板。原因在接口的判定方式：接口认的是方法集合。greeting 是函数值，它的类型是未命名的函数类型，没有任何方法，方法集合为空，所以"签名一致"不等于"实现了接口"，它不能赋给 Handler 类型的参数。〔TB21 p13〕〔实测：/Users/akka/Toolchain/go/current/src/go/types/lookup.go:483〕
+
+再看转型后的类型靠什么满足接口，直接看 $GOROOT/src/net/http/server.go 的现行定义（go1.26.4，2282 行是类型定义，2285-2287 行是方法）：
+
+```go
+// The HandlerFunc type is an adapter to allow the use of
+// ordinary functions as HTTP handlers. If f is a function
+// with the appropriate signature, HandlerFunc(f) is a
+// [Handler] that calls f.
+type HandlerFunc func(ResponseWriter, *Request)
+
+// ServeHTTP calls f(w, r).
+func (f HandlerFunc) ServeHTTP(w ResponseWriter, r *Request) {
+	f(w, r)
+}
+```
+
+〔TB21 p14〕〔实测：/Users/akka/Toolchain/go/current/src/net/http/server.go:2278-2287〕HandlerFunc 是基于函数类型定义的新类型，底层类型就是 func(ResponseWriter, *Request)；它带一个 ServeHTTP 方法，方法体只有一行 f(w, r)，把请求原样转交给被包装的函数。有了这个方法，HandlerFunc 的方法集合覆盖了 Handler 接口的全部要求，从而实现该接口。所以 http.HandlerFunc(greeting) 的真正含义是：把 greeting 显式转型为 HandlerFunc 类型，后者实现了 Handler 接口，满足 ListenAndServe 第二个参数的要求。请求到达时的执行路径也就清楚了：ListenAndServe 把请求交给 handler 参数，实际执行的是 HandlerFunc 的 ServeHTTP，它转手调用 greeting。〔TB21 p13-14〕
+
+这行转型为什么能通过编译器检查？因为 HandlerFunc 的底层类型 func(ResponseWriter, *Request) 与 greeting 的函数类型一致，底层类型相同的两个类型可以显式互转，原理和 type MyInt int 之后 y := MyInt(x)（x 为 int）完全一样，底层类型与显式互转的完整规则在 03 章第五节。签名对不上时转型同样在编译期报错，不会把失败拖到运行期。〔TB21 p14〕
+
+选择条件也由此而来：手头已有的就是一个签名正确的普通函数、要的只是一个动作时，HandlerFunc 转型是最省事的适配，源码注释 "If f is a function with the appropriate signature" 说的就是这个前提；一个角色要暴露多个方法时，应该定义自己的类型去实现接口，这是从"接口只认方法集合"直接推出的教学推导。〔TB21 p14〕
+
+原课的例程要起真服务器、开浏览器或 curl 才能观察应答。想不起服务器就验证这条链，可以借 04 章和 14 章都用过的 httptest：造一个请求和一个会记录写入的 ResponseWriter，直接调用转型后值的 ServeHTTP 方法（用 httptest 直调是本手册的写作落点，原课没有这一步）：
+
+```go
+package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+)
+
+func greeting(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "Welcome, Gopher!\n")
+}
+
+func main() {
+	var h http.Handler = http.HandlerFunc(greeting)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	fmt.Println(rec.Code, rec.Body.String())
+}
+```
+
+第一行赋值本身就是一次编译期验证：h 的静态类型是 http.Handler，转型结果能赋给它，证明 HandlerFunc 实现了接口。ServeHTTP 被直接调用，方法体那一行 f(w, r) 把请求转交给 greeting，greeting 通过 fmt.Fprintf 把 "Welcome, Gopher!\n" 写进 recorder。输出按 httptest 源码推导：NewRecorder 初始 Code 为 200，第一次 Write 会把状态码定为 200 并把字节存进 Body，所以 rec.Code 是 200、rec.Body 是 "Welcome, Gopher!\n"，Println 打出 200 Welcome, Gopher! 并多带一个空行（这是按源码推导的教学推导，未实跑；14 章对同型代码记录过 go1.26.4 的实测输出）。〔TB21 p12-14〕〔实测：/Users/akka/Toolchain/go/current/src/net/http/httptest/recorder.go:51-57、:102-112〕
+
+一个现成的练习（digest 的改造点 X2）：把例程里的 http.HandlerFunc(greeting) 改回直接传 greeting，观察编译报错；再恢复转型，给转型结果加一行 %T 打印，打出来是 http.HandlerFunc。〔TB21 p12-14〕
+
+把这条证据链收回"组合"哲学：数据侧，嵌入与接口把能力和契约拼起来；行为侧，一等公民让一段行为可以存进变量、作为参数和返回值流转，再配上"函数类型能自定义、能挂方法"，普通函数就能被包装成满足接口的类型。HandlerFunc 正是"函数加方法等于适配器"的范本，本小节开头提到的中间件模式，在 04 章"中间件：包装处理器，并决定是否继续"一节有完整展开，那里的包装函数内层就是 http.HandlerFunc 转型。〔TB21 p12-14〕〔TB02 p7〕
 
 ## 四、并发：语言内建，不是库
 
